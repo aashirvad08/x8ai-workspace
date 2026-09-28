@@ -12,5 +12,6 @@ NNNN), **Context**, **Decision**, **Consequences**, and **Alternatives considere
 | [0002](0002-repository-layout.md) | Cargo workspace with Tauri-free crates; `src-tauri` is a thin host | Accepted |
 | [0003](0003-rust-owned-ipc-contracts.md) | IPC contracts are defined in Rust and generated for TypeScript | Accepted |
 | [0004](0004-integrations-as-external-processes.md) | Integrations are external processes described by declarative definitions | Accepted |
-| [0005](0005-webview-trust-boundary.md) | The webview is untrusted; native commands are explicitly granted | Accepted |
-| [0006](0006-terminal-stack.md) | Terminal stack: portable-pty, xterm.js and Tauri Channels | Proposed |
+| [0005](0005-webview-trust-boundary.md) | The webview is untrusted; native commands are explicitly granted | Accepted, amended by 0007 |
+| [0006](0006-terminal-stack.md) | Terminal stack: portable-pty, xterm.js and Tauri Channels | Accepted |
+| [0007](0007-webview-hardening-for-xterm.md) | Webview hardening adjustments for xterm.js | Accepted |

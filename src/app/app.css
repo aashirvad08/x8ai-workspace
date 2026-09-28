@@ -53,62 +53,32 @@ body {
 
 .shell {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   height: 100%;
 }
 
-.sidebar {
-  border-right: 1px solid var(--border);
-  background: var(--bg-raised);
-}
-
-.regions {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+.workspace {
   min-height: 0;
+  background: var(--bg);
 }
 
-.regions > .placeholder + .placeholder {
-  border-left: 1px solid var(--border);
+.terminal {
+  height: 100%;
 }
 
-.placeholder {
-  padding: 16px 20px;
-  min-width: 0;
-  color: var(--text-muted);
+/* Padding belongs on xterm's own element: FitAddon subtracts it when sizing. */
+.terminal .xterm {
+  height: 100%;
+  padding: 8px 4px 4px 12px;
 }
 
-.placeholder header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.placeholder h2 {
-  margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text);
-}
-
-.placeholder p {
-  max-width: 44ch;
-  line-height: 1.5;
-}
-
-.badge {
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  font-size: 10px;
+/* xterm.css paints the viewport, which also spans that padding, black. The
+   terminal themes use the app background, so match it. */
+.terminal .xterm .xterm-viewport {
+  background-color: var(--bg);
 }
 
 .statusbar {
-  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: 6px;

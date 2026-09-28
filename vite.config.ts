@@ -16,6 +16,11 @@ export default defineConfig({
       ignored: ["**/src-tauri/**", "**/crates/**", "**/target/**"],
     },
   },
+  build: {
+    // Assets load from the app bundle on disk, not over a network, so bundle size
+    // is not a latency concern. xterm.js alone is most of the ~700 kB.
+    chunkSizeWarningLimit: 1024,
+  },
   test: {
     include: ["src/**/*.test.ts"],
     environment: "node",

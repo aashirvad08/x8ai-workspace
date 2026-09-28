@@ -1,6 +1,6 @@
 # 0005 — The webview is untrusted; native commands are explicitly granted
 
-**Status:** Accepted (Phase 0, 2026-09-28)
+**Status:** Accepted (Phase 0, 2026-09-28). Amended by [0007](0007-webview-hardening-for-xterm.md): `freezePrototype` is off and inline styles are allowed.
 
 ## Context
 

@@ -17,8 +17,9 @@ env:
 
 jobs:
   portable:
-    # Everything that must stay platform-independent: the frontend and x8ai-core.
-    name: Frontend and core (Linux)
+    # Everything that must stay platform-independent: the frontend and the
+    # Tauri-free crates (x8ai-core, and x8ai-pty against real Linux PTYs).
+    name: Frontend and portable crates (Linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -36,8 +37,8 @@ jobs:
       - run: pnpm test
 
       - run: cargo fmt --all --check
-      - run: cargo clippy -p x8ai-core --all-targets -- -D warnings
-      - run: cargo test -p x8ai-core
+      - run: cargo clippy -p x8ai-core -p x8ai-pty --all-targets -- -D warnings
+      - run: cargo test -p x8ai-core -p x8ai-pty
 
       - name: Generated TypeScript contracts are up to date
         run: |

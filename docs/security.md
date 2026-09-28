@@ -12,17 +12,21 @@ protection. Do not rely on it.
 
 ---
 
-## 1. What exists in Phase 0
+## 1. What is enforced today (Phases 0–1)
 
 These protections exist and are verified:
 
 | Control | Where | Verified by |
 | --- | --- | --- |
 | Every native command needs an explicit grant to a window. Tauri rejects ungranted calls before the command's code runs. | `src-tauri/build.rs`, `src-tauri/capabilities/` | Manual: revoking the grant yields `Command get_app_info not allowed by ACL` in the UI |
-| The webview has exactly one command: `get_app_info`, which is read-only and takes no arguments. No shell, filesystem, HTTP or opener plugins are installed. | `src-tauri/Cargo.toml`, `capabilities/main-window.json` | Code review, `tauri-build` ACL output |
-| Strict Content Security Policy: no remote scripts, no inline scripts, no `eval`, no plugins or frames, IPC-only `connect-src` | `src-tauri/tauri.conf.json` | Production build runs under it |
-| `Object.prototype` is frozen in the webview (limits prototype-pollution gadgets) | `tauri.conf.json` `freezePrototype` | Production build runs under it |
-| Only `src/native/` can talk to Tauri, and nothing but `main.tsx` depends on the UI layer | `src/architecture.test.ts` | CI |
+| The webview has six commands: `get_app_info` and `terminal_{create,write,resize,ack,close}`. No shell, filesystem, HTTP or opener plugins are installed. | `src-tauri/Cargo.toml`, `capabilities/main-window.json` | Code review, `tauri-build` ACL output |
+| **The webview cannot choose what a terminal runs.** `terminal_create` always starts the user's login shell in their home directory and accepts only a size. | `src-tauri/src/terminal.rs` | Code review |
+| Terminal command arguments are validated in Rust: sizes (1–4096 × 1–2048), session ids (`notFound` otherwise), and raw input only to an existing session | `crates/core/src/terminal.rs`, `crates/pty` | Unit and integration tests |
+| No terminal content is persisted. Scrollback (10,000 lines) exists only in webview memory. Native output buffering is bounded by flow control (512 KiB per session). | `src/terminal/TerminalView.tsx`, `crates/pty/src/session.rs` | Tests (`output_pauses_until_acknowledged`) |
+| OSC 52 clipboard writes and clickable links are off: the xterm.js add-ons that implement them are not installed | `package.json` | Review |
+| Terminal processes do not outlive their session or the app. Close, reload, quit and crash all hang up the terminal, and a shell ignoring SIGHUP gets SIGKILL after 2 s. | `crates/pty`, `src-tauri/src/lib.rs` | Tests; manual `ps` checks after Cmd+Q, SIGTERM and Ctrl+D |
+| Content Security Policy: `script-src 'self'` with Tauri's nonces and hashes (no inline or remote scripts, no `eval`), no plugins or frames, IPC-only `connect-src`. Inline styles are allowed for xterm.js (ADR 0007). | `src-tauri/tauri.conf.json` | Production build runs under it |
+| Only `src/native/` can talk to Tauri, only `src/terminal/` uses xterm.js, and nothing but `main.tsx` depends on the UI layer | `src/architecture.test.ts` | CI |
 | Integration definitions reference secrets by name only. There is no field that can hold a secret value. | `crates/core/src/{launch,model}.rs` | Type design, tests |
 | Endpoint URLs must be `http(s)`, must not embed credentials, and must use HTTPS for API keys or MCP traffic to non-loopback hosts | `crates/core/src/definition.rs` | Unit tests |
 | Integration ids are restricted to `[a-z0-9-]`, so they cannot carry path or shell metacharacters. Unknown definition fields are rejected. | `crates/core/src/id.rs`, `deny_unknown_fields` | Unit and integration tests |
@@ -76,12 +80,14 @@ the command. The risk is execution the user did not initiate.
   - Keep the IPC surface narrow. The webview can write bytes to sessions that
     already exist. It cannot choose the program a session runs, because the shell
     comes from native configuration, and it cannot spawn arbitrary processes.
-  - **Not yet enforced (Phase 1):** session commands validate ids and sizes, and
-    session creation takes no program path from the webview.
+  - **Enforced (Phase 1):** session commands validate ids and sizes, and session
+    creation takes no program path from the webview.
 - **Escape sequences are an attack surface.** Output from a malicious `cat`ed file
   can try to write the clipboard (OSC 52), spoof links (OSC 8) or set the window
-  title. **Phase 1:** OSC 52 is disabled or requires confirmation. Links show their
-  real target and open only through a native, allowlisted opener.
+  title. **Enforced (Phase 1):** OSC 52 and link handling are not installed, so
+  neither can do anything. The window title is not bound to terminal titles. If
+  links are ever added, they must show their real target and open only through a
+  native, allowlisted opener.
 - **No shell interpolation anywhere.** The native layer starts programs from
   `program + args` (`LaunchSpec`) and never builds a `sh -c` string from data.
 
@@ -164,14 +170,19 @@ weaken it.
   resolved to absolute paths through the user's login environment, and the
   resolved path is shown at approval. A binary appearing earlier on `PATH` later
   changes the resolved path, which triggers re-approval. **Phase 4.**
-- **Orphans and runaway processes.** Every child gets its own process group and is
-  tracked in a registry. Session close and app quit kill the group (SIGHUP, then
-  SIGKILL after a grace period). **Phase 1.**
-- **Environment leakage.** Children get a defined environment: the user's login
-  environment plus declared variables. They never get the app's internal
-  variables. **Phase 1/4.**
-- **Resource exhaustion.** Output is batched with bounded buffers and
-  backpressure. The number of sessions is visible. **Phase 1.**
+- **Orphans and runaway processes.** Every terminal process is a session leader
+  tracked in a registry. Close, reload and quit send SIGHUP to it and its
+  foreground job, then SIGKILL to its process group after a grace period. Jobs the
+  user detached on purpose (`nohup`, `disown`) survive, as in any terminal.
+  **Enforced (Phase 1).**
+- **Environment leakage.** Terminal sessions inherit the app's environment plus
+  `TERM`, `COLORTERM`, `TERM_PROGRAM` and, when no locale is set, `LANG`. The app
+  holds no secrets yet, so none can leak. When secrets arrive (Phase 5) they are
+  never placed in the app's own environment. Under `pnpm tauri dev`, sessions also
+  inherit the dev server's environment. **Phase 1 (terminal), Phase 4/5 (agents).**
+- **Resource exhaustion.** Output is batched with bounded buffers and backpressure:
+  a flood blocks the producer rather than growing memory. **Enforced (Phase 1).**
+  Showing the number of sessions arrives with tabs.
 
 ### 3.7 Malicious integrations and the catalog
 
@@ -199,8 +210,10 @@ enforcement points added in Phases 4 and 7.
 - Capabilities stay per window and minimal. A future window that renders
   untrusted content, such as a Markdown preview or browser pane, gets its own
   capability with no commands.
-- The CSP stays strict. `style-src 'unsafe-inline'` is allowed only in the dev
-  CSP, for Vite's hot module reload.
+- `script-src` stays strict. Inline styles are allowed because xterm.js generates
+  its styles at runtime, and `freezePrototype` is off because xterm.js cannot run
+  with a frozen `Object.prototype`. See ADR 0007 for the trade-off and when to
+  revisit it.
 - The devtools inspector is available in debug builds only. Release builds do not
   enable the `devtools` feature.
 

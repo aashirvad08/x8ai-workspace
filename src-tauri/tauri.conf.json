@@ -23,7 +23,7 @@
       "csp": {
         "default-src": "'self'",
         "script-src": "'self'",
-        "style-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' data:",
         "font-src": "'self'",
         "connect-src": "ipc: http://ipc.localhost",
@@ -44,7 +44,7 @@
         "form-action": "'none'",
         "frame-src": "'none'"
       },
-      "freezePrototype": true,
+      "dangerousDisableAssetCspModification": ["style-src"],
       "capabilities": ["main-window"]
     }
   },

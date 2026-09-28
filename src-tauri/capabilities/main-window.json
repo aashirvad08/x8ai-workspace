@@ -3,5 +3,12 @@
   "identifier": "main-window",
   "description": "Everything the main window's webview may invoke. Each entry is an explicit grant; anything not listed is rejected by Tauri before the command runs. Keep this list minimal and review every addition.",
   "windows": ["main"],
-  "permissions": ["allow-get-app-info"]
+  "permissions": [
+    "allow-get-app-info",
+    "allow-terminal-create",
+    "allow-terminal-write",
+    "allow-terminal-resize",
+    "allow-terminal-ack",
+    "allow-terminal-close"
+  ]
 }

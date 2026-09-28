@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "src-tauri"]
+members = ["crates/core", "crates/pty", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 # Internal crates
 x8ai-core = { path = "crates/core" }
+x8ai-pty = { path = "crates/pty" }
 
 # Tauri (desktop host). Tauri 3 is alpha; stay on the 2.x stable line.
 tauri = { version = "2.12", features = [] }
@@ -25,6 +26,13 @@ thiserror = "2"
 
 # URL validation for provider/MCP endpoints. Already in Tauri's dependency tree.
 url = "2"
+
+# PTY allocation and process spawning (WezTerm's PTY crate). See ADR 0006.
+portable-pty = "0.9"
+
+# Safe process-group signals for terminal teardown. Pinned to the major version
+# portable-pty already builds, so it adds no second copy; only `signal` is enabled.
+nix = { version = "0.28", default-features = false, features = ["signal"] }
 
 # Generates TypeScript types from Rust contracts (see docs/decisions/0003).
 # `no-serde-warnings`: ts-rs prints a note for every serde attribute it does not

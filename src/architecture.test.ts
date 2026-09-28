@@ -34,6 +34,13 @@ describe("module boundaries", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("only src/terminal/ uses the terminal emulator", () => {
+    const offenders = modulesWhere(
+      (path, imports) => !path.startsWith("./terminal/") && imports.some((i) => i.startsWith("@xterm/")),
+    );
+    expect(offenders).toEqual([]);
+  });
+
   it("non-UI modules never depend on the UI layer", () => {
     const offenders = modulesWhere(
       (path, imports) =>

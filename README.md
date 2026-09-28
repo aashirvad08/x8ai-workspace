@@ -9,8 +9,8 @@ installable catalog are organized around it. The app hosts and orchestrates thes
 existing tools. It does not implement its own LLM or its own coding agent, and it
 does not privilege any vendor.
 
-> **Status: Phase 0 (foundation).** The app launches and proves the architecture.
-> The terminal, editor and AI features are not implemented yet. See
+> **Status: Phase 1 (real terminal).** The app opens your login shell in a real
+> PTY terminal. The editor, workspaces and AI features are not implemented yet. See
 > [docs/roadmap.md](docs/roadmap.md).
 
 ## Documentation
@@ -46,15 +46,17 @@ does not privilege any vendor.
 
 ```
 crates/core/        x8ai-core — IPC contracts and integration definitions (no Tauri, no I/O)
+crates/pty/         x8ai-pty — PTY sessions: the user's shell, streamed output, lifecycle (no Tauri)
 src-tauri/          x8ai-desktop — the Tauri host: window, commands, capability grants
 src/app/            UI shell (React)
+src/terminal/       terminal session controller and xterm.js view
 src/native/         typed client for native commands; the only code that imports Tauri
 src/contracts/      TypeScript types generated from crates/core (do not edit)
 docs/               architecture, roadmap, security, decisions
 ```
 
-Subsystem modules (terminal, workspace, editor, agents, models, MCP, git and
-catalog) are added in the phase that implements them. The planned homes are in
+Subsystem modules (workspace, editor, agents, models, MCP, git and catalog) are
+added in the phase that implements them. The planned homes are in
 [docs/architecture.md §3](docs/architecture.md#3-repository-map).
 
 ## Development rules

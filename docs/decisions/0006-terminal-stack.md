@@ -1,50 +1,79 @@
 # 0006 — Terminal stack: portable-pty, xterm.js and Tauri Channels
 
-**Status:** Proposed. To be accepted or replaced in Phase 1 after a spike.
+**Status:** Accepted (Phase 1, 2026-09-28). Proposed in Phase 0.
 
 ## Context
 
 The terminal is the product's primary surface and the substrate agents run on. It
 must be a real terminal: login shells, interactive programs, full-screen TUIs,
-ANSI and truecolor, resize, Ctrl+C and Ctrl+D, long-running processes, and many
-concurrent sessions. Phase 0 does not implement it, but the architecture must not
-need restructuring when it arrives.
+ANSI and truecolor, resize, Ctrl+C, Ctrl+D and Ctrl+Z, long-running processes, and
+many concurrent sessions.
 
-## Decision (proposed)
+## Decision
 
-- **PTY:** `portable-pty` (the WezTerm project's PTY crate, 0.9.x) in a new
-  `crates/pty`. It covers the POSIX PTY APIs on macOS and Linux (and ConPTY
-  should Windows ever matter), process spawning into the PTY, and resize. It
-  lives behind our own session interface (architecture §6), so it can be swapped
-  out.
-- **Emulator and renderer:** **xterm.js** (`@xterm/xterm` 6.x) in the webview, with
-  the fit add-on and the WebGL renderer where available. It is the de facto
-  standard (VS Code uses it) and handles escape sequences, the alternate screen,
-  mouse reporting, and Unicode and wide characters.
-- **Output transport:** a Tauri **Channel** per session (`tauri::ipc::Channel`),
-  which is ordered and designed for streaming. A native reader thread batches
-  output by size or time. Bounded buffers apply backpressure.
-- **Input transport:** a `terminal_write(session, bytes)` command. Control keys are
-  plain bytes (`0x03`, `0x04`). The kernel's line discipline does the rest.
-- **Sessions** are owned by a native registry. The webview holds only ids.
+- **PTY:** `portable-pty` 0.9 (from the WezTerm project), wrapped by `crates/pty`
+  behind our own `Session` and `Sessions` types, so it can be replaced. Its
+  `new_default_prog()` resolves the shell (`$SHELL` if executable, then the account
+  record, then `/bin/sh`), starts it as a login shell (argv[0] `-zsh`), and makes it
+  a session leader with the PTY as its controlling terminal. That setup is what
+  makes job control and control keys work without special-casing.
+- **Emulator and renderer:** xterm.js 6 (`@xterm/xterm`) in `src/terminal/`, with
+  three add-ons: `addon-fit` (size to the container), `addon-webgl` (GPU rendering,
+  falling back to the DOM renderer on context loss), and `addon-unicode11` (emoji
+  and CJK widths that match modern shells). The clipboard and web-links add-ons are
+  deliberately not used (see `docs/security.md` §3.1).
+- **Output transport:** one Tauri Channel per session. It carries output as raw
+  bytes (`InvokeResponseBody::Raw`, delivered as an `ArrayBuffer`) and lifecycle
+  events as JSON. Tauri orders channel messages by index, so an `exited` event can
+  never overtake output. Payloads under 1 KiB (keystroke echo) are delivered
+  inline; larger ones go through Tauri's fetch path without JSON encoding.
+- **Input transport:** `terminal_write` takes the raw request body, with the session
+  id in a header. Bytes, including non-UTF-8 mouse reports, reach the PTY unchanged.
+  Control keys are plain bytes (`0x03`, `0x04`, `0x1a`), and the kernel's line
+  discipline turns them into signals and EOF.
+- **Threads per session:** reader, sender, writer and waiter (`crates/pty/src/lib.rs`).
+  No IPC command blocks: input is queued to the writer thread.
+- **Flow control:** the frontend acknowledges rendered output every 64 KiB. The
+  reader pauses while 512 KiB is unacknowledged, which makes the program block on
+  write inside the kernel. Output batches are coalesced (at least 4 ms apart), so a
+  flood becomes a few large messages per frame.
+- **Lifecycle:** close sends SIGHUP to the shell and to the foreground job, then
+  SIGKILL to the shell's process group after 2 s. Page reloads close every session.
+  App exit hangs up everything and kills survivors after 500 ms. The exit event is
+  sent only once output is drained: end of output, or a reader idle for 100 ms when
+  a background job keeps the terminal open.
+
+## Findings from implementation
+
+- **Concurrent `openpty` fails on macOS.** Parallel calls intermittently failed with
+  `Unknown error: -6`, so PTYs are opened under a process-wide lock. The
+  regression test spawns 48 sessions from 48 threads and detected the missing lock
+  in 6 of 8 runs.
+- **A theory disproved.** Output of a short-lived process seemed lost once. I
+  suspected macOS discards buffered PTY output when the last slave handle closes,
+  and tested that directly (reader delayed 50 ms, slave closed early). The output
+  survived, so the workaround was reverted. The loss was a symptom of the `openpty`
+  race.
+- **xterm.js needs two webview hardening changes** (ADR 0007).
+- **GUI environment.** A Finder-launched app has no `LANG`, so `crates/pty/src/locale.rs`
+  sets it from the macOS language and region when nothing names a locale, as
+  Terminal.app does. `PATH` needs no help: the login shell rebuilds it (verified
+  under a scrubbed environment).
 
 ## Consequences
 
-- The native side stays free of ANSI parsing, so there is less code and less
-  attack surface. Terminal fidelity is what xterm.js provides.
-- The IPC cost of per-keystroke `invoke` and batched output must be measured. The
-  spike must show typing latency and throughput (for example `cat` of a 100 MB
-  file, and `yes`) that are acceptable without freezing the UI.
-- The frontend `src/terminal/` module will import xterm.js, which is the first
-  large frontend dependency. That is justified by the requirements and must be
-  noted when it is added.
+- The native side never parses ANSI. Terminal fidelity is xterm.js's.
+- The same session substrate will host coding agents in Phase 4 (`Program::Exec`).
+- The frontend bundle is about 700 kB, most of it xterm.js. It is loaded from disk,
+  so bundle size is not a latency concern.
 
-## Alternatives to evaluate in the spike
+## Alternatives considered
 
-- **PTY:** `nix`/`rustix` `openpty` directly (fewer layers, but Unix-only, and
-  more of our own code to maintain), or the `pty-process` crate.
+- **PTY:** `nix`/`rustix` `openpty` directly (fewer layers, but Unix-only, and more
+  of our own unsafe code), or `pty-process`. portable-pty already did everything
+  needed and is widely used.
 - **Emulator:** a WebAssembly build of a native terminal core (for example from the
-  Ghostty project) for fidelity and speed, if one is stable enough.
-- **Native rendering** (a GPU terminal in Rust with the webview only for chrome):
-  best performance, but a large increase in complexity and platform-specific
-  code. This is not proposed.
+  Ghostty project). It is worth revisiting if xterm.js fidelity or performance
+  falls short.
+- **Native GPU rendering** with the webview only for chrome. It gives the best
+  performance, at a large cost in complexity and platform-specific code.

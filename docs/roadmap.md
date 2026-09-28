@@ -7,8 +7,8 @@ are part of every phase, not a final pass (`docs/security.md`).
 | Phase | Theme | Status |
 | --- | --- | --- |
 | 0 | Foundation | **Complete** |
-| 1 | Real terminal | Next |
-| 2 | Workspace and projects | Planned |
+| 1 | Real terminal | **Complete** |
+| 2 | Workspace and projects | Next |
 | 3 | Editor | Planned |
 | 4 | Agent runtime | Planned |
 | 5 | Secrets and model providers | Planned |
