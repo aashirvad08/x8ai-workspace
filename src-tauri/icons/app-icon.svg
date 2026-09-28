@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Source for the app icons. Regenerate with: pnpm tauri icon src-tauri/icons/app-icon.svg -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#0f1115"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="#2b3240" stroke-width="12"/>
+  <polyline points="300,370 460,512 300,654" fill="none" stroke="#5aa9ff" stroke-width="68" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="520" y="620" width="210" height="68" rx="34" fill="#d7dce3"/>
+</svg>

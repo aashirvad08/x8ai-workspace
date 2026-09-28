@@ -1,0 +1,142 @@
+:root {
+  color-scheme: dark light;
+
+  --bg: #0f1115;
+  --bg-raised: #151920;
+  --border: #252b35;
+  --text: #d7dce3;
+  --text-muted: #8a93a0;
+  --accent: #5aa9ff;
+  --ok: #3fb950;
+  --error: #f85149;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f8fa;
+    --bg-raised: #eef0f3;
+    --border: #d9dde3;
+    --text: #1f2328;
+    --text-muted: #5f6873;
+    --accent: #0969da;
+    --ok: #1a7f37;
+    --error: #cf222e;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100%;
+}
+
+.sidebar {
+  border-right: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.regions {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  min-height: 0;
+}
+
+.regions > .placeholder + .placeholder {
+  border-left: 1px solid var(--border);
+}
+
+.placeholder {
+  padding: 16px 20px;
+  min-width: 0;
+  color: var(--text-muted);
+}
+
+.placeholder header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.placeholder h2 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.placeholder p {
+  max-width: 44ch;
+  line-height: 1.5;
+}
+
+.badge {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.statusbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.statusbar-error {
+  color: var(--error);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.dot-ok {
+  background: var(--ok);
+}
+
+.dot-error {
+  background: var(--error);
+}

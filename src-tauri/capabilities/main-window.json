@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Everything the main window's webview may invoke. Each entry is an explicit grant; anything not listed is rejected by Tauri before it reaches Rust. Keep this list minimal and review every addition.",
+  "windows": ["main"],
+  "permissions": ["allow-get-app-info"]
+}

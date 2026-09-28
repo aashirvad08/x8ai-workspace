@@ -1,0 +1,17 @@
+[package]
+name = "x8ai-desktop"
+description = "Desktop host for x8ai Workspace. The only crate that depends on Tauri."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "x8ai_desktop"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+x8ai-core.workspace = true
+tauri.workspace = true
