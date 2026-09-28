@@ -5,16 +5,30 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
 
-import type { NativeClient } from "../native";
+import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
+import type { TerminalApi } from "../native";
 import { TerminalSession } from "./session";
 import { terminalTheme } from "./theme";
+
+interface Props {
+  native: TerminalApi;
+  /** Hidden views keep running; only the active one is shown. */
+  active: boolean;
+  /** Focuses the terminal when this changes while it is active. */
+  focusRequest: number;
+  onStart?: (info: TerminalInfo) => void;
+  onEnd?: () => void;
+}
 
 /**
  * Renders one terminal session with xterm.js. This component only wires the
  * emulator to the DOM; session behaviour lives in `TerminalSession`.
  */
-export function TerminalView({ native }: { native: NativeClient }) {
+export function TerminalView({ native, active, focusRequest, onStart, onEnd }: Props) {
   const container = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const callbacks = useRef({ onStart, onEnd });
+  callbacks.current = { onStart, onEnd };
 
   useEffect(() => {
     const element = container.current;
@@ -32,6 +46,7 @@ export function TerminalView({ native }: { native: NativeClient }) {
       scrollback: 10_000,
       theme: terminalTheme(darkScheme.matches),
     });
+    terminalRef.current = terminal;
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.loadAddon(new Unicode11Addon());
@@ -40,12 +55,15 @@ export function TerminalView({ native }: { native: NativeClient }) {
     loadWebglRenderer(terminal);
     fit.fit();
 
-    const session = new TerminalSession(native, terminal);
+    const session = new TerminalSession(native, terminal, {
+      onStart: (info) => callbacks.current.onStart?.(info),
+      onEnd: () => callbacks.current.onEnd?.(),
+    });
     const resized = terminal.onResize(({ cols, rows }) => session.resize(cols, rows));
     session.start();
-    terminal.focus();
 
     let frame = 0;
+    // Also fires when a hidden tab becomes visible, so it fits its space again.
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => fit.fit());
@@ -62,10 +80,15 @@ export function TerminalView({ native }: { native: NativeClient }) {
       resized.dispose();
       session.dispose();
       terminal.dispose();
+      terminalRef.current = null;
     };
   }, [native]);
 
-  return <div className="terminal" ref={container} />;
+  useEffect(() => {
+    if (active) terminalRef.current?.focus();
+  }, [active, focusRequest]);
+
+  return <div className="terminal" ref={container} hidden={!active} />;
 }
 
 /** The GPU renderer copes with heavy output far better than the DOM renderer. */

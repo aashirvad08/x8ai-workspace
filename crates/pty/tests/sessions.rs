@@ -374,7 +374,7 @@ fn the_registry_tracks_and_closes_sessions() {
 
 #[test]
 fn the_login_shell_is_the_users_shell() {
-    let (session, recorder) = start(&Program::LoginShell);
+    let (session, recorder) = start(&Program::LoginShell { cwd: None });
     assert!(session.program().starts_with('/'), "{}", session.program());
     // argv[0] of a login shell starts with '-'. Computed output avoids matching the
     // echoed input.
@@ -390,5 +390,28 @@ fn the_login_shell_is_the_users_shell() {
     assert!(
         out.contains(&format!("pwd={home}")),
         "not started in {home}: {out}"
+    );
+}
+
+#[test]
+fn the_login_shell_starts_in_the_requested_directory() {
+    // How a terminal opens in the active workspace.
+    let workspace = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(workspace.path()).unwrap();
+    let (session, recorder) = start(&Program::LoginShell {
+        cwd: Some(dir.clone()),
+    });
+    assert_eq!(session.cwd(), dir.display().to_string());
+    type_line(
+        &session,
+        "printf 'cwd=%s sum=%s\\n' \"$(pwd -P)\" \"$((1 + 1))\"",
+    );
+    recorder.wait_for_output("sum=2");
+    assert!(
+        recorder
+            .output()
+            .contains(&format!("cwd={}", dir.display())),
+        "{}",
+        recorder.output()
     );
 }

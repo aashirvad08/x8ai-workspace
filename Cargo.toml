@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/pty", "src-tauri"]
+members = ["crates/core", "crates/pty", "crates/workspace", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,10 +12,14 @@ publish = false
 # Internal crates
 x8ai-core = { path = "crates/core" }
 x8ai-pty = { path = "crates/pty" }
+x8ai-workspace = { path = "crates/workspace" }
 
 # Tauri (desktop host). Tauri 3 is alpha; stay on the 2.x stable line.
 tauri = { version = "2.12", features = [] }
 tauri-build = { version = "2.7", features = [] }
+# Native folder picker for "Open Folder". Only its Rust API is used; none of its
+# webview commands are granted (see docs/decisions/0009).
+tauri-plugin-dialog = "2"
 
 # Serialization of IPC contracts and integration definitions.
 serde = { version = "1", features = ["derive"] }
@@ -33,6 +37,20 @@ portable-pty = "0.9"
 # Safe process-group signals for terminal teardown. Pinned to the major version
 # portable-pty already builds, so it adds no second copy; only `signal` is enabled.
 nix = { version = "0.28", default-features = false, features = ["signal"] }
+
+# Workspace filesystem boundary (see docs/decisions/0009).
+# Capability-based filesystem access: every operation is resolved beneath the
+# workspace root, and symlinks cannot escape it.
+cap-std = "4"
+# Filesystem change notifications (FSEvents on macOS, inotify on Linux).
+notify = "8"
+# Directory walking that respects .gitignore, for quick open (from ripgrep).
+ignore = "0.4"
+# Move deleted entries to the Trash. Default features off: chrono is not needed.
+trash = { version = "5", default-features = false }
+
+# Test-only temporary directories.
+tempfile = "3"
 
 # Generates TypeScript types from Rust contracts (see docs/decisions/0003).
 # `no-serde-warnings`: ts-rs prints a note for every serde attribute it does not

@@ -1,8 +1,15 @@
+import type { AppEvent } from "../contracts/generated/AppEvent";
 import type { AppInfo } from "../contracts/generated/AppInfo";
+import type { DirEntry } from "../contracts/generated/DirEntry";
+import type { FileContent } from "../contracts/generated/FileContent";
+import type { FileList } from "../contracts/generated/FileList";
+import type { FileVersion } from "../contracts/generated/FileVersion";
 import type { SessionId } from "../contracts/generated/SessionId";
 import type { TerminalEvent } from "../contracts/generated/TerminalEvent";
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
 import type { TerminalSize } from "../contracts/generated/TerminalSize";
+import type { WorkspaceEvent } from "../contracts/generated/WorkspaceEvent";
+import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
 import { NativeError } from "./errors";
 
 /** Must match `SESSION_ID_HEADER` in crates/core/src/terminal.rs. */
@@ -34,13 +41,18 @@ export interface TerminalListener {
   event(event: TerminalEvent): void;
 }
 
-/**
- * Typed access to the native host. Each method maps to one command in
- * `src-tauri/src/`. UI code depends on this interface, never on Tauri.
- */
-export interface NativeClient {
+export interface AppApi {
   getAppInfo(): Promise<AppInfo>;
-  /** Starts the user's login shell in a new terminal session. */
+  /** Registers for app-level events, such as a quit request with unsaved changes. */
+  subscribeApp(listener: (event: AppEvent) => void): Promise<void>;
+  /** Tells the native side whether quitting now would lose work. */
+  setUnsavedChanges(unsaved: boolean): Promise<void>;
+  /** Quits without asking again. */
+  quit(): Promise<void>;
+}
+
+export interface TerminalApi {
+  /** Starts the user's login shell, in the workspace root if one is open. */
   createTerminal(size: TerminalSize, listener: TerminalListener): Promise<TerminalInfo>;
   writeTerminal(id: SessionId, data: Uint8Array): Promise<void>;
   resizeTerminal(id: SessionId, size: TerminalSize): Promise<void>;
@@ -49,6 +61,40 @@ export interface NativeClient {
   /** Hangs up the session. */
   closeTerminal(id: SessionId): Promise<void>;
 }
+
+/**
+ * File operations inside the open workspace. Paths are workspace paths: relative to
+ * the root, `/`-separated, with `""` for the root itself.
+ */
+export interface WorkspaceApi {
+  /**
+   * Shows the native folder picker. The chosen folder becomes the workspace and
+   * changes on disk are reported to `listener`. Resolves to `null` if cancelled.
+   */
+  openWorkspace(listener: (event: WorkspaceEvent) => void): Promise<WorkspaceInfo | null>;
+  listDir(path: string): Promise<DirEntry[]>;
+  readFile(path: string): Promise<FileContent>;
+  /** `null` if the file does not exist. */
+  fileVersion(path: string): Promise<FileVersion | null>;
+  /**
+   * Saves `text`. With `expected`, fails with code `conflict` if the file changed
+   * or disappeared on disk since that version. With `null`, overwrites.
+   */
+  writeFile(path: string, text: string, expected: FileVersion | null): Promise<FileVersion>;
+  createFile(path: string): Promise<void>;
+  createDir(path: string): Promise<void>;
+  renameEntry(from: string, to: string): Promise<void>;
+  /** Moves the entry to the Trash. */
+  deleteEntry(path: string): Promise<void>;
+  /** Workspace files for quick open, gathered on demand. */
+  listFiles(): Promise<FileList>;
+}
+
+/**
+ * Typed access to the native host. Each method maps to one command in
+ * `src-tauri/src/`. UI code depends on these interfaces, never on Tauri.
+ */
+export interface NativeClient extends AppApi, TerminalApi, WorkspaceApi {}
 
 export function createNativeClient({ invoke, createChannel }: NativeBridge): NativeClient {
   // Return values come from the trusted side and are typed by the generated
@@ -64,6 +110,10 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
 
   return {
     getAppInfo: () => call<AppInfo>("get_app_info"),
+    subscribeApp: (listener) =>
+      call<void>("app_subscribe", { events: createChannel((message) => listener(message as AppEvent)) }),
+    setUnsavedChanges: (unsaved) => call<void>("app_set_unsaved_changes", { unsaved }),
+    quit: () => call<void>("app_quit"),
 
     createTerminal: (size, listener) => {
       // One channel carries both: output as raw bytes (an ArrayBuffer) and
@@ -77,15 +127,25 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
       });
       return call<TerminalInfo>("terminal_create", { size, events });
     },
-
     // Raw body: bytes reach the PTY exactly as given, without JSON encoding.
     writeTerminal: (id, data) =>
       call<void>("terminal_write", data, { headers: { [SESSION_ID_HEADER]: String(id) } }),
-
     resizeTerminal: (id, size) => call<void>("terminal_resize", { id, size }),
-
     ackTerminal: (id, bytes) => call<void>("terminal_ack", { id, bytes }),
-
     closeTerminal: (id) => call<void>("terminal_close", { id }),
+
+    openWorkspace: (listener) =>
+      call<WorkspaceInfo | null>("workspace_open", {
+        events: createChannel((message) => listener(message as WorkspaceEvent)),
+      }),
+    listDir: (path) => call<DirEntry[]>("workspace_list_dir", { path }),
+    readFile: (path) => call<FileContent>("workspace_read_file", { path }),
+    fileVersion: (path) => call<FileVersion | null>("workspace_file_version", { path }),
+    writeFile: (path, text, expected) => call<FileVersion>("workspace_write_file", { path, text, expected }),
+    createFile: (path) => call<void>("workspace_create_file", { path }),
+    createDir: (path) => call<void>("workspace_create_dir", { path }),
+    renameEntry: (from, to) => call<void>("workspace_rename", { from, to }),
+    deleteEntry: (path) => call<void>("workspace_delete", { path }),
+    listFiles: () => call<FileList>("workspace_list_files"),
   };
 }

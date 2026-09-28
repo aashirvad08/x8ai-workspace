@@ -5,10 +5,23 @@
   "windows": ["main"],
   "permissions": [
     "allow-get-app-info",
+    "allow-app-subscribe",
+    "allow-app-set-unsaved-changes",
+    "allow-app-quit",
     "allow-terminal-create",
     "allow-terminal-write",
     "allow-terminal-resize",
     "allow-terminal-ack",
-    "allow-terminal-close"
+    "allow-terminal-close",
+    "allow-workspace-open",
+    "allow-workspace-list-dir",
+    "allow-workspace-read-file",
+    "allow-workspace-file-version",
+    "allow-workspace-write-file",
+    "allow-workspace-create-file",
+    "allow-workspace-create-dir",
+    "allow-workspace-rename",
+    "allow-workspace-delete",
+    "allow-workspace-list-files"
   ]
 }

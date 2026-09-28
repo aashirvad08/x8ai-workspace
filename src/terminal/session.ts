@@ -1,7 +1,7 @@
 import type { TerminalEvent } from "../contracts/generated/TerminalEvent";
 import type { TerminalExit } from "../contracts/generated/TerminalExit";
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
-import type { NativeClient } from "../native";
+import type { TerminalApi } from "../native";
 
 interface Disposable {
   dispose(): void;
@@ -14,6 +14,14 @@ export interface TerminalScreen {
   write(data: string | Uint8Array, callback?: () => void): void;
   onData(listener: (data: string) => void): Disposable;
   onBinary(listener: (data: string) => void): Disposable;
+}
+
+/** Optional notifications, e.g. for a tab title. */
+export interface SessionCallbacks {
+  /** A shell started (again, after a restart). */
+  onStart?(info: TerminalInfo): void;
+  /** The shell exited, or could not start. */
+  onEnd?(): void;
 }
 
 /** One native session: from creation until it exits or is replaced. */
@@ -42,15 +50,17 @@ const ENTER = "\r";
  * Holds no process logic (that lives in Rust) and no React.
  */
 export class TerminalSession {
-  readonly #native: NativeClient;
+  readonly #native: TerminalApi;
   readonly #screen: TerminalScreen;
+  readonly #callbacks: SessionCallbacks;
   readonly #subscriptions: Disposable[];
   #attempt: Attempt | undefined;
   #disposed = false;
 
-  constructor(native: NativeClient, screen: TerminalScreen) {
+  constructor(native: TerminalApi, screen: TerminalScreen, callbacks: SessionCallbacks = {}) {
     this.#native = native;
     this.#screen = screen;
+    this.#callbacks = callbacks;
     this.#subscriptions = [
       screen.onData((data) => this.#input(data, encoder.encode(data))),
       // Binary data is a string of byte values, used by some mouse reports.
@@ -81,6 +91,7 @@ export class TerminalSession {
       (error: unknown) => {
         if (!this.#isCurrent(attempt)) return;
         attempt.over = true;
+        this.#callbacks.onEnd?.();
         this.#report("Could not start the shell", error);
         this.#notice("press Enter to try again");
       },
@@ -122,6 +133,7 @@ export class TerminalSession {
       this.#close(info);
       return;
     }
+    this.#callbacks.onStart?.(info);
     for (const bytes of attempt.queued.splice(0)) this.#send(this.#native.writeTerminal(info.id, bytes));
     const { cols, rows } = this.#screen;
     if (cols !== attempt.cols || rows !== attempt.rows) {
@@ -171,6 +183,7 @@ export class TerminalSession {
         break;
       case "exited":
         attempt.over = true;
+        this.#callbacks.onEnd?.();
         // The process is gone; closing releases the native session.
         if (attempt.info) this.#close(attempt.info);
         this.#notice(`${describeExit(event)}, press Enter to start a new shell`);

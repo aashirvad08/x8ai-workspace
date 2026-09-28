@@ -1,8 +1,9 @@
 //! Terminal commands: the IPC face of `x8ai-pty`.
 //!
 //! The webview can only start the user's login shell, never a program of its
-//! choosing, and refers to sessions by id afterwards. Every argument is validated
-//! here or in `x8ai-pty`.
+//! choosing, in a directory it cannot choose either: the open workspace's root, or
+//! the home directory. It refers to sessions by id afterwards. Every argument is
+//! validated here or in `x8ai-pty`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +16,8 @@ use x8ai_core::terminal::{
 };
 use x8ai_pty::{ACK_BYTES, Program, SessionEvents, Sessions};
 
+use crate::workspace::Workspaces;
+
 /// How long terminal processes get to exit after hangup when the app quits.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
@@ -24,7 +27,7 @@ pub struct Terminals(Sessions);
 
 impl Terminals {
     /// Hangs up every session. Called when the page that owns them (re)loads.
-    // TODO(phase-2): scope sessions to the webview that created them once there is
+    // TODO(phase-3): scope sessions to the webview that created them once there is
     // more than one window.
     pub fn close_all(&self) {
         self.0.close_all();
@@ -69,21 +72,27 @@ impl SessionEvents for ChannelEvents {
     }
 }
 
-/// Starts the user's login shell in a new session. Output and lifecycle events
-/// arrive on `events`.
+/// Starts the user's login shell in a new session, in the open workspace's root
+/// (or the home directory). Output and lifecycle events arrive on `events`.
+/// Sessions keep their directory when the workspace changes later.
 #[tauri::command]
 pub async fn terminal_create(
     size: TerminalSize,
     events: Channel,
     terminals: State<'_, Terminals>,
+    workspaces: State<'_, Workspaces>,
 ) -> Result<TerminalInfo, CommandError> {
+    let program = Program::LoginShell {
+        cwd: workspaces.root(),
+    };
     let session = terminals
         .0
-        .spawn(&Program::LoginShell, size, Arc::new(ChannelEvents(events)))
+        .spawn(&program, size, Arc::new(ChannelEvents(events)))
         .map_err(command_error)?;
     Ok(TerminalInfo {
         id: session.id(),
         program: session.program().to_owned(),
+        cwd: session.cwd().to_owned(),
         ack_bytes: ACK_BYTES,
     })
 }

@@ -18,8 +18,9 @@ export default defineConfig({
   },
   build: {
     // Assets load from the app bundle on disk, not over a network, so bundle size
-    // is not a latency concern. xterm.js alone is most of the ~700 kB.
-    chunkSizeWarningLimit: 1024,
+    // is not a latency concern. The ~1.1 MB main chunk is xterm.js, CodeMirror's
+    // core and React; language grammars are separate chunks loaded on demand.
+    chunkSizeWarningLimit: 1536,
   },
   test: {
     include: ["src/**/*.test.ts"],

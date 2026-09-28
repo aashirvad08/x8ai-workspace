@@ -30,6 +30,16 @@ impl AppInfo {
     }
 }
 
+/// App-level events delivered on the channel given to `app_subscribe`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export)]
+pub enum AppEvent {
+    /// The user asked to quit or close the window while the frontend reported
+    /// unsaved changes. Nothing closes until the frontend calls `app_quit`.
+    QuitRequested,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

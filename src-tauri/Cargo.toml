@@ -15,5 +15,7 @@ tauri-build.workspace = true
 [dependencies]
 x8ai-core.workspace = true
 x8ai-pty.workspace = true
+x8ai-workspace.workspace = true
 tauri.workspace = true
+tauri-plugin-dialog.workspace = true
 serde_json.workspace = true

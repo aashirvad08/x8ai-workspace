@@ -25,6 +25,11 @@ pub enum ErrorCode {
     InvalidInput,
     /// The referenced session, workspace, file or integration does not exist.
     NotFound,
+    /// The target of a create or rename already exists.
+    AlreadyExists,
+    /// The file changed or disappeared on disk since it was read. Nothing was
+    /// written; the caller decides whether to overwrite or reload.
+    Conflict,
     /// The action was refused by a policy or by the user.
     PermissionDenied,
     /// Anything else. Details are logged on the native side.

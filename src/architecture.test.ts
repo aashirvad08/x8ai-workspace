@@ -41,6 +41,21 @@ describe("module boundaries", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("only src/editor/ uses the code editor", () => {
+    const offenders = modulesWhere(
+      (path, imports) =>
+        !path.startsWith("./editor/") && imports.some((i) => i.startsWith("@codemirror/") || i.startsWith("@lezer/")),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("stores and the workbench stay free of React", () => {
+    const offenders = modulesWhere(
+      (path, imports) => !path.endsWith(".tsx") && !/\/use[A-Z]\w*\.ts$/.test(path) && imports.includes("react"),
+    );
+    expect(offenders).toEqual([]);
+  });
+
   it("non-UI modules never depend on the UI layer", () => {
     const offenders = modulesWhere(
       (path, imports) =>

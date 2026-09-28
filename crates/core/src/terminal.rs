@@ -45,6 +45,8 @@ pub struct TerminalInfo {
     pub id: SessionId,
     /// Absolute path of the program running in the session, e.g. `/bin/zsh`.
     pub program: String,
+    /// Absolute path of the directory the session started in.
+    pub cwd: String,
     /// Flow control: acknowledge processed output with `terminal_ack` whenever at
     /// least this many bytes have been rendered since the last acknowledgement. The
     /// native side pauses reading when too much output is unacknowledged.

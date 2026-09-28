@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-workspace-file-version"
+description = "Enables the workspace_file_version command without any pre-configured scope."
+commands.allow = ["workspace_file_version"]
+
+[[permission]]
+identifier = "deny-workspace-file-version"
+description = "Denies the workspace_file_version command without any pre-configured scope."
+commands.deny = ["workspace_file_version"]

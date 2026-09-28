@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { SessionId } from "../contracts/generated/SessionId";
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
 import type { TerminalSize } from "../contracts/generated/TerminalSize";
-import type { NativeClient, TerminalListener } from "../native";
+import type { TerminalApi, TerminalListener } from "../native";
 import { type TerminalScreen, TerminalSession } from "./session";
 
 /** A screen that renders synchronously and lets the test type into it. */
@@ -51,13 +51,10 @@ type Recorded =
   | { call: "close"; id: SessionId };
 
 /** A native client whose sessions the test creates, feeds and finishes by hand. */
-class FakeNative implements NativeClient {
+class FakeNative implements TerminalApi {
   created: Created[] = [];
   calls: Recorded[] = [];
 
-  getAppInfo(): never {
-    throw new Error("not used");
-  }
   createTerminal(size: TerminalSize, listener: TerminalListener): Promise<TerminalInfo> {
     return new Promise((resolve, reject) => this.created.push({ size, listener, resolve, reject }));
   }
@@ -75,7 +72,7 @@ class FakeNative implements NativeClient {
   }
 }
 
-const info = (id: number, ackBytes = 1024): TerminalInfo => ({ id, program: "/bin/zsh", ackBytes });
+const info = (id: number, ackBytes = 1024): TerminalInfo => ({ id, program: "/bin/zsh", cwd: "/Users/me", ackBytes });
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function running(ackBytes?: number) {
@@ -229,5 +226,21 @@ describe("TerminalSession", () => {
     native.created[0]!.resolve(info(1));
     await settle();
     expect(native.calls).toEqual([{ call: "close", id: 1 }]);
+  });
+});
+
+describe("TerminalSession callbacks", () => {
+  it("reports when a shell starts and ends", async () => {
+    const native = new FakeNative();
+    const screen = new FakeScreen();
+    const events: string[] = [];
+    new TerminalSession(native, screen, {
+      onStart: (started) => events.push(`start ${started.cwd}`),
+      onEnd: () => events.push("end"),
+    }).start();
+    native.created[0]!.resolve(info(1));
+    await settle();
+    native.created[0]!.listener.event({ type: "exited", code: 0, signal: null });
+    expect(events).toEqual(["start /Users/me", "end"]);
   });
 });

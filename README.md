@@ -9,9 +9,9 @@ installable catalog are organized around it. The app hosts and orchestrates thes
 existing tools. It does not implement its own LLM or its own coding agent, and it
 does not privilege any vendor.
 
-> **Status: Phase 1 (real terminal).** The app opens your login shell in a real
-> PTY terminal. The editor, workspaces and AI features are not implemented yet. See
-> [docs/roadmap.md](docs/roadmap.md).
+> **Status: Phase 2 (workspace, files and editor).** Open a folder to get a file
+> explorer and a code editor above a real PTY terminal that starts in that folder.
+> AI features are not implemented yet. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Documentation
 
@@ -42,21 +42,32 @@ does not privilege any vendor.
 | `cargo test --workspace` | Rust tests. Also regenerates the TypeScript contracts. |
 | `pnpm contracts` | Regenerate `src/contracts/generated/` from `crates/core` |
 
+## Keyboard shortcuts
+
+⌘O Open Folder · ⌘P Go to File · ⇧⌘P All Commands · ⌘N New File · ⌘S Save ·
+⌥⌘S Save All · ⌘W Close Editor · ⌘B Toggle Explorer · ⌃` Toggle Terminal ·
+⌃⇧` New Terminal · ⌘F Find in File. In the explorer: arrows, Enter, F2 to rename,
+⌘⌫ to move to the Trash.
+
 ## Repository layout
 
 ```
 crates/core/        x8ai-core — IPC contracts and integration definitions (no Tauri, no I/O)
 crates/pty/         x8ai-pty — PTY sessions: the user's shell, streamed output, lifecycle (no Tauri)
+crates/workspace/   x8ai-workspace — the chosen folder and scoped file operations (no Tauri)
 src-tauri/          x8ai-desktop — the Tauri host: window, commands, capability grants
-src/app/            UI shell (React)
-src/terminal/       terminal session controller and xterm.js view
+src/app/            UI shell: layout, splitters, overlays, shortcuts (React)
+src/workbench/      user actions and coordination; notifications, dialogs, commands
+src/workspace/      file explorer
+src/editor/         editor tabs and CodeMirror
+src/terminal/       terminal sessions, tabs and xterm.js view
 src/native/         typed client for native commands; the only code that imports Tauri
 src/contracts/      TypeScript types generated from crates/core (do not edit)
 docs/               architecture, roadmap, security, decisions
 ```
 
-Subsystem modules (workspace, editor, agents, models, MCP, git and catalog) are
-added in the phase that implements them. The planned homes are in
+Subsystem modules (agents, models, MCP, git and catalog) are added in the phase
+that implements them. The planned homes are in
 [docs/architecture.md §3](docs/architecture.md#3-repository-map).
 
 ## Development rules

@@ -12,6 +12,9 @@ portable-pty.workspace = true
 nix.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # The user's language and region, to set LANG as macOS terminals do (see locale.rs).
 sys-locale = "0.3"

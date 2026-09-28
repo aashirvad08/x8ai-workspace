@@ -3,11 +3,24 @@
 /// `capabilities/` grants it to the calling window.
 const COMMANDS: &[&str] = &[
     "get_app_info",
+    "app_subscribe",
+    "app_set_unsaved_changes",
+    "app_quit",
     "terminal_create",
     "terminal_write",
     "terminal_resize",
     "terminal_ack",
     "terminal_close",
+    "workspace_open",
+    "workspace_list_dir",
+    "workspace_read_file",
+    "workspace_file_version",
+    "workspace_write_file",
+    "workspace_create_file",
+    "workspace_create_dir",
+    "workspace_rename",
+    "workspace_delete",
+    "workspace_list_files",
 ];
 
 fn main() {

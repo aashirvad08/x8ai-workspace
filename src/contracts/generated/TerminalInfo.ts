@@ -10,6 +10,10 @@ export type TerminalInfo = { id: SessionId,
  */
 program: string, 
 /**
+ * Absolute path of the directory the session started in.
+ */
+cwd: string, 
+/**
  * Flow control: acknowledge processed output with `terminal_ack` whenever at
  * least this many bytes have been rendered since the last acknowledgement. The
  * native side pauses reading when too much output is unacknowledged.

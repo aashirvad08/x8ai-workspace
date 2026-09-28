@@ -12,6 +12,8 @@ export type NativeErrorCode = ErrorCode | "ipc";
 const COMMAND_ERROR_CODES: Record<ErrorCode, true> = {
   invalidInput: true,
   notFound: true,
+  alreadyExists: true,
+  conflict: true,
   permissionDenied: true,
   internal: true,
 };

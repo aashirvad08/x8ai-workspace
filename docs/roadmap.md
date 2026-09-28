@@ -8,8 +8,8 @@ are part of every phase, not a final pass (`docs/security.md`).
 | --- | --- | --- |
 | 0 | Foundation | **Complete** |
 | 1 | Real terminal | **Complete** |
-| 2 | Workspace and projects | Next |
-| 3 | Editor | Planned |
+| 2 | Workspace, files and editor | **Complete** |
+| 3 | Workspace sessions: persistence, trust and layout | Next |
 | 4 | Agent runtime | Planned |
 | 5 | Secrets and model providers | Planned |
 | 6 | Local models | Planned |
@@ -65,40 +65,58 @@ detected from the user account.
   sizes are validated. OSC 52 clipboard writes are disabled or confirmed. ADR 0006
   is accepted, or replaced with measurements.
 
-## Phase 2 — Workspace and projects
+## Phase 2 — Workspace, files and editor
 
-**Objective.** Make a project folder the unit of work.
+**Objective.** Turn the terminal into a terminal-first workspace. A user-chosen
+folder, with a file explorer and a code editor, sits above the terminal.
 
-**Major components.** Open a folder as a workspace. A `workspace` crate (roots,
-canonical paths, scoped file commands). A recent-workspaces list. Sessions scoped
-to a workspace (cwd). Layout: split panes and tabs for terminals. A read-only file
-tree. Workspace trust (untrusted by default). Persistent state (ADR: JSON vs
-SQLite).
-
-**Acceptance criteria.**
-- Opening, switching and reopening workspaces restores the layout and the session
-  working directories.
-- File commands reject paths outside the root, including `..` and symlink escapes
-  (tests).
-- Untrusted workspaces run nothing automatically. The trust decision is stored and
-  revocable.
-- The file tree stays responsive on a 100k-file repository (lazy loading, ignore
-  rules).
-
-## Phase 3 — Editor
-
-**Objective.** A capable basic editor that sits alongside the terminal.
-
-**Major components.** The editor component (ADR: CodeMirror 6 vs Monaco). Open, edit
-and save through workspace-scoped commands. Tabs. Syntax highlighting. In-file
-search and replace. External change detection through a native file watcher.
+**Major components.**
+- `crates/workspace`, which confines every file operation to the chosen root with
+  `cap-std` (ADR 0009).
+- A native folder picker.
+- Lazy file explorer with create, rename and delete (to the Trash), refreshed by
+  filesystem events.
+- CodeMirror 6 editor (ADR 0008) with tabs, unsaved-state tracking, atomic
+  version-checked saves and conflict handling.
+- Quick open (⌘P) and a command palette (⇧⌘P).
+- Terminal tabs whose new sessions start in the workspace root.
+- Resizable explorer and terminal panels.
+- A quit guard for unsaved changes.
 
 **Acceptance criteria.**
-- Multiple files open in tabs. Unsaved changes are tracked and never lost silently.
-- Changes made on disk by an agent or git are detected and offered as a reload or
-  diff.
-- Large files (10 MB) open without freezing the UI.
-- Saving outside the workspace root is impossible through the UI or IPC (tests).
+- A folder opens only through the native picker. The explorer lists it one level
+  at a time, and new terminals start in it while existing terminals stay put.
+- Files open in tabs, edit, and save with ⌘S. The unsaved state is visible.
+  Closing a dirty tab, opening another folder or quitting asks first.
+- Create, rename and delete work, and delete is recoverable from the Trash.
+- A change on disk reloads unmodified tabs and never overwrites unsaved edits.
+  Saving over an external change is refused, with Overwrite or Revert offered.
+- Paths outside the workspace, including through symlinks, are refused (tests).
+- Errors (missing file, permission denied, binary file, conflicts) are shown to
+  the user.
+- The Phase 0 and Phase 1 tests still pass.
+
+## Phase 3 — Workspace sessions: persistence, trust and layout
+
+**Objective.** Make a workspace something the user returns to, not just a folder
+open for the current launch.
+
+**Major components.**
+- Recent workspaces, and reopening the last one on launch (ADR: JSON vs SQLite).
+- Restored editor tabs and layout.
+- Workspace trust: untrusted by default, stored, and revocable.
+- Terminal split panes.
+- Search across files.
+- Quit interception for Dock Quit and logout, which cannot be intercepted today
+  (`src-tauri/src/app.rs`).
+- Per-window scoping of native state, once multiple windows exist.
+
+**Acceptance criteria.**
+- Reopening the app restores the last workspace, its open tabs and panel sizes.
+- An untrusted workspace runs nothing automatically. The trust decision is stored
+  and revocable.
+- Search across a 100k-file repository streams results without freezing the UI.
+- Quitting from the Dock with unsaved changes asks first.
 
 ## Phase 4 — Agent runtime
 

@@ -3,7 +3,7 @@
 //! This crate defines the shapes that cross boundaries:
 //!
 //! - the IPC contract between the webview and the native host ([`app`], [`error`],
-//!   [`terminal`]);
+//!   [`terminal`], [`workspace`]);
 //! - declarative definitions for integrations: coding agents ([`agent`]), model
 //!   providers ([`model`]) and MCP servers ([`mcp`]), unified in [`definition`].
 //!
@@ -26,3 +26,4 @@ pub mod launch;
 pub mod mcp;
 pub mod model;
 pub mod terminal;
+pub mod workspace;

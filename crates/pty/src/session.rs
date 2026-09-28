@@ -39,10 +39,12 @@ const _: () = assert!(ACK_BYTES as usize + READ_BUFFER <= FLOW_WINDOW);
 const MIN_SEND_INTERVAL: Duration = Duration::from_millis(4);
 
 /// After the process exits, its output counts as drained once the PTY reports end
-/// of output, or once the reader has waited this long with nothing to read. (A
-/// background process that keeps the terminal open prevents end of output.) The
-/// exit is reported only then, so it never overtakes output.
-const DRAIN_QUIET_PERIOD: Duration = Duration::from_millis(100);
+/// of output. A background process that keeps the terminal open prevents end of
+/// output, so the reader also counts as drained once it has waited this long with
+/// nothing to read, measured from the exit: output written just before the exit
+/// wakes the reader well within it. The exit is reported only then, so it never
+/// overtakes output.
+const DRAIN_QUIET_PERIOD: Duration = Duration::from_millis(500);
 
 /// Concurrent `openpty(3)` calls fail intermittently on macOS (observed as
 /// `Unknown error: -6`), so PTYs are opened one at a time. It takes microseconds.
@@ -79,6 +81,7 @@ pub enum Error {
 pub struct Session {
     id: SessionId,
     program: String,
+    cwd: String,
     pid: Option<u32>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     /// `None` once closed. Dropping the sender stops the writer thread.
@@ -106,6 +109,7 @@ struct State {
     reading_since: Option<Instant>,
     error: Option<String>,
     exit: Option<TerminalExit>,
+    exited_at: Option<Instant>,
     closed: bool,
 }
 
@@ -132,10 +136,15 @@ impl Shared {
     }
 
     fn drained(state: &State) -> bool {
-        state.eof
-            || state
-                .reading_since
-                .is_some_and(|since| since.elapsed() >= DRAIN_QUIET_PERIOD)
+        if state.eof {
+            return true;
+        }
+        match (state.exited_at, state.reading_since) {
+            // Waiting since before the exit does not count: output written just
+            // before it may not have woken the reader yet.
+            (Some(exited), Some(waiting)) => waiting.max(exited).elapsed() >= DRAIN_QUIET_PERIOD,
+            _ => false,
+        }
     }
 
     fn update(&self, change: impl FnOnce(&mut State)) {
@@ -174,7 +183,7 @@ impl Session {
                 .openpty(pty_size(size))
                 .map_err(|e| spawn_error(&e))?
         };
-        let (command, program_path) = program.command();
+        let (command, program_path, cwd) = program.command();
         let mut child = pair
             .slave
             .spawn_command(command)
@@ -222,7 +231,10 @@ impl Session {
                             }
                         }
                     };
-                    shared.update(|s| s.exit = Some(exit));
+                    shared.update(|s| {
+                        s.exit = Some(exit);
+                        s.exited_at = Some(Instant::now());
+                    });
                 }
             })
         })();
@@ -235,6 +247,7 @@ impl Session {
         Ok(Arc::new(Self {
             id,
             program: program_path,
+            cwd: cwd.display().to_string(),
             pid,
             master: Mutex::new(pair.master),
             input: Mutex::new(Some(input)),
@@ -250,6 +263,11 @@ impl Session {
     /// Absolute path of the program running in the session.
     pub fn program(&self) -> &str {
         &self.program
+    }
+
+    /// Absolute path of the directory the session started in.
+    pub fn cwd(&self) -> &str {
+        &self.cwd
     }
 
     pub fn pid(&self) -> Option<u32> {

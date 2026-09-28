@@ -82,7 +82,7 @@ describe("native client", () => {
 });
 
 describe("native client terminal commands", () => {
-  const created: TerminalInfo = { id: 7, program: "/bin/zsh", ackBytes: 65536 };
+  const created: TerminalInfo = { id: 7, program: "/bin/zsh", cwd: "/Users/me/project", ackBytes: 65536 };
 
   it("creates a session with a channel and splits output from events", async () => {
     const { calls, channels, client } = bridge(() => created);
