@@ -5,14 +5,16 @@
 //! this a session falls back to the C locale: zsh's `/etc/zprofile` picks
 //! `C.UTF-8`, and bash gets no locale at all, which breaks UTF-8 input and output.
 
-use std::path::Path;
-
 /// The `LANG` to set when the inherited environment names no locale, or `None` to
 /// leave it to the shell.
 #[cfg(target_os = "macos")]
 pub(crate) fn user_lang() -> Option<String> {
     let preferred = sys_locale::get_locale()?;
-    posix_utf8_locale(&preferred).filter(|name| Path::new("/usr/share/locale").join(name).is_dir())
+    posix_utf8_locale(&preferred).filter(|name| {
+        std::path::Path::new("/usr/share/locale")
+            .join(name)
+            .is_dir()
+    })
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -24,6 +26,7 @@ pub(crate) fn user_lang() -> Option<String> {
 /// Converts a BCP 47 tag such as `en-IN` or `zh-Hans-CN` to a POSIX UTF-8 locale
 /// name such as `en_IN.UTF-8`. Returns `None` when the tag has no two-letter
 /// language and region, since there is then no locale name to guess.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn posix_utf8_locale(tag: &str) -> Option<String> {
     let mut subtags = tag.split(['-', '_']);
     let language = subtags.next().filter(|l| is_alpha(l, 2))?;
@@ -35,6 +38,7 @@ pub(crate) fn posix_utf8_locale(tag: &str) -> Option<String> {
     ))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn is_alpha(subtag: &str, len: usize) -> bool {
     subtag.len() == len && subtag.bytes().all(|b| b.is_ascii_alphabetic())
 }
