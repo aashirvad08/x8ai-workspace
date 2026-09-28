@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { SessionId } from "../contracts/generated/SessionId";
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
 import type { TerminalSize } from "../contracts/generated/TerminalSize";
-import type { TerminalApi, TerminalListener } from "../native";
-import { type TerminalScreen, TerminalSession } from "./session";
+import type { TerminalListener } from "../native";
+import { type SessionNative, type TerminalScreen, TerminalSession } from "./session";
 
 /** A screen that renders synchronously and lets the test type into it. */
 class FakeScreen implements TerminalScreen {
@@ -51,7 +51,7 @@ type Recorded =
   | { call: "close"; id: SessionId };
 
 /** A native client whose sessions the test creates, feeds and finishes by hand. */
-class FakeNative implements TerminalApi {
+class FakeNative implements SessionNative {
   created: Created[] = [];
   calls: Recorded[] = [];
 

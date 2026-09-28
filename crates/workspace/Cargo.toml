@@ -13,6 +13,11 @@ cap-std.workspace = true
 notify.workspace = true
 ignore.workspace = true
 trash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+grep-searcher.workspace = true
+grep-regex.workspace = true
+grep-matcher.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -17,3 +17,5 @@ NNNN), **Context**, **Decision**, **Consequences**, and **Alternatives considere
 | [0007](0007-webview-hardening-for-xterm.md) | Webview hardening adjustments for xterm.js | Accepted |
 | [0008](0008-code-editor.md) | Code editor: CodeMirror 6 | Accepted |
 | [0009](0009-workspace-filesystem-boundary.md) | Workspace filesystem boundary | Accepted |
+| [0010](0010-workspace-trust-and-recent-workspaces.md) | Workspace trust and remembered workspaces | Accepted |
+| [0011](0011-intercepting-system-quit-on-macos.md) | Intercepting Quit from the Dock, logout and shutdown on macOS | Accepted |

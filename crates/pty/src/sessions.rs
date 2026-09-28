@@ -62,6 +62,14 @@ impl Sessions {
         }
     }
 
+    /// Whether any session has a job in the foreground (see
+    /// [`Session::has_foreground_job`]), so closing it would end a running program.
+    pub fn any_foreground_job(&self) -> bool {
+        self.lock()
+            .values()
+            .any(|session| session.has_foreground_job())
+    }
+
     pub fn len(&self) -> usize {
         self.lock().len()
     }

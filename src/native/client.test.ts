@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AppInfo } from "../contracts/generated/AppInfo";
+import type { SearchEvent } from "../contracts/generated/SearchEvent";
 import type { TerminalEvent } from "../contracts/generated/TerminalEvent";
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
 import { createNativeClient, type Invoke, type InvokeArgs, type InvokeOptions, SESSION_ID_HEADER } from "./client";
@@ -131,6 +132,39 @@ describe("native client terminal commands", () => {
       { command: "terminal_resize", args: { id: 7, size: { cols: 100, rows: 30 } } },
       { command: "terminal_ack", args: { id: 7, bytes: 65536 } },
       { command: "terminal_close", args: { id: 7 } },
+    ]);
+  });
+});
+
+describe("native client workspace commands", () => {
+  it("streams search results on a channel until the search is over", async () => {
+    const { calls, channels, client } = bridge();
+    const events: SearchEvent[] = [];
+
+    await client.search({ text: "TODO", caseSensitive: false }, (event) => events.push(event));
+    channels[0]!({ type: "file", path: "a.txt", matches: [] });
+    channels[0]!({ type: "done", files: 1, matches: 0, truncated: false, cancelled: false });
+
+    expect(calls[0]).toMatchObject({
+      command: "workspace_search",
+      args: { query: { text: "TODO", caseSensitive: false }, events: { channel: 1 } },
+    });
+    expect(events.map((e) => e.type)).toEqual(["file", "done"]);
+  });
+
+  it("reopens, forgets and trusts with named arguments", async () => {
+    const { calls, client } = bridge();
+
+    await client.openRecentWorkspace("/Users/me/project", () => {});
+    await client.forgetRecentWorkspace("/Users/me/old");
+    await client.setWorkspaceTrust(true);
+    await client.isTerminalBusy(3);
+
+    expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
+      { command: "workspace_open_recent", args: { root: "/Users/me/project", events: { channel: 1 } } },
+      { command: "workspace_forget_recent", args: { root: "/Users/me/old" } },
+      { command: "workspace_set_trust", args: { trusted: true } },
+      { command: "terminal_is_busy", args: { id: 3 } },
     ]);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { matches, shortcutLabel } from "./commands";
+import { applies, type Command, matches, shortcutLabel } from "./commands";
 
 const key = (key: string, mods: Partial<Record<"metaKey" | "shiftKey" | "ctrlKey" | "altKey", boolean>> = {}, code = "") => ({
   key,
@@ -28,5 +28,13 @@ describe("shortcuts", () => {
   it("render in macOS notation", () => {
     expect(shortcutLabel({ key: "p", meta: true, shift: true })).toBe("⇧⌘P");
     expect(shortcutLabel({ key: "`", ctrl: true })).toBe("⌃`");
+  });
+
+  it("apply only where their command says", () => {
+    const command = (when?: Command["when"]): Command => ({ id: "x", title: "x", ...(when && { when }), run: () => {} });
+    expect(applies(command(), true)).toBe(true);
+    expect(applies(command("terminalFocused"), true)).toBe(true);
+    expect(applies(command("terminalFocused"), false)).toBe(false);
+    expect(applies(command("terminalNotFocused"), true)).toBe(false);
   });
 });

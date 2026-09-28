@@ -1,12 +1,16 @@
-//! App lifecycle: quitting without losing unsaved work.
+//! App lifecycle: quitting without losing work.
 //!
-//! The frontend reports whether it has unsaved changes. While it does, closing the
-//! window or choosing Quit asks the frontend first (`AppEvent::QuitRequested`), and
-//! nothing closes until it calls `app_quit`. While it has none, or if it never
-//! subscribed, quitting is immediate, so a frontend that hangs cannot trap the user.
+//! Quitting asks first when it would lose something: unsaved editor changes
+//! (which the frontend reports) or a program running in a terminal (which the
+//! native side sees). Then closing the window, choosing Quit, and on macOS also
+//! Quit from the Dock, logout and shutdown, send `AppEvent::QuitRequested`, and
+//! nothing closes until the frontend calls `app_quit`. If nothing would be lost,
+//! or the frontend never subscribed, quitting is immediate, so a frontend that
+//! hangs cannot trap the user.
 //!
-//! Not intercepted: Quit from the Dock and system logout. They terminate the app
-//! directly, without an event that can be prevented.
+//! Cannot be intercepted on any platform: Force Quit, `kill -9`, crashes and
+//! power loss. Terminal processes still end then, because the kernel hangs up
+//! their terminals when the app's end of the PTY closes.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -14,6 +18,9 @@ use std::sync::{Mutex, PoisonError};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 use x8ai_core::app::AppEvent;
+
+use crate::terminal::Terminals;
+use crate::workspace::Workspaces;
 
 #[derive(Default)]
 pub struct AppState {
@@ -23,19 +30,16 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Whether a close or quit must wait for the frontend.
-    pub fn must_ask(&self) -> bool {
-        !self.quitting.load(Ordering::SeqCst)
-            && self.unsaved.load(Ordering::SeqCst)
-            && self.lock_events().is_some()
-    }
-
     /// Asks the frontend to confirm quitting.
     pub fn ask(&self) {
         if let Some(events) = self.lock_events().as_ref() {
             // If the page is gone, the next reload resets this state.
             let _ = events.send(AppEvent::QuitRequested);
         }
+    }
+
+    pub fn is_quitting(&self) -> bool {
+        self.quitting.load(Ordering::SeqCst)
     }
 
     /// Called when the page reloads: its unsaved state and subscription are gone.
@@ -49,11 +53,19 @@ impl AppState {
     }
 }
 
-/// The Quit menu item (Cmd+Q).
-pub fn quit_requested(app: &AppHandle) {
+/// Whether a close or quit must wait for the frontend: something would be lost,
+/// and the frontend is there to ask.
+pub fn must_ask(app: &AppHandle) -> bool {
     let state = app.state::<AppState>();
-    if state.must_ask() {
-        state.ask();
+    !state.is_quitting()
+        && state.lock_events().is_some()
+        && (state.unsaved.load(Ordering::SeqCst) || app.state::<Terminals>().any_busy())
+}
+
+/// A quit request from the Quit menu item (Cmd+Q) or, on macOS, from the system.
+pub fn quit_requested(app: &AppHandle) {
+    if must_ask(app) {
+        app.state::<AppState>().ask();
     } else {
         app.exit(0);
     }
@@ -74,4 +86,11 @@ pub fn app_set_unsaved_changes(unsaved: bool, state: State<'_, AppState>) {
 pub fn app_quit(app: AppHandle, state: State<'_, AppState>) {
     state.quitting.store(true, Ordering::SeqCst);
     app.exit(0);
+}
+
+/// Native problems found at startup (for example an unreadable settings file),
+/// for the frontend to show once.
+#[tauri::command]
+pub fn app_take_warnings(workspaces: State<'_, Workspaces>) -> Vec<String> {
+    workspaces.take_warnings()
 }

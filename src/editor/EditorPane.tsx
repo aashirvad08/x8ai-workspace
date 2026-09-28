@@ -14,7 +14,8 @@ export function EditorPane({ editor }: { editor: EditorStore }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const shown = useRef<string | null>(null);
-  const { active, revision } = useStore(editor);
+  const revealed = useRef(0);
+  const { active, revision, reveal } = useStore(editor);
 
   useEffect(() => {
     const created = new EditorView({
@@ -41,7 +42,13 @@ export function EditorPane({ editor }: { editor: EditorStore }) {
     const switched = shown.current !== active;
     shown.current = active;
     if (current.state !== state) current.setState(state);
-    if (switched) current.focus();
+    if (reveal !== revealed.current) {
+      revealed.current = reveal;
+      current.dispatch({ effects: EditorView.scrollIntoView(current.state.selection.main, { y: "center" }) });
+      current.focus();
+    } else if (switched) {
+      current.focus();
+    }
 
     // Syntax highlighting is loaded on first display, then kept in the tab's state.
     if (needsLanguage(state, active)) {
@@ -54,7 +61,7 @@ export function EditorPane({ editor }: { editor: EditorStore }) {
         })
         .catch((error: unknown) => console.warn(`No syntax highlighting for ${active}`, error));
     }
-  }, [editor, active, revision]);
+  }, [editor, active, revision, reveal]);
 
   return <div className="editor-pane" ref={host} hidden={active === null} />;
 }

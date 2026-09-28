@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 
 import type { DirEntry } from "../contracts/generated/DirEntry";
+import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
 import { dirname } from "../lib/paths";
 import type { Store } from "../lib/store";
@@ -11,6 +12,7 @@ import { type Editing, type Explorer, type Row, visibleRows } from "./explorer";
 interface Props {
   explorer: Explorer;
   workspace: Store<WorkspaceInfo | null>;
+  recent: Store<readonly RecentWorkspace[]>;
   actions: ExplorerActions;
 }
 
@@ -23,8 +25,9 @@ interface Menu {
 
 const INDENT = 14;
 
-export function FileExplorer({ explorer, workspace, actions }: Props) {
+export function FileExplorer({ explorer, workspace, recent, actions }: Props) {
   const info = useStore(workspace);
+  const recentList = useStore(recent);
   const snapshot = useStore(explorer);
   const rows = useMemo(() => visibleRows(snapshot), [snapshot]);
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -42,6 +45,7 @@ export function FileExplorer({ explorer, workspace, actions }: Props) {
             <kbd>⌘O</kbd>
           </p>
         </div>
+        {recentList.length > 0 && <RecentList workspaces={recentList} actions={actions} />}
       </aside>
     );
   }
@@ -152,6 +156,40 @@ export function FileExplorer({ explorer, workspace, actions }: Props) {
         />
       )}
     </aside>
+  );
+}
+
+/** Recently opened folders. Missing ones stay listed, marked, until removed. */
+function RecentList({ workspaces, actions }: { workspaces: readonly RecentWorkspace[]; actions: ExplorerActions }) {
+  return (
+    <section className="recent" aria-label="Recent folders">
+      <h2 className="recent-title">Recent</h2>
+      <ul className="recent-list">
+        {workspaces.map((w) => (
+          <li key={w.root} className="recent-item">
+            <button
+              type="button"
+              className="recent-open"
+              disabled={!w.available}
+              title={w.available ? w.root : `${w.root} (not found)`}
+              onClick={() => actions.openRecent(w.root)}
+            >
+              <span className="recent-name">{w.name}</span>
+              <span className="recent-path">{w.available ? w.root : "Not found"}</span>
+            </button>
+            <button
+              type="button"
+              className="icon-button recent-remove"
+              title="Remove from Recent"
+              aria-label={`Remove ${w.name} from Recent`}
+              onClick={() => actions.forgetRecent(w.root)}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

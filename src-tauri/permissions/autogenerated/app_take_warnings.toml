@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-app-take-warnings"
+description = "Enables the app_take_warnings command without any pre-configured scope."
+commands.allow = ["app_take_warnings"]
+
+[[permission]]
+identifier = "deny-app-take-warnings"
+description = "Denies the app_take_warnings command without any pre-configured scope."
+commands.deny = ["app_take_warnings"]

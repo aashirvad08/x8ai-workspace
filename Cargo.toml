@@ -48,6 +48,17 @@ notify = "8"
 ignore = "0.4"
 # Move deleted entries to the Trash. Default features off: chrono is not needed.
 trash = { version = "5", default-features = false }
+# Workspace-wide text search: ripgrep's searcher (binary detection, line
+# iteration) and literal matcher, so search behaves like `rg`. regex and memchr
+# are already in the tree; new transitively: encoding_rs(_io), memmap2 (memory
+# maps are left off) and simdutf8.
+grep-searcher = "0.1"
+grep-regex = "0.1"
+grep-matcher = "0.1"
+
+# macOS only: Objective-C runtime calls, to handle quit from the Dock and logout
+# (see src-tauri/src/macos.rs). Already in the tree through Tauri's window layer.
+objc2 = "0.6"
 
 # Test-only temporary directories.
 tempfile = "3"

@@ -27,8 +27,8 @@ pub struct Terminals(Sessions);
 
 impl Terminals {
     /// Hangs up every session. Called when the page that owns them (re)loads.
-    // TODO(phase-3): scope sessions to the webview that created them once there is
-    // more than one window.
+    /// Sessions belong to the app's only window; a second window would need them
+    /// scoped to the webview that created them.
     pub fn close_all(&self) {
         self.0.close_all();
     }
@@ -36,6 +36,11 @@ impl Terminals {
     /// Called on app exit: hangs up every session and kills what does not exit.
     pub fn shutdown(&self) {
         self.0.shutdown(SHUTDOWN_GRACE);
+    }
+
+    /// Whether quitting now would end a running program in some terminal.
+    pub fn any_busy(&self) -> bool {
+        self.0.any_foreground_job()
     }
 }
 
@@ -145,6 +150,20 @@ pub fn terminal_ack(
         .0
         .get(id)
         .map(|session| session.ack(bytes))
+        .map_err(command_error)
+}
+
+/// Whether a program is running in the session's foreground (beyond an idle
+/// shell), so closing it would end that program. Asked before closing.
+#[tauri::command]
+pub fn terminal_is_busy(
+    id: SessionId,
+    terminals: State<'_, Terminals>,
+) -> Result<bool, CommandError> {
+    terminals
+        .0
+        .get(id)
+        .map(|session| session.has_foreground_job())
         .map_err(command_error)
 }
 

@@ -304,6 +304,22 @@ impl Session {
             .update(|s| s.unacked = s.unacked.saturating_sub(bytes as usize));
     }
 
+    /// Whether a job other than the session's own process is in the terminal's
+    /// foreground: `vim`, a build, a `sleep` started from the shell. An idle shell
+    /// at its prompt has none. Read from the PTY (`tcgetpgrp`), so it is exact at
+    /// the moment it is asked.
+    pub fn has_foreground_job(&self) -> bool {
+        if self.has_exited() {
+            return false;
+        }
+        let foreground = self
+            .master
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .process_group_leader();
+        matches!((foreground, self.pid), (Some(group), Some(pid)) if group as u32 != pid)
+    }
+
     pub fn has_exited(&self) -> bool {
         self.shared.lock().exit.is_some()
     }
@@ -404,8 +420,13 @@ fn read_loop(mut reader: Box<dyn Read + Send>, shared: &Shared) {
         while !state.closed && state.pending.len() + state.unacked + n > FLOW_WINDOW {
             state = shared.wait(state);
         }
+        // A closed session's output is discarded, but reading goes on until the
+        // end of output. macOS makes the last process to close a terminal wait
+        // until its unread output drains, so a shell that wrote anything after
+        // the hangup (its prompt, readline's cleanup) could otherwise never
+        // finish exiting, even after SIGKILL, while the PTY stays open.
         if state.closed {
-            return;
+            continue;
         }
         state.pending.extend_from_slice(&buf[..n]);
         drop(state);

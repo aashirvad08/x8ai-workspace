@@ -1,13 +1,23 @@
 import { Store } from "../lib/store";
 
+export type SidebarView = "files" | "search";
+
 export interface LayoutState {
   readonly explorerWidth: number;
   readonly terminalHeight: number;
   readonly explorerVisible: boolean;
   readonly terminalVisible: boolean;
+  /** What the sidebar (the explorer's column) shows. */
+  readonly sidebar: SidebarView;
 }
 
-const DEFAULTS: LayoutState = { explorerWidth: 260, terminalHeight: 280, explorerVisible: true, terminalVisible: true };
+const DEFAULTS: LayoutState = {
+  explorerWidth: 260,
+  terminalHeight: 280,
+  explorerVisible: true,
+  terminalVisible: true,
+  sidebar: "files",
+};
 const STORAGE_KEY = "x8ai.layout";
 
 export const EXPLORER_WIDTH = { min: 160, max: 600 };
@@ -34,6 +44,11 @@ export class Layout extends Store<LayoutState> {
     this.#change({ explorerVisible: !this.get().explorerVisible });
   }
 
+  /** Shows the sidebar with `view` in it. */
+  showSidebar(sidebar: SidebarView): void {
+    this.#change({ sidebar, explorerVisible: true });
+  }
+
   setTerminalVisible(terminalVisible: boolean): void {
     this.#change({ terminalVisible });
   }
@@ -56,6 +71,7 @@ function load(): LayoutState {
       terminalHeight: clamp(Number(stored.terminalHeight ?? DEFAULTS.terminalHeight), TERMINAL_HEIGHT),
       explorerVisible: stored.explorerVisible ?? DEFAULTS.explorerVisible,
       terminalVisible: stored.terminalVisible ?? DEFAULTS.terminalVisible,
+      sidebar: stored.sidebar === "search" ? "search" : "files",
     };
   } catch {
     return DEFAULTS;

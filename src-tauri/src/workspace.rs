@@ -1,37 +1,76 @@
 //! Workspace commands: the IPC face of `x8ai-workspace`.
 //!
-//! The webview cannot name a folder to open. `workspace_open` shows the native
-//! picker, and whatever the user chooses becomes the only part of the filesystem
-//! these commands can reach. Every other command takes workspace paths, which
-//! `x8ai-workspace` validates and resolves beneath the root.
+//! The webview cannot name a folder to open. A workspace is either chosen in the
+//! native folder picker, or reopened from the recent list, which holds only
+//! folders previously chosen that way. Trust is granted only through a native
+//! confirmation dialog, so the webview cannot grant it itself. Every other command
+//! takes workspace paths, which `x8ai-workspace` validates and resolves beneath
+//! the root.
 
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tauri::ipc::Channel;
 use tauri::{State, WebviewWindow};
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use x8ai_core::error::{CommandError, ErrorCode};
 use x8ai_core::workspace::{
-    DirEntry, FileContent, FileList, FileVersion, WorkspaceEvent, WorkspaceInfo,
+    DirEntry, FileContent, FileList, FileVersion, RecentWorkspace, SearchEvent, SearchQuery,
+    WorkspaceEvent, WorkspaceInfo,
 };
-use x8ai_workspace::{Removal, Watcher, Workspace};
+use x8ai_workspace::{RecentWorkspaces, Removal, SearchLimits, TrustStore, Watcher, Workspace};
 
 /// Quick open lists at most this many files.
 const MAX_LISTED_FILES: usize = 50_000;
+/// Longest search text accepted.
+const MAX_QUERY_CHARS: usize = 1_000;
 
-/// The open workspace, if any. Managed Tauri state.
+/// The open workspace, and what is remembered about workspaces between
+/// launches. Managed Tauri state.
 #[derive(Default)]
-pub struct Workspaces(Mutex<Option<Open>>);
+pub struct Workspaces {
+    current: Mutex<Option<Open>>,
+    stores: Mutex<Option<Stores>>,
+    /// Set to cancel the running search.
+    search: Mutex<Option<Arc<AtomicBool>>>,
+    warnings: Mutex<Vec<String>>,
+}
 
 struct Open {
     workspace: Arc<Workspace>,
     _watcher: Watcher,
 }
 
+struct Stores {
+    recent: RecentWorkspaces,
+    trust: TrustStore,
+}
+
 impl Workspaces {
+    /// Loads the recent list and trust from the app's data directory. Problems
+    /// reading them are kept for the frontend to show (`app_take_warnings`).
+    pub fn load_stores(&self, data_dir: &Path) {
+        let (recent, recent_warning) =
+            RecentWorkspaces::load(data_dir.join("recent-workspaces.json"));
+        let (trust, trust_warning) = TrustStore::load(data_dir.join("trusted-workspaces.json"));
+        lock(&self.warnings).extend(recent_warning.into_iter().chain(trust_warning));
+        *lock(&self.stores) = Some(Stores { recent, trust });
+    }
+
+    /// Keeps a problem for the frontend to show (`app_take_warnings`).
+    pub fn warn(&self, message: String) {
+        lock(&self.warnings).push(message);
+    }
+
+    pub fn take_warnings(&self) -> Vec<String> {
+        std::mem::take(&mut *lock(&self.warnings))
+    }
+
     pub fn current(&self) -> Option<Arc<Workspace>> {
-        self.lock().as_ref().map(|open| open.workspace.clone())
+        lock(&self.current)
+            .as_ref()
+            .map(|open| open.workspace.clone())
     }
 
     /// The root of the open workspace, where new terminal sessions start.
@@ -39,13 +78,74 @@ impl Workspaces {
         self.current().map(|workspace| workspace.root().to_owned())
     }
 
-    /// Forgets the workspace and stops watching it. Called when the page reloads.
+    /// Forgets the workspace, stops watching it and cancels its search. Called
+    /// when the page reloads.
     pub fn close(&self) {
-        self.lock().take();
+        self.cancel_search();
+        lock(&self.current).take();
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Open>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Whether the user explicitly trusted exactly this folder (ADR 0010).
+    fn is_trusted(&self, root: &Path) -> bool {
+        lock(&self.stores)
+            .as_ref()
+            .is_some_and(|s| s.trust.is_trusted(root))
+    }
+
+    fn with_stores<T>(
+        &self,
+        f: impl FnOnce(&mut Stores) -> Result<T, x8ai_workspace::Error>,
+    ) -> Result<T, CommandError> {
+        let mut stores = lock(&self.stores);
+        let stores = stores.as_mut().ok_or_else(|| {
+            CommandError::new(ErrorCode::Internal, "workspace settings are not loaded")
+        })?;
+        f(stores).map_err(command_error)
+    }
+
+    /// Makes `workspace` the open one: watches it, moves it to the front of the
+    /// recent list, and reports it with its trust.
+    fn install(
+        &self,
+        workspace: Workspace,
+        events: Channel<WorkspaceEvent>,
+    ) -> Result<WorkspaceInfo, CommandError> {
+        // Sending fails only when the page that opened the workspace is gone; the
+        // workspace is closed when the page reloads (see `lib.rs`).
+        let watcher = workspace
+            .watch(move |event| drop(events.send(event)))
+            .map_err(command_error)?;
+        let root = workspace.root().to_owned();
+        let recorded = self.with_stores(|s| s.recent.record(&root));
+        let info = workspace.info(self.is_trusted(&root));
+        self.cancel_search();
+        *lock(&self.current) = Some(Open {
+            workspace: Arc::new(workspace),
+            _watcher: watcher,
+        });
+        // The workspace is open either way; failing to remember it is only reported.
+        if let Err(error) = recorded {
+            self.warn(format!(
+                "Could not add {} to Recent: {}",
+                root.display(),
+                error.message
+            ));
+        }
+        Ok(info)
+    }
+
+    fn begin_search(&self) -> Arc<AtomicBool> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        if let Some(previous) = lock(&self.search).replace(cancel.clone()) {
+            previous.store(true, Ordering::Relaxed);
+        }
+        cancel
+    }
+
+    fn cancel_search(&self) {
+        if let Some(running) = lock(&self.search).take() {
+            running.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -70,24 +170,141 @@ pub async fn workspace_open(
     let path = picked
         .into_path()
         .map_err(|e| CommandError::new(ErrorCode::InvalidInput, format!("unusable folder: {e}")))?;
+    let workspace = blocking(move || Workspace::open(&path)).await?;
+    workspaces.install(workspace, events).map(Some)
+}
 
-    let (workspace, watcher) = tauri::async_runtime::spawn_blocking(move || {
-        let workspace = Workspace::open(&path)?;
-        // Sending fails only when the page that opened the workspace is gone; the
-        // workspace is closed when the page reloads (see `lib.rs`).
-        let watcher = workspace.watch(move |event| drop(events.send(event)))?;
-        Ok::<_, x8ai_workspace::Error>((workspace, watcher))
+/// Reopens a folder from the recent list. Only folders in that list, which the
+/// user chose earlier in the native picker, can be opened this way. A folder that
+/// no longer exists is removed from the list.
+#[tauri::command]
+pub async fn workspace_open_recent(
+    root: String,
+    events: Channel<WorkspaceEvent>,
+    workspaces: State<'_, Workspaces>,
+) -> Result<WorkspaceInfo, CommandError> {
+    let path = PathBuf::from(&root);
+    if !workspaces.with_stores(|s| Ok(s.recent.contains(&path)))? {
+        return Err(CommandError::new(
+            ErrorCode::PermissionDenied,
+            "only folders opened before can be reopened; use Open Folder",
+        ));
+    }
+    let opening = path.clone();
+    let reopened = tauri::async_runtime::spawn_blocking(move || Workspace::reopen(&opening))
+        .await
+        .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?;
+    match reopened {
+        Ok(workspace) => workspaces.install(workspace, events),
+        // Gone, no longer a folder, or now a different folder: not worth keeping.
+        Err(
+            error @ (x8ai_workspace::Error::NotFound(_)
+            | x8ai_workspace::Error::InvalidPath { .. }
+            | x8ai_workspace::Error::Moved { .. }),
+        ) => {
+            workspaces.with_stores(|s| s.recent.remove(&path))?;
+            let reason = if matches!(error, x8ai_workspace::Error::Moved { .. }) {
+                error.to_string()
+            } else {
+                format!("{root} no longer exists")
+            };
+            Err(CommandError::new(
+                command_error(error).code,
+                format!(
+                    "{reason}, so it was removed from Recent. Use Open Folder to choose it again."
+                ),
+            ))
+        }
+        // Anything else (for example macOS privacy settings denying access) may
+        // pass; the folder stays in the list.
+        Err(error) => Err(command_error(error)),
+    }
+}
+
+#[tauri::command]
+pub fn workspace_recent(
+    workspaces: State<'_, Workspaces>,
+) -> Result<Vec<RecentWorkspace>, CommandError> {
+    workspaces.with_stores(|s| Ok(s.recent.list()))
+}
+
+/// Removes a folder from the recent list. Its trust is not changed.
+#[tauri::command]
+pub fn workspace_forget_recent(
+    root: String,
+    workspaces: State<'_, Workspaces>,
+) -> Result<(), CommandError> {
+    workspaces.with_stores(|s| s.recent.remove(Path::new(&root)))
+}
+
+/// Trusts or stops trusting the open workspace. Trusting asks for confirmation in
+/// a native dialog, which the webview cannot answer on the user's behalf; removing
+/// trust never needs confirmation. Returns the workspace with its trust as it now
+/// is (unchanged if the user declined).
+#[tauri::command]
+pub async fn workspace_set_trust(
+    trusted: bool,
+    window: WebviewWindow,
+    workspaces: State<'_, Workspaces>,
+) -> Result<WorkspaceInfo, CommandError> {
+    let workspace = current(&workspaces)?;
+    let root = workspace.root().to_owned();
+    if trusted && !workspaces.is_trusted(&root) {
+        let confirmed = window
+            .dialog()
+            .message(format!(
+                "{}\n\nTrust a folder only if you trust the code in it. Future versions will \
+                 let AI agents and tools run commands only in trusted folders. Untrusted \
+                 folders never run anything automatically. You can remove trust at any time.",
+                root.display()
+            ))
+            .title(format!("Trust “{}”?", workspace.info(false).name))
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Trust".into(),
+                "Cancel".into(),
+            ))
+            .parent(&window)
+            .blocking_show();
+        if !confirmed {
+            return Ok(workspace.info(false));
+        }
+    }
+    workspaces.with_stores(|s| s.trust.set(&root, trusted))?;
+    Ok(workspace.info(workspaces.is_trusted(&root)))
+}
+
+/// Searches the workspace, streaming each file's matches and then a summary on
+/// `events`. Starting a search cancels the previous one.
+#[tauri::command]
+pub async fn workspace_search(
+    query: SearchQuery,
+    events: Channel<SearchEvent>,
+    workspaces: State<'_, Workspaces>,
+) -> Result<(), CommandError> {
+    if query.text.chars().count() > MAX_QUERY_CHARS {
+        return Err(CommandError::new(
+            ErrorCode::InvalidInput,
+            format!("search text is longer than {MAX_QUERY_CHARS} characters"),
+        ));
+    }
+    let workspace = current(&workspaces)?;
+    let cancel = workspaces.begin_search();
+    blocking(move || {
+        let summary =
+            workspace.search(&query, SearchLimits::default(), &cancel, |path, matches| {
+                // A closed page stops listening; the search is cancelled on reload.
+                let _ = events.send(SearchEvent::File { path, matches });
+            })?;
+        let _ = events.send(SearchEvent::Done(summary));
+        Ok(())
     })
     .await
-    .map_err(internal)?
-    .map_err(command_error)?;
+}
 
-    let info = workspace.info();
-    *workspaces.lock() = Some(Open {
-        workspace: Arc::new(workspace),
-        _watcher: watcher,
-    });
-    Ok(Some(info))
+#[tauri::command]
+pub fn workspace_search_cancel(workspaces: State<'_, Workspaces>) {
+    workspaces.cancel_search();
 }
 
 #[tauri::command]
@@ -170,36 +387,47 @@ pub async fn workspace_list_files(
     run(&workspaces, |w| w.list_files(MAX_LISTED_FILES)).await
 }
 
-/// Runs a filesystem operation on a blocking thread, so large reads and writes
-/// never hold up the IPC runtime.
+fn current(workspaces: &Workspaces) -> Result<Arc<Workspace>, CommandError> {
+    workspaces
+        .current()
+        .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "no workspace is open"))
+}
+
+/// Runs a filesystem operation on the open workspace, on a blocking thread, so
+/// large reads and writes never hold up the IPC runtime.
 async fn run<T: Send + 'static>(
     workspaces: &Workspaces,
     operation: impl FnOnce(&Workspace) -> Result<T, x8ai_workspace::Error> + Send + 'static,
 ) -> Result<T, CommandError> {
-    let workspace = workspaces
-        .current()
-        .ok_or_else(|| CommandError::new(ErrorCode::NotFound, "no workspace is open"))?;
-    tauri::async_runtime::spawn_blocking(move || operation(&workspace))
+    let workspace = current(workspaces)?;
+    blocking(move || operation(&workspace)).await
+}
+
+async fn blocking<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, x8ai_workspace::Error> + Send + 'static,
+) -> Result<T, CommandError> {
+    tauri::async_runtime::spawn_blocking(operation)
         .await
-        .map_err(internal)?
+        .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
         .map_err(command_error)
 }
 
 fn command_error(error: x8ai_workspace::Error) -> CommandError {
     use x8ai_workspace::Error;
     let code = match &error {
-        Error::InvalidPath { .. } | Error::NotText(_) | Error::TooLarge { .. } => {
-            ErrorCode::InvalidInput
-        }
+        Error::InvalidPath { .. }
+        | Error::NotText(_)
+        | Error::TooLarge { .. }
+        | Error::InvalidQuery(_) => ErrorCode::InvalidInput,
         Error::NotFound(_) => ErrorCode::NotFound,
         Error::AlreadyExists(_) => ErrorCode::AlreadyExists,
-        Error::PermissionDenied { .. } => ErrorCode::PermissionDenied,
+        Error::PermissionDenied { .. } | Error::Moved { .. } => ErrorCode::PermissionDenied,
         Error::Conflict { .. } => ErrorCode::Conflict,
         Error::Io { .. } => ErrorCode::Internal,
     };
     CommandError::new(code, error.to_string())
 }
 
-fn internal(error: impl std::fmt::Display) -> CommandError {
-    CommandError::new(ErrorCode::Internal, error.to_string())
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

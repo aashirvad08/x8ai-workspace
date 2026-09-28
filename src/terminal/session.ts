@@ -16,6 +16,12 @@ export interface TerminalScreen {
   onBinary(listener: (data: string) => void): Disposable;
 }
 
+/** What a session needs from the native side. */
+export type SessionNative = Pick<
+  TerminalApi,
+  "createTerminal" | "writeTerminal" | "resizeTerminal" | "ackTerminal" | "closeTerminal"
+>;
+
 /** Optional notifications, e.g. for a tab title. */
 export interface SessionCallbacks {
   /** A shell started (again, after a restart). */
@@ -50,14 +56,14 @@ const ENTER = "\r";
  * Holds no process logic (that lives in Rust) and no React.
  */
 export class TerminalSession {
-  readonly #native: TerminalApi;
+  readonly #native: SessionNative;
   readonly #screen: TerminalScreen;
   readonly #callbacks: SessionCallbacks;
   readonly #subscriptions: Disposable[];
   #attempt: Attempt | undefined;
   #disposed = false;
 
-  constructor(native: TerminalApi, screen: TerminalScreen, callbacks: SessionCallbacks = {}) {
+  constructor(native: SessionNative, screen: TerminalScreen, callbacks: SessionCallbacks = {}) {
     this.#native = native;
     this.#screen = screen;
     this.#callbacks = callbacks;

@@ -9,8 +9,8 @@ are part of every phase, not a final pass (`docs/security.md`).
 | 0 | Foundation | **Complete** |
 | 1 | Real terminal | **Complete** |
 | 2 | Workspace, files and editor | **Complete** |
-| 3 | Workspace sessions: persistence, trust and layout | Next |
-| 4 | Agent runtime | Planned |
+| 3 | Workspace sessions: persistence, trust and layout | **Complete** |
+| 4 | Agent runtime | Next |
 | 5 | Secrets and model providers | Planned |
 | 6 | Local models | Planned |
 | 7 | MCP layer | Planned |
@@ -102,21 +102,31 @@ folder, with a file explorer and a code editor, sits above the terminal.
 open for the current launch.
 
 **Major components.**
-- Recent workspaces, and reopening the last one on launch (ADR: JSON vs SQLite).
-- Restored editor tabs and layout.
-- Workspace trust: untrusted by default, stored, and revocable.
-- Terminal split panes.
-- Search across files.
-- Quit interception for Dock Quit and logout, which cannot be intercepted today
-  (`src-tauri/src/app.rs`).
-- Per-window scoping of native state, once multiple windows exist.
+- Recent workspaces, and reopening the last one on launch (ADR 0010: two small
+  JSON files, not SQLite).
+- Workspace trust: untrusted by default, granted only in a native dialog, stored
+  per exact folder, revocable, and queryable natively for Phase 4 (ADR 0010).
+- Terminal split panes, each with its own PTY, and confirmation before closing a
+  terminal or quitting while a program runs in it.
+- Plain-text search across the workspace, streamed from the native side.
+- Quit interception for Dock Quit, logout and shutdown (ADR 0011).
+- The Phase 1–2 flaky close test: root cause found and fixed in `crates/pty`.
 
 **Acceptance criteria.**
-- Reopening the app restores the last workspace, its open tabs and panel sizes.
+- Reopening the app restores the last workspace and panel sizes. Missing folders
+  are shown and can be removed.
 - An untrusted workspace runs nothing automatically. The trust decision is stored
-  and revocable.
-- Search across a 100k-file repository streams results without freezing the UI.
+  and revocable, and only the user can grant it.
+- Search streams results with lines and columns, opens a result at its location,
+  skips `.git`, dependency, build, ignored and binary files, and never leaves the
+  workspace (tests).
+- Terminals split right and down, resize, close and take focus; closing one that
+  runs a program asks first.
 - Quitting from the Dock with unsaved changes asks first.
+
+**Deferred.** Restoring open editor tabs across launches (the files are small and
+cheap to reopen by hand; it arrives with per-workspace state in a later phase).
+Per-window scoping of native state waits until the app has more than one window.
 
 ## Phase 4 — Agent runtime
 

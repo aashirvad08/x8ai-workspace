@@ -8,6 +8,12 @@ const sources = import.meta.glob<string>(["./**/*.{ts,tsx}", "!./**/*.test.{ts,t
   eager: true,
 });
 
+const capabilities = import.meta.glob<string>("../src-tauri/capabilities/*.json", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+
 const IMPORT = /(?:^|\s)(?:import|export)\s[^;]*?from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|^\s*import\s*["']([^"']+)["']/gm;
 
 function importsOf(source: string): string[] {
@@ -62,5 +68,18 @@ describe("module boundaries", () => {
         !path.startsWith("./app/") && path !== "./main.tsx" && imports.some((i) => /(^|\/)app\//.test(i)),
     );
     expect(offenders).toEqual([]);
+  });
+
+  it("grants the window exactly the commands the native client calls", () => {
+    // A command the client calls but the capability does not grant fails at
+    // runtime; a grant nothing uses is surface for no reason.
+    const client = sources["./native/client.ts"] ?? "";
+    const called = [...client.matchAll(/call<[^>]*>\(\s*"([a-z_]+)"/g)].map((m) => m[1]!).sort();
+    const file = capabilities["../src-tauri/capabilities/main-window.json"];
+    expect(file, "the main window's capability file").toBeDefined();
+    const { permissions } = JSON.parse(file!) as { permissions: string[] };
+    const granted = permissions.map((p) => p.replace(/^allow-/, "").replaceAll("-", "_")).sort();
+    expect(called.length).toBeGreaterThan(10);
+    expect(granted).toEqual(called);
   });
 });

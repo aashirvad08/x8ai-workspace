@@ -43,7 +43,7 @@ fn read(root: &Path, rel: &str) -> String {
 #[test]
 fn opens_a_directory_as_a_workspace() {
     let f = fixture();
-    let info = f.workspace.info();
+    let info = f.workspace.info(false);
     assert_eq!(info.name, "project");
     assert_eq!(Path::new(&info.root), f.root.as_path());
     assert_eq!(f.workspace.root(), f.root.as_path());
@@ -202,6 +202,12 @@ fn refuses_binary_files() {
     .unwrap();
     assert!(matches!(
         f.workspace.read_text("image.png"),
+        Err(Error::NotText(_))
+    ));
+    // Valid UTF-8, but a NUL byte makes it binary, as for search and git.
+    fs::write(f.root.join("data.bin"), b"header\0payload").unwrap();
+    assert!(matches!(
+        f.workspace.read_text("data.bin"),
         Err(Error::NotText(_))
     ));
 }
@@ -440,4 +446,68 @@ fn reports_unreadable_files_and_directories() {
         matches!(listed, Err(Error::PermissionDenied { .. })),
         "{listed:?}"
     );
+}
+
+#[test]
+fn operations_cannot_escape_through_a_symlinked_directory() {
+    // Security review, Phase 3: every mutating operation, not only reads, must
+    // refuse a path whose directory part is a symlink leading outside.
+    let f = fixture();
+    symlink(&f.outside, f.root.join("out")).unwrap();
+
+    assert!(f.workspace.create_file("out/planted.txt").is_err());
+    assert!(f.workspace.create_dir("out/planted").is_err());
+    assert!(
+        f.workspace
+            .write_text("out/secret.txt", "overwritten", None)
+            .is_err()
+    );
+    assert!(f.workspace.rename("README.md", "out/README.md").is_err());
+    assert!(f.workspace.rename("out/secret.txt", "stolen.txt").is_err());
+    assert!(
+        f.workspace
+            .delete("out/secret.txt", Removal::Permanently)
+            .is_err()
+    );
+    assert!(f.workspace.file_version("out/secret.txt").is_err());
+
+    assert_eq!(
+        fs::read_to_string(f.outside.join("secret.txt")).unwrap(),
+        "top secret"
+    );
+    assert!(!f.outside.join("planted.txt").exists());
+    assert!(!f.outside.join("planted").exists());
+    assert!(!f.outside.join("README.md").exists());
+    assert!(f.root.join("README.md").exists());
+}
+
+#[test]
+fn quick_open_skips_dependency_and_build_directories() {
+    let f = fixture();
+    for dir in ["node_modules/pkg", "target/debug", ".venv/lib"] {
+        fs::create_dir_all(f.root.join(dir)).unwrap();
+        fs::write(f.root.join(dir).join("file.txt"), "").unwrap();
+    }
+    let list = f.workspace.list_files(100).unwrap();
+    assert_eq!(list.paths, ["README.md", "src/main.py"]);
+}
+
+#[test]
+fn reopening_refuses_a_path_that_now_leads_elsewhere() {
+    let base = tempfile::tempdir().unwrap();
+    let project = base.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let recorded = Workspace::open(&project).unwrap().root().to_owned();
+    assert_eq!(Workspace::reopen(&recorded).unwrap().root(), recorded);
+
+    // The folder is replaced by a symlink to somewhere the user never chose.
+    let elsewhere = base.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::fs::remove_dir(&project).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &project).unwrap();
+
+    assert!(matches!(
+        Workspace::reopen(&recorded),
+        Err(Error::Moved { .. })
+    ));
 }

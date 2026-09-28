@@ -4,6 +4,9 @@ import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { FileContent } from "../contracts/generated/FileContent";
 import type { FileList } from "../contracts/generated/FileList";
 import type { FileVersion } from "../contracts/generated/FileVersion";
+import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
+import type { SearchEvent } from "../contracts/generated/SearchEvent";
+import type { SearchQuery } from "../contracts/generated/SearchQuery";
 import type { SessionId } from "../contracts/generated/SessionId";
 import type { TerminalEvent } from "../contracts/generated/TerminalEvent";
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
@@ -49,6 +52,8 @@ export interface AppApi {
   setUnsavedChanges(unsaved: boolean): Promise<void>;
   /** Quits without asking again. */
   quit(): Promise<void>;
+  /** Problems the native side found on its own, such as an unreadable settings file. Each is returned once. */
+  takeWarnings(): Promise<string[]>;
 }
 
 export interface TerminalApi {
@@ -58,6 +63,8 @@ export interface TerminalApi {
   resizeTerminal(id: SessionId, size: TerminalSize): Promise<void>;
   /** Flow control: `bytes` more of the session's output have been rendered. */
   ackTerminal(id: SessionId, bytes: number): Promise<void>;
+  /** Whether a program other than the shell is running in the session, so closing it would end that program. */
+  isTerminalBusy(id: SessionId): Promise<boolean>;
   /** Hangs up the session. */
   closeTerminal(id: SessionId): Promise<void>;
 }
@@ -72,6 +79,19 @@ export interface WorkspaceApi {
    * changes on disk are reported to `listener`. Resolves to `null` if cancelled.
    */
   openWorkspace(listener: (event: WorkspaceEvent) => void): Promise<WorkspaceInfo | null>;
+  /**
+   * Reopens a folder from the recent list, the only other way to open one. Fails
+   * with `notFound` (and drops it from the list) if the folder is gone.
+   */
+  openRecentWorkspace(root: string, listener: (event: WorkspaceEvent) => void): Promise<WorkspaceInfo>;
+  /** Recently opened folders, most recent first. */
+  recentWorkspaces(): Promise<RecentWorkspace[]>;
+  forgetRecentWorkspace(root: string): Promise<void>;
+  /**
+   * Trusts or stops trusting the open workspace. Trusting shows a native
+   * confirmation; resolves to the workspace as it now is, unchanged if declined.
+   */
+  setWorkspaceTrust(trusted: boolean): Promise<WorkspaceInfo>;
   listDir(path: string): Promise<DirEntry[]>;
   readFile(path: string): Promise<FileContent>;
   /** `null` if the file does not exist. */
@@ -88,6 +108,13 @@ export interface WorkspaceApi {
   deleteEntry(path: string): Promise<void>;
   /** Workspace files for quick open, gathered on demand. */
   listFiles(): Promise<FileList>;
+  /**
+   * Searches file contents for literal text. Each file's matches arrive on
+   * `listener` as found, then a summary; resolves once the search is over. A new
+   * search cancels the previous one.
+   */
+  search(query: SearchQuery, listener: (event: SearchEvent) => void): Promise<void>;
+  cancelSearch(): Promise<void>;
 }
 
 /**
@@ -114,6 +141,7 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
       call<void>("app_subscribe", { events: createChannel((message) => listener(message as AppEvent)) }),
     setUnsavedChanges: (unsaved) => call<void>("app_set_unsaved_changes", { unsaved }),
     quit: () => call<void>("app_quit"),
+    takeWarnings: () => call<string[]>("app_take_warnings"),
 
     createTerminal: (size, listener) => {
       // One channel carries both: output as raw bytes (an ArrayBuffer) and
@@ -132,12 +160,21 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
       call<void>("terminal_write", data, { headers: { [SESSION_ID_HEADER]: String(id) } }),
     resizeTerminal: (id, size) => call<void>("terminal_resize", { id, size }),
     ackTerminal: (id, bytes) => call<void>("terminal_ack", { id, bytes }),
+    isTerminalBusy: (id) => call<boolean>("terminal_is_busy", { id }),
     closeTerminal: (id) => call<void>("terminal_close", { id }),
 
     openWorkspace: (listener) =>
       call<WorkspaceInfo | null>("workspace_open", {
         events: createChannel((message) => listener(message as WorkspaceEvent)),
       }),
+    openRecentWorkspace: (root, listener) =>
+      call<WorkspaceInfo>("workspace_open_recent", {
+        root,
+        events: createChannel((message) => listener(message as WorkspaceEvent)),
+      }),
+    recentWorkspaces: () => call<RecentWorkspace[]>("workspace_recent"),
+    forgetRecentWorkspace: (root) => call<void>("workspace_forget_recent", { root }),
+    setWorkspaceTrust: (trusted) => call<WorkspaceInfo>("workspace_set_trust", { trusted }),
     listDir: (path) => call<DirEntry[]>("workspace_list_dir", { path }),
     readFile: (path) => call<FileContent>("workspace_read_file", { path }),
     fileVersion: (path) => call<FileVersion | null>("workspace_file_version", { path }),
@@ -147,5 +184,11 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     renameEntry: (from, to) => call<void>("workspace_rename", { from, to }),
     deleteEntry: (path) => call<void>("workspace_delete", { path }),
     listFiles: () => call<FileList>("workspace_list_files"),
+    search: (query, listener) =>
+      call<void>("workspace_search", {
+        query,
+        events: createChannel((message) => listener(message as SearchEvent)),
+      }),
+    cancelSearch: () => call<void>("workspace_search_cancel"),
   };
 }

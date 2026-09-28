@@ -44,7 +44,12 @@ export function DialogHost({ dialogs }: { dialogs: Dialogs }) {
   const primary = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
+    if (!dialog) return;
+    // Focus goes back where it was when the dialog closes, so the next shortcut
+    // acts on the same thing (⌘W in a terminal closes a pane, not an editor tab).
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     primary.current?.focus();
+    return () => previous?.focus();
   }, [dialog]);
 
   if (!dialog) return null;
@@ -81,12 +86,18 @@ export function DialogHost({ dialogs }: { dialogs: Dialogs }) {
   );
 }
 
-/** Quick open (⌘P) and the command palette (⇧⌘P). */
-export function PickerView({ picker, onOpenFile }: { picker: Picker; onOpenFile: (path: string) => void }) {
+interface PickerProps {
+  picker: Picker;
+  onOpenFile: (path: string) => void;
+  onOpenWorkspace: (root: string) => void;
+}
+
+/** Quick open (⌘P), the command palette (⇧⌘P) and recent folders (⌃R). */
+export function PickerView({ picker, onOpenFile, onOpenWorkspace }: PickerProps) {
   const state = useStore(picker);
   if (!state) return null;
   // A fresh query and selection each time the picker opens in a different mode.
-  return <PickerDialog key={state.kind} state={state} picker={picker} onOpenFile={onOpenFile} />;
+  return <PickerDialog key={state.kind} state={state} picker={picker} onOpenFile={onOpenFile} onOpenWorkspace={onOpenWorkspace} />;
 }
 
 interface Item {
@@ -96,7 +107,7 @@ interface Item {
   choose: () => void;
 }
 
-function PickerDialog({ state, picker, onOpenFile }: { state: PickerState; picker: Picker; onOpenFile: (path: string) => void }) {
+function PickerDialog({ state, picker, onOpenFile, onOpenWorkspace }: PickerProps & { state: PickerState }) {
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
 
@@ -109,13 +120,21 @@ function PickerDialog({ state, picker, onOpenFile }: { state: PickerState; picke
         choose: () => onOpenFile(path),
       }));
     }
+    if (state.kind === "workspaces") {
+      return fuzzyFilter(query, state.workspaces, (w) => w.root, 100).map((w) => ({
+        key: w.root,
+        primary: w.name,
+        secondary: w.available ? w.root : `${w.root} (not found)`,
+        choose: () => onOpenWorkspace(w.root),
+      }));
+    }
     return fuzzyFilter(query, state.commands, (command) => command.title, 100).map((command) => ({
       key: command.id,
       primary: command.title,
       secondary: command.shortcut ? shortcutLabel(command.shortcut) : "",
       choose: command.run,
     }));
-  }, [state, query, onOpenFile]);
+  }, [state, query, onOpenFile, onOpenWorkspace]);
 
   const choose = (item: Item | undefined) => {
     if (!item) return;
@@ -123,7 +142,7 @@ function PickerDialog({ state, picker, onOpenFile }: { state: PickerState; picke
     item.choose();
   };
 
-  const placeholder = state.kind === "files" ? "Go to file…" : "Run a command…";
+  const placeholder = { files: "Go to file…", commands: "Run a command…", workspaces: "Open recent folder…" }[state.kind];
   const empty =
     state.kind === "files" && state.files === null ? "Listing files…" : items.length === 0 ? "No matches" : null;
 

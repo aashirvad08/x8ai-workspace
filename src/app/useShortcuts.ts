@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { matches } from "../workbench/commands";
+import { applies, matches } from "../workbench/commands";
 import type { Workbench } from "../workbench/workbench";
 
 /**
@@ -13,7 +13,8 @@ export function useShortcuts(workbench: Workbench): void {
     const commands = workbench.commands();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.isComposing || workbench.dialogs.get() !== null) return;
-      const command = commands.find((c) => c.shortcut && matches(c.shortcut, event));
+      const inTerminal = event.target instanceof Element && event.target.closest(".terminal-panel") !== null;
+      const command = commands.find((c) => c.shortcut && matches(c.shortcut, event) && applies(c, inTerminal));
       if (!command) return;
       event.preventDefault();
       event.stopPropagation();

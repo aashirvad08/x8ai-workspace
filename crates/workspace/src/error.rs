@@ -18,12 +18,18 @@ pub enum Error {
         path: String,
         reason: ConflictReason,
     },
-    #[error("{0:?} is not a UTF-8 text file")]
+    /// Binary (contains a NUL byte) or not UTF-8.
+    #[error("{0:?} is a binary file, or text that is not UTF-8, so it is not opened")]
     NotText(String),
     #[error("{path:?} is {size} bytes; files over {max} bytes are not opened")]
     TooLarge { path: String, size: u64, max: u64 },
     #[error("{path:?}: {detail}")]
     Io { path: String, detail: String },
+    #[error("invalid search: {0}")]
+    InvalidQuery(String),
+    /// A remembered workspace path now resolves to a different folder.
+    #[error("{path:?} now leads to {now:?}, a different folder")]
+    Moved { path: String, now: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

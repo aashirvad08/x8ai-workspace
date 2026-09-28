@@ -1,12 +1,34 @@
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
 import type { NativeStatus } from "./useNativeStatus";
 
-export function StatusBar({ status, workspace }: { status: NativeStatus; workspace: WorkspaceInfo | null }) {
+interface Props {
+  status: NativeStatus;
+  workspace: WorkspaceInfo | null;
+  onTrust: (trusted: boolean) => void;
+}
+
+export function StatusBar({ status, workspace, onTrust }: Props) {
   return (
     <footer className={status.state === "failed" ? "statusbar statusbar-error" : "statusbar"}>
       <Connection status={status} />
       <span className="statusbar-spacer" />
-      {workspace && <span title={workspace.root}>{workspace.root}</span>}
+      {workspace && (
+        <>
+          <button
+            type="button"
+            className={workspace.trusted ? "statusbar-trust statusbar-trusted" : "statusbar-trust"}
+            title={
+              workspace.trusted
+                ? "You trusted this folder. Click to remove trust."
+                : "This folder is not trusted. Nothing runs in it automatically. Click to trust it."
+            }
+            onClick={() => onTrust(!workspace.trusted)}
+          >
+            {workspace.trusted ? "Trusted" : "Untrusted"}
+          </button>
+          <span title={workspace.root}>{workspace.root}</span>
+        </>
+      )}
     </footer>
   );
 }

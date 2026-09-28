@@ -116,8 +116,53 @@ fn type_line(session: &Session, line: &str) {
     session.write(format!("{line}\n").into_bytes()).unwrap();
 }
 
+/// Waits until a job started from the shell is in the terminal's foreground.
+/// Control keys typed before then would reach the shell instead of the job.
+fn wait_for_foreground_job(session: &Session) {
+    let deadline = Instant::now() + TIMEOUT;
+    while !session.has_foreground_job() {
+        assert!(Instant::now() < deadline, "no foreground job started");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn is_alive(pid: u32) -> bool {
     kill(Pid::from_raw(pid as i32), None).is_ok()
+}
+
+/// Waits for a closed session's process to exit, which the hangup alone must
+/// achieve for a shell that does not ignore it: the SIGKILL fallback only comes
+/// after `KILL_GRACE`. On failure, shows what the process is doing.
+fn assert_hangup_ends(session: &Session) {
+    let pid = session.pid().unwrap();
+    assert!(
+        session.wait_for_exit(KILL_GRACE),
+        "a closed shell did not exit on hangup within {KILL_GRACE:?}:\n{}",
+        processes_of(pid)
+    );
+    assert!(!is_alive(pid));
+}
+
+/// `ps` rows for a process and its children and group, to explain a failure.
+/// `STAT` `E` means exiting, `T` stopped, `S` sleeping, `Z` a zombie.
+fn processes_of(pid: u32) -> String {
+    let ps = std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,pgid=,stat=,command="])
+        .output();
+    let Ok(ps) = ps else {
+        return "(ps failed)".into();
+    };
+    let pid = pid.to_string();
+    let rows: Vec<String> = String::from_utf8_lossy(&ps.stdout)
+        .lines()
+        .filter(|row| row.split_whitespace().take(3).any(|field| field == pid))
+        .map(str::to_owned)
+        .collect();
+    if rows.is_empty() {
+        "(no such process)".into()
+    } else {
+        format!("  PID  PPID  PGID STAT COMMAND\n{}", rows.join("\n"))
+    }
 }
 
 #[test]
@@ -206,7 +251,7 @@ fn starts_in_the_home_directory() {
 fn ctrl_c_interrupts_the_foreground_process() {
     let (session, recorder) = start(&sh());
     type_line(&session, "sleep 30");
-    std::thread::sleep(Duration::from_millis(300));
+    wait_for_foreground_job(&session);
     let interrupted_at = Instant::now();
     session.write(vec![0x03]).unwrap();
     type_line(&session, "echo after-$((1 + 1))");
@@ -231,7 +276,7 @@ fn ctrl_d_ends_the_shell() {
 fn ctrl_z_suspends_the_foreground_job() {
     let (session, recorder) = start(&sh());
     type_line(&session, "sleep 30");
-    std::thread::sleep(Duration::from_millis(300));
+    wait_for_foreground_job(&session);
     session.write(vec![0x1a]).unwrap();
     type_line(&session, "jobs");
     recorder.wait_until("a stopped job", |r| {
@@ -329,8 +374,40 @@ fn close_hangs_up_the_process() {
     assert!(is_alive(pid));
 
     session.close();
-    assert!(session.wait_for_exit(Duration::from_secs(3)));
-    assert!(!is_alive(pid));
+    assert_hangup_ends(&session);
+}
+
+/// Regression: after a hangup the reader stopped reading while the PTY stayed
+/// open, and macOS makes the last close of a terminal wait for its unread output
+/// to drain. A shell that wrote anything after the hangup (typically its first
+/// prompt, when closed right after starting) then hung while exiting, beyond the
+/// reach of SIGKILL, for as long as its session was held. About 1 in 150 such
+/// closes hung; this makes 480 of them, from several threads at once.
+#[test]
+fn a_shell_closed_while_starting_finishes_exiting() {
+    let sessions = Arc::new(Sessions::default());
+    let workers: Vec<_> = (0..8u64)
+        .map(|worker| {
+            let sessions = sessions.clone();
+            std::thread::spawn(move || {
+                for i in 0..60u64 {
+                    let session = sessions
+                        .spawn(&sh(), SIZE, Arc::new(Recorder::default()))
+                        .unwrap();
+                    // Spread the hangups over the shell's startup.
+                    std::thread::sleep(Duration::from_micros(
+                        (i * 7919 + worker * 104_729) % 40_000,
+                    ));
+                    sessions.close(session.id()).unwrap();
+                    // Still held here, as a caller waiting for the exit holds it.
+                    assert_hangup_ends(&session);
+                }
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap();
+    }
 }
 
 #[test]
@@ -365,7 +442,7 @@ fn the_registry_tracks_and_closes_sessions() {
     sessions.close(a.id()).unwrap();
     assert!(matches!(sessions.get(a.id()), Err(Error::NotFound(_))));
     assert!(matches!(sessions.close(a.id()), Err(Error::NotFound(_))));
-    assert!(a.wait_for_exit(Duration::from_secs(3)));
+    assert_hangup_ends(&a);
 
     sessions.shutdown(Duration::from_secs(1));
     assert!(sessions.is_empty());
@@ -414,4 +491,22 @@ fn the_login_shell_starts_in_the_requested_directory() {
         "{}",
         recorder.output()
     );
+}
+
+#[test]
+fn knows_when_a_job_is_in_the_foreground() {
+    let (session, recorder) = start(&sh());
+    type_line(&session, "echo ready-$((1 + 1))");
+    recorder.wait_for_output("ready-2");
+    assert!(
+        !session.has_foreground_job(),
+        "an idle shell has no foreground job"
+    );
+
+    type_line(&session, "sleep 30");
+    wait_for_foreground_job(&session);
+    session.write(vec![0x03]).unwrap();
+    type_line(&session, "echo back-$((2 + 2))");
+    recorder.wait_for_output("back-4");
+    assert!(!session.has_foreground_job());
 }

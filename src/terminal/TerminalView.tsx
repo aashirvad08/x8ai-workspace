@@ -12,9 +12,11 @@ import { terminalTheme } from "./theme";
 
 interface Props {
   native: TerminalApi;
-  /** Hidden views keep running; only the active one is shown. */
-  active: boolean;
-  /** Focuses the terminal when this changes while it is active. */
+  /** Hidden views (in other tabs) keep running. */
+  visible: boolean;
+  /** The pane that should have keyboard focus in its tab. */
+  focused: boolean;
+  /** Focuses the terminal when this changes while it is visible and focused. */
   focusRequest: number;
   onStart?: (info: TerminalInfo) => void;
   onEnd?: () => void;
@@ -24,7 +26,7 @@ interface Props {
  * Renders one terminal session with xterm.js. This component only wires the
  * emulator to the DOM; session behaviour lives in `TerminalSession`.
  */
-export function TerminalView({ native, active, focusRequest, onStart, onEnd }: Props) {
+export function TerminalView({ native, visible, focused, focusRequest, onStart, onEnd }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const callbacks = useRef({ onStart, onEnd });
@@ -85,10 +87,10 @@ export function TerminalView({ native, active, focusRequest, onStart, onEnd }: P
   }, [native]);
 
   useEffect(() => {
-    if (active) terminalRef.current?.focus();
-  }, [active, focusRequest]);
+    if (visible && focused) terminalRef.current?.focus();
+  }, [visible, focused, focusRequest]);
 
-  return <div className="terminal" ref={container} hidden={!active} />;
+  return <div className="terminal" ref={container} />;
 }
 
 /** The GPU renderer copes with heavy output far better than the DOM renderer. */

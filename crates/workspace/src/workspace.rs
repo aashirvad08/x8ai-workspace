@@ -24,7 +24,7 @@ pub const MAX_TEXT_FILE_BYTES: u64 = 32 * 1024 * 1024;
 pub struct Workspace {
     root: PathBuf,
     name: String,
-    dir: Dir,
+    pub(crate) dir: Dir,
 }
 
 /// How [`Workspace::delete`] removes an entry.
@@ -55,14 +55,33 @@ impl Workspace {
 
     /// Absolute path of the root. Used as the working directory for new terminal
     /// sessions; never for file operations.
+    /// Reopens a workspace remembered by its root, as [`Workspace::open`]
+    /// recorded it (canonical). Fails with [`Error::Moved`] if the path now
+    /// resolves elsewhere, for example because the folder was replaced by a
+    /// symlink, so a remembered path never leads to a folder the user did not
+    /// choose.
+    pub fn reopen(root: &Path) -> Result<Self, Error> {
+        let workspace = Self::open(root)?;
+        if workspace.root != root {
+            return Err(Error::Moved {
+                path: root.display().to_string(),
+                now: workspace.root.display().to_string(),
+            });
+        }
+        Ok(workspace)
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    pub fn info(&self) -> WorkspaceInfo {
+    /// Describes the workspace. Trust is recorded in a [`crate::TrustStore`], not
+    /// here, so the caller supplies it.
+    pub fn info(&self, trusted: bool) -> WorkspaceInfo {
         WorkspaceInfo {
             root: self.root.display().to_string(),
             name: self.name.clone(),
+            trusted,
         }
     }
 
@@ -111,7 +130,8 @@ impl Workspace {
         Ok(listed)
     }
 
-    /// Reads a UTF-8 text file with its version, for editing.
+    /// Reads a UTF-8 text file with its version, for editing. Binary files are
+    /// refused.
     pub fn read_text(&self, file_path: &str) -> Result<FileContent, Error> {
         self.read_text_limited(file_path, MAX_TEXT_FILE_BYTES)
     }
@@ -141,6 +161,11 @@ impl Workspace {
         }
         let version = version_of(&metadata);
         let bytes = self.dir.read(rel).map_err(|e| Error::io(file_path, e))?;
+        // A NUL byte marks a binary file, as for search, git and ripgrep, even when
+        // the bytes happen to be valid UTF-8. Editing and saving one would corrupt it.
+        if bytes.contains(&0) {
+            return Err(Error::NotText(file_path.to_owned()));
+        }
         let text = String::from_utf8(bytes).map_err(|_| Error::NotText(file_path.to_owned()))?;
         Ok(FileContent { text, version })
     }

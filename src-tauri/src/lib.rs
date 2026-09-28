@@ -7,6 +7,8 @@
 
 mod app;
 mod commands;
+#[cfg(target_os = "macos")]
+mod macos;
 mod menu;
 mod terminal;
 mod workspace;
@@ -26,6 +28,21 @@ pub fn run() {
         .manage(Terminals::default())
         .manage(Workspaces::default())
         .manage(AppState::default())
+        .setup(|app| {
+            let workspaces = app.state::<Workspaces>();
+            match app.path().app_data_dir() {
+                Ok(data_dir) => workspaces.load_stores(&data_dir),
+                // The app still works; it just cannot remember folders or trust.
+                Err(e) => workspaces.warn(format!("Recent folders and trust are unavailable: {e}")),
+            }
+            #[cfg(target_os = "macos")]
+            if let Err(reason) = macos::intercept_termination(app.handle()) {
+                // Quit from the Dock or logout then skips the unsaved-changes
+                // question; everything else still works.
+                eprintln!("x8ai: cannot intercept system quit: {reason}");
+            }
+            Ok(())
+        })
         .menu(menu::build)
         .on_menu_event(|app, event| {
             if event.id() == menu::QUIT {
@@ -33,12 +50,11 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                let state = window.state::<AppState>();
-                if state.must_ask() {
-                    api.prevent_close();
-                    state.ask();
-                }
+            if let WindowEvent::CloseRequested { api, .. } = event
+                && app::must_ask(window.app_handle())
+            {
+                api.prevent_close();
+                window.state::<AppState>().ask();
             }
         })
         .on_page_load(|webview, payload| {
@@ -56,12 +72,20 @@ pub fn run() {
             app::app_subscribe,
             app::app_set_unsaved_changes,
             app::app_quit,
+            app::app_take_warnings,
             terminal::terminal_create,
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_ack,
+            terminal::terminal_is_busy,
             terminal::terminal_close,
             workspace::workspace_open,
+            workspace::workspace_open_recent,
+            workspace::workspace_recent,
+            workspace::workspace_forget_recent,
+            workspace::workspace_set_trust,
+            workspace::workspace_search,
+            workspace::workspace_search_cancel,
             workspace::workspace_list_dir,
             workspace::workspace_read_file,
             workspace::workspace_file_version,

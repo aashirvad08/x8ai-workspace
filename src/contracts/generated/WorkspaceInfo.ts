@@ -11,4 +11,9 @@ root: string,
 /**
  * The root directory's name.
  */
-name: string, };
+name: string, 
+/**
+ * Whether the user has explicitly trusted this folder. New folders are
+ * untrusted. See `docs/decisions/0010-workspace-trust.md`.
+ */
+trusted: boolean, };

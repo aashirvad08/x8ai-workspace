@@ -31,6 +31,8 @@ export interface EditorSnapshot {
    * itself (opening, switching, reloading), telling the view to load it.
    */
   readonly revision: number;
+  /** Increases when the view should scroll the active tab's selection into view. */
+  readonly reveal: number;
 }
 
 interface Document {
@@ -54,7 +56,7 @@ export class EditorStore extends Store<EditorSnapshot> {
   readonly #opening = new Map<string, Promise<void>>();
 
   constructor(native: EditorNative) {
-    super({ tabs: [], active: null, revision: 0 });
+    super({ tabs: [], active: null, revision: 0, reveal: 0 });
     this.#native = native;
   }
 
@@ -95,12 +97,28 @@ export class EditorStore extends Store<EditorSnapshot> {
     const state = createEditorState(content.text);
     this.#documents.set(path, { state, saved: state.doc, version: content.version });
     const tab: TabInfo = { path, name: basename(path), dirty: false, disk: "synced", saving: false };
-    this.update((s) => ({ tabs: [...s.tabs, tab], active: path, revision: s.revision + 1 }));
+    this.update((s) => ({ ...s, tabs: [...s.tabs, tab], active: path, revision: s.revision + 1 }));
   }
 
   activate(path: string): void {
     if (!this.#documents.has(path) || this.get().active === path) return;
     this.update((s) => ({ ...s, active: path, revision: s.revision + 1 }));
+  }
+
+  /**
+   * Switches to an open file and selects `length` characters at a 1-based line
+   * and a UTF-16 column (as search results give them), scrolled into view. A
+   * position past the end of the file (it changed since) is clamped.
+   */
+  select(path: string, line: number, column: number, length: number): void {
+    const document = this.#documents.get(path);
+    if (!document) return;
+    const { doc } = document.state;
+    const target = doc.line(Math.min(Math.max(1, line), doc.lines));
+    const from = Math.min(target.from + Math.max(0, column), target.to);
+    const to = Math.min(from + Math.max(0, length), target.to);
+    document.state = document.state.update({ selection: { anchor: from, head: to } }).state;
+    this.update((s) => ({ ...s, active: path, revision: s.revision + 1, reveal: s.reveal + 1 }));
   }
 
   /** The view reports every change to the active document here. */
@@ -162,13 +180,13 @@ export class EditorStore extends Store<EditorSnapshot> {
       const tabs = s.tabs.filter((tab) => tab.path !== path);
       if (s.active !== path) return { ...s, tabs };
       const next = tabs[Math.min(index, tabs.length - 1)]?.path ?? null;
-      return { tabs, active: next, revision: s.revision + 1 };
+      return { ...s, tabs, active: next, revision: s.revision + 1 };
     });
   }
 
   closeAll(): void {
     this.#documents.clear();
-    this.update((s) => ({ tabs: [], active: null, revision: s.revision + 1 }));
+    this.update((s) => ({ ...s, tabs: [], active: null, revision: s.revision + 1 }));
   }
 
   /** A file or directory was renamed: tabs under it follow. */
@@ -181,6 +199,7 @@ export class EditorStore extends Store<EditorSnapshot> {
       this.#documents.set(rebase(path, from, to), document);
     }
     this.update((s) => ({
+      ...s,
       tabs: s.tabs.map((tab) => {
         if (!isWithin(tab.path, from)) return tab;
         const path = rebase(tab.path, from, to);

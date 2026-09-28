@@ -5,8 +5,8 @@ import { useStore } from "../lib/useStore";
 import type { NativeClient } from "../native";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import type { Workbench } from "../workbench/workbench";
-import { FileExplorer } from "../workspace/FileExplorer";
 import { DialogHost, NotificationList, PickerView } from "./Overlays";
+import { Sidebar } from "./Sidebar";
 import { Splitter } from "./Splitter";
 import { StatusBar } from "./StatusBar";
 import { useNativeStatus } from "./useNativeStatus";
@@ -29,6 +29,7 @@ export function App({ workbench, native }: { workbench: Workbench; native: Nativ
 
   const terminalHeight = Math.min(layout.terminalHeight, windowHeight - MIN_EDITOR_HEIGHT);
   const openFile = useCallback((path: string) => workbench.openFile(path), [workbench]);
+  const openRecent = useCallback((root: string) => workbench.openRecent(root), [workbench]);
 
   return (
     <div className="shell">
@@ -46,10 +47,10 @@ export function App({ workbench, native }: { workbench: Workbench; native: Nativ
         >
           {layout.explorerVisible && (
             <>
-              <FileExplorer explorer={workbench.explorer} workspace={workbench.workspace} actions={workbench} />
+              <Sidebar workbench={workbench} />
               <Splitter
                 axis="x"
-                label="Resize file explorer"
+                label="Resize sidebar"
                 size={layout.explorerWidth}
                 onResize={(width) => workbench.layout.resizeExplorer(width)}
               />
@@ -69,13 +70,14 @@ export function App({ workbench, native }: { workbench: Workbench; native: Nativ
         <TerminalPanel
           native={native}
           terminals={workbench.terminals}
+          actions={workbench}
           hidden={!layout.terminalVisible}
           onHide={() => workbench.layout.setTerminalVisible(false)}
         />
       </div>
-      <StatusBar status={status} workspace={workspace} />
+      <StatusBar status={status} workspace={workspace} onTrust={(trusted) => void workbench.setTrust(trusted)} />
       <NotificationList notifications={workbench.notifications} />
-      <PickerView picker={workbench.picker} onOpenFile={openFile} />
+      <PickerView picker={workbench.picker} onOpenFile={openFile} onOpenWorkspace={openRecent} />
       <DialogHost dialogs={workbench.dialogs} />
     </div>
   );

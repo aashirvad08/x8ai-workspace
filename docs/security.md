@@ -12,24 +12,28 @@ protection. Do not rely on it.
 
 ---
 
-## 1. What is enforced today (Phases 0–2)
+## 1. What is enforced today (Phases 0–3)
 
 These protections exist and are verified:
 
 | Control | Where | Verified by |
 | --- | --- | --- |
 | Every native command needs an explicit grant to a window. Tauri rejects ungranted calls before the command's code runs. | `src-tauri/build.rs`, `src-tauri/capabilities/` | Manual: revoking the grant yields `Command get_app_info not allowed by ACL` in the UI |
-| The webview's commands are `get_app_info`, `app_*` (quit guard), `terminal_*` and `workspace_*`, each granted explicitly. No shell, fs, HTTP or opener plugins are installed. `tauri-plugin-dialog` is used only from Rust, and none of its webview commands are granted. | `src-tauri/Cargo.toml`, `capabilities/main-window.json` | Code review, `tauri-build` ACL output |
+| The webview's commands are `get_app_info`, `app_*` (quit guard, startup warnings), `terminal_*` and `workspace_*` (files, recent folders, trust, search), each granted explicitly. No shell, fs, HTTP or opener plugins are installed. `tauri-plugin-dialog` is used only from Rust, and none of its webview commands are granted. | `src-tauri/Cargo.toml`, `capabilities/main-window.json` | Code review, `tauri-build` ACL output; `src/architecture.test.ts` checks that the grants are exactly the commands the client calls |
 | **The webview cannot choose what a terminal runs, or where.** `terminal_create` always starts the user's login shell, in the open workspace's root or the home directory, and accepts only a size. | `src-tauri/src/terminal.rs` | Code review; manual `pwd` |
-| **The webview cannot name a folder to open.** A workspace is whatever the user picks in the native folder picker. | `src-tauri/src/workspace.rs` | Code review |
+| **The webview cannot name a new folder to open.** A workspace is whatever the user picks in the native folder picker, or a folder from the recent list, which only ever holds folders picked that way. Reopening also requires the path to still lead to the same folder, so replacing it with a symlink does not redirect it. | `src-tauri/src/workspace.rs`, `crates/workspace` | Code review; test `reopening_refuses_a_path_that_now_leads_elsewhere` |
+| **Only the user can trust a folder.** Trust is granted only in a native confirmation dialog the webview cannot answer, applies to exactly one folder (not its parent or subfolders), and is stored outside the folder, so a repository cannot declare itself trusted (ADR 0010). | `src-tauri/src/workspace.rs`, `crates/workspace/src/store.rs` | Store tests (`trust_is_explicit_exact_and_persistent`); code review |
+| **What the app remembers is minimal.** Recent and trusted folders are stored as absolute paths and timestamps only, in files readable only by the user (0600, directory 0700), replaced atomically. A damaged file is set aside, never silently deleted. No file names or contents are stored. | `crates/workspace/src/store.rs` | Store tests |
+| **Search stays inside the workspace.** It reads files only through the workspace's `cap-std` handle, never follows symlinks, skips `.git`, dependency and build directories, ignored files and binary files, caps results (5,000 matches, 200 per file, 16 MB per file) and is cancelled by the next search or by closing the workspace. | `crates/workspace/src/search.rs`, `files.rs` | Search tests (`never_leaves_the_workspace_through_symlinks`, `skips_generated_ignored_and_binary_files`, …) |
 | **File operations cannot leave the workspace.** Workspace paths are validated (no absolute paths, `..`, `.`, empty segments or NUL), then resolved through a `cap-std` handle on the root, which refuses symlink escapes. | `crates/workspace` | Integration tests (`rejects_paths_that_leave_the_workspace`, `symlinks_cannot_reach_outside`) |
 | **Saves never silently overwrite an external change,** and never leave a half-written file: version-checked, atomic replace, permissions kept | `crates/workspace/src/workspace.rs` | Tests; manual conflict check |
 | **Delete is recoverable.** Entries move to the Trash (NSFileManager, no `osascript`), after a confirmation dialog whose default is Cancel. | `crates/workspace`, `src/workbench/workbench.ts` | Manual |
-| Unsaved changes are not lost on ⌘W, on opening another folder, or on ⌘Q and window close. Dock Quit and logout are not intercepted yet. | `src/workbench/workbench.ts`, `src-tauri/src/app.rs` | Unit tests; manual ⌘W |
+| Unsaved changes are not lost on ⌘W, on opening another folder, or on quitting: ⌘Q, closing the window, and on macOS Quit from the Dock, logout and shutdown (ADR 0011). Force Quit, `kill -9`, crashes and power loss cannot be intercepted by any app. | `src/workbench/workbench.ts`, `src-tauri/src/app.rs`, `src-tauri/src/macos.rs` | Unit tests; manual |
+| **A running program is not ended by accident.** Closing a terminal pane or tab, or quitting, asks first when a program other than the shell is in the terminal's foreground (read from the PTY with `tcgetpgrp`). | `crates/pty`, `src/workbench/workbench.ts` | Tests (`knows_when_a_job_is_in_the_foreground`, workbench tests) |
 | Terminal command arguments are validated in Rust: sizes (1–4096 × 1–2048), session ids (`notFound` otherwise), and raw input only to an existing session | `crates/core/src/terminal.rs`, `crates/pty` | Unit and integration tests |
 | No terminal content is persisted. Scrollback (10,000 lines) exists only in webview memory. Native output buffering is bounded by flow control (512 KiB per session). | `src/terminal/TerminalView.tsx`, `crates/pty/src/session.rs` | Tests (`output_pauses_until_acknowledged`) |
 | OSC 52 clipboard writes and clickable links are off: the xterm.js add-ons that implement them are not installed | `package.json` | Review |
-| Terminal processes do not outlive their session or the app. Close, reload, quit and crash all hang up the terminal, and a shell ignoring SIGHUP gets SIGKILL after 2 s. | `crates/pty`, `src-tauri/src/lib.rs` | Tests; manual `ps` checks after Cmd+Q, SIGTERM and Ctrl+D |
+| Terminal processes do not outlive their session or the app. Close, reload, quit and crash all hang up the terminal, and a shell ignoring SIGHUP gets SIGKILL after 2 s. A closed session keeps reading its terminal until the end of output, so a shell that writes while exiting cannot hang (macOS waits for unread terminal output on the last close). | `crates/pty`, `src-tauri/src/lib.rs` | Tests (`a_shell_closed_while_starting_finishes_exiting`, …); manual `ps` checks after Cmd+Q, SIGTERM and Ctrl+D |
 | Content Security Policy: `script-src 'self'` with Tauri's nonces and hashes (no inline or remote scripts, no `eval`), no plugins or frames, IPC-only `connect-src`. Inline styles are allowed for xterm.js (ADR 0007). | `src-tauri/tauri.conf.json` | Production build runs under it |
 | Only `src/native/` can talk to Tauri, only `src/terminal/` uses xterm.js, only `src/editor/` uses CodeMirror, and nothing but `main.tsx` depends on the UI layer | `src/architecture.test.ts` | CI |
 | Integration definitions reference secrets by name only. There is no field that can hold a secret value. | `crates/core/src/{launch,model}.rs` | Type design, tests |
@@ -174,9 +178,11 @@ weaken it.
   Shells, agents and MCP servers are not confined by it (§2). A compromised webview
   can read and change anything inside the chosen workspace, which is what
   choosing it grants.
-- Nothing is uploaded or indexed remotely by the app itself. Quick open walks the
-  tree on demand and stores nothing. Warning about sensitive files (`.env`, keys)
-  is planned, not built.
+- Nothing is uploaded or indexed remotely by the app itself. Quick open and search
+  walk the tree on demand and store nothing; there is no index. Search results
+  can include files such as `.env` that are inside the workspace and not ignored:
+  choosing the workspace grants that. Warning about sensitive files (`.env`,
+  keys) is planned, not built.
 
 ### 3.6 External processes
 
@@ -197,6 +203,14 @@ weaken it.
 - **Resource exhaustion.** Output is batched with bounded buffers and backpressure:
   a flood blocks the producer rather than growing memory. **Enforced (Phase 1).**
   Showing the number of sessions arrives with tabs.
+- **Quitting.** Quit, closing the window and (on macOS) Quit from the Dock, logout
+  and shutdown ask first while a terminal runs a program or a file is unsaved,
+  then hang up every session and SIGKILL what remains after 500 ms. Force Quit,
+  `kill -9` and crashes skip the question and the cleanup code; the kernel still
+  hangs up every terminal when the app's side closes, so shells and their
+  foreground jobs still end. A job that ignores SIGHUP and was started in the
+  background of a terminal can survive a crash of the app, as it would survive
+  closing any terminal emulator. **Enforced (Phases 1 and 3).**
 
 ### 3.7 Malicious integrations and the catalog
 
@@ -213,10 +227,23 @@ weaken it.
 ### 3.8 Workspace trust
 
 Opening a folder must not execute anything from it. Before a workspace is trusted,
-the app does not auto-start project-defined MCP servers, agent configurations,
-tasks or hooks. Trust is granted per folder and can be revoked. **Phase 3**, with
-enforcement points added in Phases 4 and 7. Today (Phase 2), opening a folder only
-lists and reads files; nothing in it is executed.
+the app must not auto-start project-defined MCP servers, agent configurations,
+tasks or hooks.
+
+- **Built (Phase 3, ADR 0010):** every folder starts untrusted. The user can trust
+  it, only through a native confirmation, and remove trust at any time. The
+  decision is stored per exact folder, outside the folder, and shown in the status
+  bar. The native side answers "is this workspace trusted?" in one place
+  (`Workspaces::is_trusted`).
+- **Not yet enforced:** nothing checks trust yet, because nothing runs
+  automatically in any folder. Opening a folder lists and reads files and, when
+  the user opens a terminal, starts their own login shell there. The first
+  enforcement points arrive with the agent runtime (Phase 4: no agent or tool
+  starts in an untrusted workspace) and MCP (Phase 7: repository-provided MCP
+  configuration never starts in an untrusted workspace).
+- **Honest limit:** trust is a statement by the user, not an analysis of the
+  folder. It does not make a folder's contents safe, and it does not constrain what
+  the user's own shell does there.
 
 ### 3.9 The webview and IPC
 

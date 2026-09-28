@@ -17,6 +17,72 @@ pub struct WorkspaceInfo {
     pub root: String,
     /// The root directory's name.
     pub name: String,
+    /// Whether the user has explicitly trusted this folder. New folders are
+    /// untrusted. See `docs/decisions/0010-workspace-trust.md`.
+    pub trusted: bool,
+}
+
+/// A previously opened workspace. Only its location is remembered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecentWorkspace {
+    pub root: String,
+    pub name: String,
+    /// The folder still exists. Missing folders (an unmounted drive, a deleted
+    /// checkout) stay listed until removed or reopened unsuccessfully.
+    pub available: bool,
+}
+
+/// A plain-text search across the workspace. The text is matched literally.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SearchQuery {
+    pub text: String,
+    pub case_sensitive: bool,
+}
+
+/// One matching line. Columns are UTF-16 offsets, the unit the editor uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SearchMatch {
+    /// 1-based line number.
+    pub line: u32,
+    /// Where the first match starts in the line, and its length.
+    pub column: u32,
+    pub length: u32,
+    /// The line, shortened around the match if it is long.
+    pub preview: String,
+    /// Start and end of every match within `preview`.
+    pub ranges: Vec<(u32, u32)>,
+}
+
+/// Results of a search, streamed on the channel given to `workspace_search`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export)]
+pub enum SearchEvent {
+    /// Every match in one file.
+    File {
+        path: String,
+        matches: Vec<SearchMatch>,
+    },
+    /// The search finished. Nothing follows.
+    Done(SearchSummary),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SearchSummary {
+    pub files: u32,
+    pub matches: u32,
+    /// A result limit was reached, so there may be more matches.
+    pub truncated: bool,
+    /// Superseded by a newer search, or cancelled.
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
