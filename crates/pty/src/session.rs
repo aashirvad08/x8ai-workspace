@@ -11,22 +11,27 @@ use x8ai_core::terminal::{SessionId, TerminalExit, TerminalSize};
 
 use crate::command::Program;
 
-/// Maximum output the consumer may leave unacknowledged before reading pauses.
-/// Bounds the memory held per session and how much already-produced output still
-/// renders after Ctrl+C. When reading pauses, the kernel's PTY buffer fills and the
-/// program blocks on write: backpressure reaches the producer instead of piling up.
+/// Most output a session holds that the consumer has not acknowledged: read but
+/// not yet delivered, plus delivered but not yet acknowledged. This bounds the
+/// memory held per session and how much already-produced output still renders
+/// after Ctrl+C. When the window is full, reading pauses, the kernel's PTY buffer
+/// fills, and the program blocks on write: backpressure reaches the producer
+/// instead of piling up.
 pub const FLOW_WINDOW: usize = 512 * 1024;
 
 /// How often the consumer should acknowledge processed output (see
-/// [`Session::ack`]). Must be well below [`FLOW_WINDOW`] or reading could stall.
+/// [`Session::ack`]).
 pub const ACK_BYTES: u32 = 64 * 1024;
-const _: () = assert!((ACK_BYTES as usize) * 4 <= FLOW_WINDOW);
 
 /// How long a closed session's process gets to exit after SIGHUP before its
 /// process group is sent SIGKILL.
 pub const KILL_GRACE: Duration = Duration::from_secs(2);
 
 const READ_BUFFER: usize = 64 * 1024;
+
+// Liveness: a consumer that has rendered everything leaves fewer than ACK_BYTES
+// unacknowledged, and one more read must still fit, or reading would stall.
+const _: () = assert!(ACK_BYTES as usize + READ_BUFFER <= FLOW_WINDOW);
 
 /// Minimum gap between output deliveries. Output arriving within the gap goes out
 /// as one batch, so a flood becomes a few large messages per frame instead of
@@ -377,7 +382,8 @@ fn read_loop(mut reader: Box<dyn Read + Send>, shared: &Shared) {
         };
         let mut state = shared.lock();
         state.reading_since = None;
-        while !state.closed && state.pending.len() + state.unacked >= FLOW_WINDOW {
+        // Wait until this whole read fits, so the window is never exceeded.
+        while !state.closed && state.pending.len() + state.unacked + n > FLOW_WINDOW {
             state = shared.wait(state);
         }
         if state.closed {

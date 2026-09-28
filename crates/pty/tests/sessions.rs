@@ -278,11 +278,15 @@ fn reports_programs_that_cannot_start() {
 
 #[test]
 fn output_pauses_until_acknowledged() {
-    const TOTAL: usize = 3 * FLOW_WINDOW;
-    let (session, recorder) = start(&exec(
-        "/bin/sh",
-        &["-c", &format!("head -c {TOTAL} /dev/zero")],
-    ));
+    // Many small, odd-sized writes (100 digits + CRLF = 102 bytes per line), so
+    // reads never line up with the window size. PTYs on some platforms return
+    // reads in chunks that happen to divide the window evenly, which would hide an
+    // overshoot.
+    const LINES: usize = 16_000;
+    const TOTAL: usize = LINES * 102;
+    let script =
+        format!("i=0; while [ \"$i\" -lt {LINES} ]; do printf '%0100d\\n' 0; i=$((i + 1)); done");
+    let (session, recorder) = start(&exec("/bin/sh", &["-c", &script]));
 
     // Without acknowledgements delivery stops at the flow window.
     recorder.wait_until("the flow window to fill", |r| {
