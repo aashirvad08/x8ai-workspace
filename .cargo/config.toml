@@ -1,0 +1,4 @@
+[env]
+# ts-rs writes the TypeScript bindings for x8ai-core here when `cargo test` runs.
+# See docs/decisions/0003-rust-owned-ipc-contracts.md.
+TS_RS_EXPORT_DIR = { value = "src/contracts/generated", relative = true }

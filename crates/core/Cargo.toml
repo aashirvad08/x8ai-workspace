@@ -1,0 +1,16 @@
+[package]
+name = "x8ai-core"
+description = "Platform-independent contracts shared by every x8ai subsystem. No Tauri, no I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+url.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

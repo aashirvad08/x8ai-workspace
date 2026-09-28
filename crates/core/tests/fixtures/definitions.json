@@ -1,0 +1,124 @@
+[
+  {
+    "kind": "agent",
+    "id": "claude-code",
+    "name": "Claude Code",
+    "description": "Anthropic's terminal coding agent.",
+    "launch": { "program": "claude" },
+    "requirements": [{ "kind": "executable", "program": "claude" }],
+    "capabilities": {
+      "modelApis": ["anthropicMessages"],
+      "mcpTransports": ["stdio", "streamableHttp"]
+    }
+  },
+  {
+    "kind": "agent",
+    "id": "opencode",
+    "name": "OpenCode",
+    "description": "Open-source terminal coding agent with many providers.",
+    "launch": { "program": "opencode" },
+    "requirements": [{ "kind": "executable", "program": "opencode" }],
+    "capabilities": {
+      "modelApis": ["anthropicMessages", "openAiChatCompletions", "openAiResponses", "gemini"],
+      "mcpTransports": ["stdio", "streamableHttp"]
+    }
+  },
+  {
+    "kind": "agent",
+    "id": "codex",
+    "name": "Codex CLI",
+    "description": "OpenAI's terminal coding agent.",
+    "launch": { "program": "codex" },
+    "requirements": [{ "kind": "executable", "program": "codex" }],
+    "capabilities": {
+      "modelApis": ["openAiResponses"],
+      "mcpTransports": ["stdio", "streamableHttp"]
+    }
+  },
+  {
+    "kind": "agent",
+    "id": "aider",
+    "name": "Aider",
+    "description": "AI pair programming in the terminal. No MCP support.",
+    "launch": { "program": "aider" },
+    "requirements": [{ "kind": "executable", "program": "aider" }],
+    "capabilities": {
+      "modelApis": ["anthropicMessages", "openAiChatCompletions", "gemini"]
+    }
+  },
+  {
+    "kind": "modelProvider",
+    "id": "anthropic",
+    "name": "Anthropic",
+    "endpoints": [{ "api": "anthropicMessages", "baseUrl": "https://api.anthropic.com" }],
+    "auth": { "kind": "apiKey", "secret": "ANTHROPIC_API_KEY" }
+  },
+  {
+    "kind": "modelProvider",
+    "id": "openai",
+    "name": "OpenAI",
+    "endpoints": [
+      { "api": "openAiResponses", "baseUrl": "https://api.openai.com/v1" },
+      { "api": "openAiChatCompletions", "baseUrl": "https://api.openai.com/v1" }
+    ],
+    "auth": { "kind": "apiKey", "secret": "OPENAI_API_KEY" }
+  },
+  {
+    "kind": "modelProvider",
+    "id": "google",
+    "name": "Google Gemini",
+    "endpoints": [{ "api": "gemini", "baseUrl": "https://generativelanguage.googleapis.com" }],
+    "auth": { "kind": "apiKey", "secret": "GEMINI_API_KEY" }
+  },
+  {
+    "kind": "modelProvider",
+    "id": "openrouter",
+    "name": "OpenRouter",
+    "endpoints": [{ "api": "openAiChatCompletions", "baseUrl": "https://openrouter.ai/api/v1" }],
+    "auth": { "kind": "apiKey", "secret": "OPENROUTER_API_KEY" }
+  },
+  {
+    "kind": "modelProvider",
+    "id": "ollama",
+    "name": "Ollama (local)",
+    "description": "Open-weight models served on this machine.",
+    "endpoints": [
+      { "api": "openAiChatCompletions", "baseUrl": "http://localhost:11434/v1" },
+      { "api": "anthropicMessages", "baseUrl": "http://localhost:11434" }
+    ],
+    "auth": { "kind": "none" },
+    "models": [{ "id": "qwen3-coder:30b", "name": "Qwen3-Coder 30B" }]
+  },
+  {
+    "kind": "mcpServer",
+    "id": "github",
+    "name": "GitHub",
+    "description": "GitHub's official MCP server, run locally in Docker.",
+    "transport": {
+      "kind": "stdio",
+      "launch": {
+        "program": "docker",
+        "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
+        "env": [{ "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": { "secret": "GITHUB_TOKEN" } }]
+      }
+    },
+    "requirements": [{ "kind": "executable", "program": "docker" }]
+  },
+  {
+    "kind": "mcpServer",
+    "id": "github-remote",
+    "name": "GitHub (remote)",
+    "transport": { "kind": "streamableHttp", "url": "https://api.githubcopilot.com/mcp/" }
+  },
+  {
+    "kind": "mcpServer",
+    "id": "playwright",
+    "name": "Playwright",
+    "description": "Browser automation. Pinned to an exact version on purpose.",
+    "transport": {
+      "kind": "stdio",
+      "launch": { "program": "npx", "args": ["-y", "@playwright/mcp@0.0.82"] }
+    },
+    "requirements": [{ "kind": "executable", "program": "npx" }]
+  }
+]
