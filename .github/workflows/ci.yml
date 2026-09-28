@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  portable:
+    # Everything that must stay platform-independent: the frontend and x8ai-core.
+    name: Frontend and core (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      - run: cargo fmt --all --check
+      - run: cargo clippy -p x8ai-core --all-targets -- -D warnings
+      - run: cargo test -p x8ai-core
+
+      - name: Generated TypeScript contracts are up to date
+        run: |
+          if [ -n "$(git status --porcelain -- src/contracts/generated)" ]; then
+            git status --porcelain -- src/contracts/generated
+            git diff -- src/contracts/generated
+            echo "::error::Contracts changed. Run 'pnpm contracts' and commit src/contracts/generated."
+            exit 1
+          fi
+
+  desktop:
+    name: Desktop app (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+
+      - run: pnpm install --frozen-lockfile
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Generated command permissions are up to date
+        run: |
+          if [ -n "$(git status --porcelain -- src-tauri/permissions)" ]; then
+            git status --porcelain -- src-tauri/permissions
+            echo "::error::Command permissions changed. Build locally and commit src-tauri/permissions."
+            exit 1
+          fi
+      - name: Build the macOS app bundle (unsigned)
+        run: pnpm tauri build --bundles app
