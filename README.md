@@ -9,15 +9,18 @@ installable catalog are organized around it. The app hosts and orchestrates thes
 existing tools. It does not implement its own LLM or its own coding agent, and it
 does not privilege any vendor.
 
-> **Status: Phase 6 (model providers).** Open a folder to get a file explorer,
+> **Status: Phase 7 (MCP servers).** Open a folder to get a file explorer,
 > workspace search and a code editor above real PTY terminals. Coding agents such
 > as Claude Code run in the folder's terminals once you trust the folder and allow
 > the agent there; in a Git repository each agent works in a worktree of its own,
 > and you review what it changed. Save provider keys once, in the macOS Keychain,
 > and start an agent with a provider and model of your choice, or with its own
-> configuration. The app does not implement an agent or a model. See
+> configuration. Add MCP servers once and give them to agent sessions: the app
+> starts stdio servers for a session, with only the variables you list, after you
+> allow them. The app does not implement an agent, a model or an MCP client. See
 > [docs/roadmap.md](docs/roadmap.md), [docs/agent-runtime.md](docs/agent-runtime.md),
-> [docs/multi-agent.md](docs/multi-agent.md) and [docs/models.md](docs/models.md).
+> [docs/multi-agent.md](docs/multi-agent.md), [docs/models.md](docs/models.md) and
+> [docs/mcp.md](docs/mcp.md).
 
 ## Documentation
 
@@ -28,6 +31,7 @@ does not privilege any vendor.
 - [Agent runtime](docs/agent-runtime.md): how agents are found, approved, started and stopped
 - [Multi-agent workspaces](docs/multi-agent.md): agent sessions, worktrees and review
 - [Models and providers](docs/models.md): providers, models, keys, precedence and agent adapters
+- [MCP servers](docs/mcp.md): the registry, approvals, environment policy and session-owned servers
 - [Decisions](docs/decisions/): architecture decision records
 
 ## Prerequisites
@@ -55,7 +59,7 @@ does not privilege any vendor.
 
 ⌘O Open Folder · ⌃R Open Recent · ⌘P Go to File · ⇧⌘P All Commands · ⌘N New File ·
 ⌘S Save · ⌥⌘S Save All · ⌘W Close Editor · ⌘B Toggle Sidebar · ⇧⌘E Files ·
-⇧⌘F Search in Folder · ⇧⌘A Agents · ⇧⌘M Models · ⌘F Find in File · ⌃` Toggle Terminal · ⌃⇧` New Terminal.
+⇧⌘F Search in Folder · ⇧⌘A Agents · ⇧⌘M Models · ⇧⌘U MCP · ⌘F Find in File · ⌃` Toggle Terminal · ⌃⇧` New Terminal.
 In a terminal: ⌘D Split Right · ⇧⌘D Split Down · ⌘] / ⌘[ Next / Previous Pane ·
 ⌘W Close Pane. In the explorer: arrows, Enter, F2 to rename, ⌘⌫ to move to the
 Trash.
@@ -70,6 +74,7 @@ crates/agents/      x8ai-agents — agent definitions, discovery, sessions, work
 crates/git/         x8ai-git — the user's git: repository facts, worktrees, changes (no Tauri)
 crates/secrets/     x8ai-secrets — provider keys in the macOS Keychain; a value that cannot be printed (no Tauri)
 crates/providers/   x8ai-providers — provider definitions, models, provider settings, Ollama detection (no Tauri)
+crates/mcp/         x8ai-mcp — MCP server registry, approvals, environment policy, session-owned servers and the bridge (no Tauri)
 src-tauri/          x8ai-desktop — the Tauri host: window, commands, capability grants
 src/app/            UI shell: layout, sidebar, splitters, overlays, shortcuts (React)
 src/workbench/      user actions and coordination; notifications, dialogs, commands
@@ -78,12 +83,13 @@ src/editor/         editor tabs and CodeMirror
 src/terminal/       terminal sessions, tabs, split panes and xterm.js view
 src/agents/         agents view and store: agents, sessions, review
 src/models/         models view and store: providers, keys, model ids
+src/mcp/            MCP view and store: servers, secrets, launch choices
 src/native/         typed client for native commands; the only code that imports Tauri
 src/contracts/      TypeScript types generated from crates/core (do not edit)
 docs/               architecture, roadmap, security, decisions
 ```
 
-Subsystem modules (MCP and catalog) are added in the phase
+Subsystem modules (the catalog) are added in the phase
 that implements them. The planned homes are in
 [docs/architecture.md §3](docs/architecture.md#3-repository-map).
 

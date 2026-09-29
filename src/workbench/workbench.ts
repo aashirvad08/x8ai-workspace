@@ -7,11 +7,14 @@ import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchMatch } from "../contracts/generated/SearchMatch";
 import type { WorkspaceEvent } from "../contracts/generated/WorkspaceEvent";
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
+import type { McpServerInput } from "../contracts/generated/McpServerInput";
 import type { ModelSelection } from "../contracts/generated/ModelSelection";
 import type { EditorActions } from "../editor/actions";
 import { EditorStore } from "../editor/editor-store";
 import { basename, dirname, join } from "../lib/paths";
 import { Value } from "../lib/store";
+import type { McpActions } from "../mcp/actions";
+import { McpServers } from "../mcp/servers";
 import type { ModelActions } from "../models/actions";
 import { Providers } from "../models/providers";
 import { type NativeClient, NativeError } from "../native";
@@ -34,7 +37,7 @@ import { Picker } from "./picker";
  * testable without React.
  */
 export class Workbench
-  implements ExplorerActions, EditorActions, TerminalActions, SearchActions, AgentActions, ModelActions
+  implements ExplorerActions, EditorActions, TerminalActions, SearchActions, AgentActions, ModelActions, McpActions
 {
   readonly workspace = new Value<WorkspaceInfo | null>(null);
   /** Recently opened folders, most recent first. */
@@ -44,6 +47,7 @@ export class Workbench
   readonly search: Search;
   readonly agents: Agents;
   readonly providers: Providers;
+  readonly mcp: McpServers;
   readonly terminals = new Terminals();
   readonly notifications = new Notifications();
   readonly dialogs = new Dialogs();
@@ -65,6 +69,7 @@ export class Workbench
     this.search = new Search(native);
     this.agents = new Agents(native);
     this.providers = new Providers(native);
+    this.mcp = new McpServers(native);
     this.editor.subscribe(() => this.#reportUnsaved());
     this.terminals.subscribe(() => this.#agentPanesChanged());
   }
@@ -420,6 +425,7 @@ export class Workbench
       { id: "search.show", title: "Search in Folder", shortcut: { key: "f", meta: true, shift: true }, run: () => this.showSearch() },
       { id: "view.agents", title: "Show Agents", shortcut: { key: "a", meta: true, shift: true }, run: () => this.showAgents() },
       { id: "view.models", title: "Show Models", shortcut: { key: "m", meta: true, shift: true }, run: () => this.showModels() },
+      { id: "view.mcp", title: "Show MCP Servers", shortcut: { key: "u", meta: true, shift: true }, run: () => this.showMcp() },
       { id: "terminal.toggle", title: "Toggle Terminal", shortcut: { key: "`", ctrl: true }, run: () => this.toggleTerminal() },
       { id: "terminal.new", title: "New Terminal", shortcut: { key: "`", ctrl: true, shift: true }, run: () => this.newTerminal() },
       { id: "terminal.splitRight", title: "Split Terminal Right", shortcut: { key: "d", meta: true }, when: "terminalFocused", run: () => this.splitTerminal("right") },
@@ -576,6 +582,102 @@ export class Workbench
       .catch((error: unknown) => this.notifications.error(`Could not remove the model: ${messageOf(error)}`));
   }
 
+  // MCP
+
+  /** ⇧⌘U: MCP servers in the sidebar. */
+  showMcp(): void {
+    this.layout.showSidebar("mcp");
+    void this.mcp.load();
+  }
+
+  refreshMcp(): void {
+    void this.mcp.load();
+  }
+
+  async addMcpServer(server: McpServerInput): Promise<boolean> {
+    try {
+      this.mcp.replace(await this.#native.addMcpServer(server));
+      return true;
+    } catch (error) {
+      this.notifications.error(`Could not add ${server.name || "the server"}: ${messageOf(error)}`);
+      return false;
+    }
+  }
+
+  async updateMcpServer(id: string, server: McpServerInput): Promise<boolean> {
+    try {
+      this.mcp.replace(await this.#native.updateMcpServer(id, server));
+      return true;
+    } catch (error) {
+      this.notifications.error(`Could not save ${server.name || "the server"}: ${messageOf(error)}`);
+      return false;
+    }
+  }
+
+  setMcpServerEnabled(id: string, enabled: boolean): void {
+    this.#native
+      .setMcpServerEnabled(id, enabled)
+      .then((status) => this.mcp.replace(status))
+      .catch((error: unknown) => this.notifications.error(`Could not change the server: ${messageOf(error)}`));
+  }
+
+  removeMcpServer(id: string): void {
+    void this.#removeMcpServer(id);
+  }
+
+  async #removeMcpServer(id: string): Promise<void> {
+    const name = this.mcp.find(id)?.server.name ?? id;
+    const choice = await this.dialogs.ask({
+      title: `Remove the MCP server “${name}”?`,
+      message: "Its secrets are deleted from your Keychain and its approvals forgotten. Sessions that have it no longer start it.",
+      buttons: [
+        { label: "Remove", value: "remove", role: "destructive" },
+        { label: "Cancel", value: "cancel" },
+      ],
+      cancel: "cancel",
+    });
+    if (choice !== "remove") return;
+    try {
+      await this.#native.removeMcpServer(id);
+      this.mcp.forget(id);
+    } catch (error) {
+      this.notifications.error(`Could not remove ${name}: ${messageOf(error)}`);
+    }
+  }
+
+  async saveMcpSecret(id: string, name: string, value: string): Promise<boolean> {
+    try {
+      this.mcp.replace(await this.#native.setMcpSecret(id, name, value));
+    } catch (error) {
+      this.notifications.error(`Could not save ${name}: ${messageOf(error)}`);
+      return false;
+    }
+    this.notifications.info(`${name} saved in your Keychain.`);
+    return true;
+  }
+
+  removeMcpSecret(id: string, name: string): void {
+    void this.#removeMcpSecret(id, name);
+  }
+
+  async #removeMcpSecret(id: string, name: string): Promise<void> {
+    const choice = await this.dialogs.ask({
+      title: `Remove the saved ${name}?`,
+      message: "It is deleted from your Keychain. The server does not start again until it is saved.",
+      buttons: [
+        { label: "Remove", value: "remove", role: "destructive" },
+        { label: "Cancel", value: "cancel" },
+      ],
+      cancel: "cancel",
+    });
+    if (choice !== "remove") return;
+    try {
+      this.mcp.replace(await this.#native.removeMcpSecret(id, name));
+    } catch (error) {
+      this.notifications.error(`Could not remove ${name}: ${messageOf(error)}`);
+    }
+  }
+
   // Agents
 
   /** ⇧⌘A: the agents in the sidebar. */
@@ -583,6 +685,7 @@ export class Workbench
     this.layout.showSidebar("agents");
     void this.agents.load();
     void this.providers.load();
+    void this.mcp.load();
   }
 
   refreshAgents(): void {
@@ -593,8 +696,8 @@ export class Workbench
     void this.setTrust(true);
   }
 
-  launchAgent(id: string, model: ModelSelection | null = null): void {
-    void this.#launchAgent(id, model);
+  launchAgent(id: string, model: ModelSelection | null = null, mcp: readonly string[] = []): void {
+    void this.#launchAgent(id, model, mcp);
   }
 
   /**
@@ -605,7 +708,7 @@ export class Workbench
    * the native side makes the agent a session (a worktree of its own in a Git
    * repository) that keeps the model, and a terminal pane starts the agent in it.
    */
-  async #launchAgent(id: string, model: ModelSelection | null): Promise<void> {
+  async #launchAgent(id: string, model: ModelSelection | null, mcp: readonly string[]): Promise<void> {
     const workspace = this.workspace.get();
     if (!workspace) {
       this.notifications.info("Open a folder first (⌘O). Agents run in the open folder.");
@@ -628,7 +731,7 @@ export class Workbench
     }
     let approved: boolean;
     try {
-      approved = await this.#native.requestAgentApproval(id, model);
+      approved = await this.#native.requestAgentApproval(id, model, mcp);
     } catch (error) {
       this.notifications.error(`Could not start ${name}: ${messageOf(error)}`);
       return;
@@ -637,7 +740,7 @@ export class Workbench
     if (!approved) return;
     let session: AgentSessionInfo;
     try {
-      session = await this.#native.createAgentSession(id, model);
+      session = await this.#native.createAgentSession(id, model, mcp);
     } catch (error) {
       this.notifications.error(`Could not start ${name}: ${messageOf(error)}`);
       return;
@@ -649,15 +752,28 @@ export class Workbench
 
   /** Shows the session's terminal; a new one starts the agent again if it is not running. */
   openAgentTerminal(id: number): void {
+    void this.#openAgentTerminal(id);
+  }
+
+  async #openAgentTerminal(id: number): Promise<void> {
     const session = this.agents.session(id);
     const pane = this.terminals.paneOfSession(id);
     this.layout.setTerminalVisible(true);
     if (pane) {
       this.terminals.focusPane(pane.key);
       this.terminals.requestFocus();
-    } else if (session) {
-      this.terminals.add({ type: "agent", agent: session.agent, name: session.name, session: id });
+      return;
     }
+    if (!session) return;
+    // Running it again runs what it has now: asked for if not yet allowed (a
+    // changed MCP server, a revoked approval).
+    try {
+      if (!(await this.#native.requestSessionApproval(id))) return;
+    } catch (error) {
+      this.notifications.error(`Could not start ${session.name}: ${messageOf(error)}`);
+      return;
+    }
+    this.terminals.add({ type: "agent", agent: session.agent, name: session.name, session: id });
   }
 
   stopAgent(id: number): void {
@@ -699,7 +815,7 @@ export class Workbench
     if (!(await this.#stopAgent(id))) return;
     const pane = this.terminals.paneOfSession(id);
     if (pane) this.terminals.closePane(pane.key);
-    this.openAgentTerminal(id);
+    await this.#openAgentTerminal(id);
   }
 
   /** Waits (briefly) until the session's pane reports its agent has ended. */

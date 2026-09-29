@@ -5,6 +5,7 @@ import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
 import type { AppEvent } from "../contracts/generated/AppEvent";
 import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { FileVersion } from "../contracts/generated/FileVersion";
+import type { McpServerStatus } from "../contracts/generated/McpServerStatus";
 import type { ProviderStatus } from "../contracts/generated/ProviderStatus";
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchEvent } from "../contracts/generated/SearchEvent";
@@ -58,6 +59,7 @@ function fakeNative() {
       },
       { id: "ollama", name: "Ollama", description: "", hosting: "local", credential: "notNeeded", local: null, models: [] },
     ] as ProviderStatus[],
+    mcp: [] as McpServerStatus[],
     appListener: null as ((event: AppEvent) => void) | null,
     diskListener: null as ((event: WorkspaceEvent) => void) | null,
     unsaved: false,
@@ -172,6 +174,7 @@ function fakeNative() {
             { provider: "anthropic", supported: true, reason: null },
             { provider: "ollama", supported: true, reason: null },
           ],
+          mcp: { supported: true, reason: null },
         },
       ],
       environmentProblem: null,
@@ -179,8 +182,8 @@ function fakeNative() {
         ? { kind: "worktrees", branch: "main", head: "a".repeat(40) }
         : { kind: "unavailable", reason: "This folder is not a Git repository." },
     }),
-    requestAgentApproval: async (agent, model) => {
-      calls.push(`approve ${agent}${model ? ` ${model.provider}/${model.model}` : ""}`);
+    requestAgentApproval: async (agent, model, mcp) => {
+      calls.push(`approve ${agent}${model ? ` ${model.provider}/${model.model}` : ""}${mcp.length ? ` mcp:${mcp.join(",")}` : ""}`);
       const open = state.open!;
       if (!state.trusted.has(open.root)) throw new NativeError("x", "permissionDenied", "not trusted");
       const key = `${open.root}:${agent}${model ? `@${model.provider}` : ""}`;
@@ -188,8 +191,12 @@ function fakeNative() {
       return state.approvals.has(key);
     },
     revokeAgentApproval: async (agent) => void state.approvals.delete(`${state.open?.root}:${agent}`),
-    createAgentSession: async (agent, model) => {
-      calls.push(`createSession ${agent}${model ? ` ${model.provider}/${model.model}` : ""}`);
+    requestSessionApproval: async (session) => {
+      calls.push(`approveSession ${session}`);
+      return state.allowAgent;
+    },
+    createAgentSession: async (agent, model, mcp) => {
+      calls.push(`createSession ${agent}${model ? ` ${model.provider}/${model.model}` : ""}${mcp.length ? ` mcp:${mcp.join(",")}` : ""}`);
       const open = state.open!;
       if (!state.git && state.agentSessions.some((s) => !s.worktree && s.state.state === "running")) {
         throw new NativeError("x", "conflict", "this folder is not a Git repository, so agents cannot get workspaces of their own");
@@ -217,6 +224,7 @@ function fakeNative() {
               overriddenShellVariables: ["ANTHROPIC_API_KEY"],
             }
           : { source: "agent", shellVariables: [] },
+        mcp: mcp.map((id) => ({ id, name: id, transport: "stdio", state: { state: "idle" } })),
       };
       state.agentSessions.push(session);
       return session;
@@ -256,7 +264,41 @@ function fakeNative() {
     },
     removeProviderModel: async (provider, model) =>
       changeProvider(provider, (p) => ({ ...p, models: p.models.filter((m) => m.id !== model) })),
+    listMcpServers: async () => {
+      calls.push("listMcp");
+      return { servers: state.mcp.map((s) => ({ ...s })) };
+    },
+    addMcpServer: async (server) => {
+      if (server.transport.kind === "stdio" && server.transport.command.includes(" ")) {
+        throw new NativeError("mcp_add", "invalidInput", "transport.command: must be one program name; put its arguments in the argument list");
+      }
+      const status: McpServerStatus = {
+        server: { ...server, id: server.name.toLowerCase(), scope: { kind: server.scope === "workspace" ? "workspace" : server.scope, root: state.open?.root ?? "" } as McpServerStatus["server"]["scope"] },
+        secrets: server.env.filter((v) => v.source === "secret").map((v) => ({ name: v.name, state: "missing" })),
+        configured: server.env.every((v) => v.source !== "secret"),
+        problem: null,
+        agents: [{ agent: "claude-code", supported: true, reason: null }],
+      };
+      state.mcp.push(status);
+      return status;
+    },
+    updateMcpServer: async (id, server) => changeMcp(id, (s) => ({ ...s, server: { ...s.server, name: server.name } })),
+    setMcpServerEnabled: async (id, enabled) => changeMcp(id, (s) => ({ ...s, server: { ...s.server, enabled } })),
+    removeMcpServer: async (id) => {
+      calls.push(`removeMcp ${id}`);
+      state.mcp = state.mcp.filter((s) => s.server.id !== id);
+    },
+    setMcpSecret: async (id, name, value) => {
+      if (value.includes("\n")) throw new NativeError("mcp_set_secret", "invalidInput", "the key contains control characters");
+      return changeMcp(id, (s) => ({ ...s, secrets: s.secrets.map((x) => (x.name === name ? { ...x, state: "inKeychain" } : x)), configured: true }));
+    },
+    removeMcpSecret: async (id, name) =>
+      changeMcp(id, (s) => ({ ...s, secrets: s.secrets.map((x) => (x.name === name ? { ...x, state: "missing" } : x)), configured: false })),
   };
+  function changeMcp(id: string, change: (s: McpServerStatus) => McpServerStatus): McpServerStatus {
+    state.mcp = state.mcp.map((s) => (s.server.id === id ? change(s) : s));
+    return state.mcp.find((s) => s.server.id === id)!;
+  }
   function changeProvider(id: string, change: (p: ProviderStatus) => ProviderStatus): ProviderStatus {
     state.providers = state.providers.map((p) => (p.id === id ? change(p) : p));
     return state.providers.find((p) => p.id === id)!;
@@ -954,5 +996,83 @@ describe("Workbench models", () => {
     await settle();
     expect(state.calls).toContain("approve claude-code");
     expect(state.approvals).toEqual(new Set(["/Users/me/project:claude-code@anthropic", "/Users/me/project:claude-code"]));
+  });
+});
+
+describe("Workbench MCP servers", () => {
+  const github = {
+    name: "GitHub",
+    description: "",
+    transport: { kind: "stdio" as const, command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] },
+    env: [{ name: "GITHUB_PERSONAL_ACCESS_TOKEN", source: "secret" as const }],
+    enabled: true,
+    scope: "session" as const,
+  };
+
+  it("adds a server, saves its secret without keeping it, and asks before removing", async () => {
+    const { workbench, state } = await opened();
+    workbench.showMcp();
+    await settle();
+    expect(workbench.layout.get().sidebar).toBe("mcp");
+    await expect(workbench.addMcpServer(github)).resolves.toBe(true);
+    expect(workbench.mcp.find("github")?.configured).toBe(false);
+
+    await expect(workbench.saveMcpSecret("github", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghp_x8ai_test_invalid")).resolves.toBe(true);
+    expect(workbench.mcp.find("github")?.secrets[0]?.state).toBe("inKeychain");
+    expect(JSON.stringify(workbench.mcp.get())).not.toContain("ghp_x8ai");
+    expect(JSON.stringify(workbench.notifications.get())).not.toContain("ghp_x8ai");
+
+    workbench.removeMcpServer("github");
+    await answer(workbench, "cancel");
+    expect(workbench.mcp.find("github")).toBeDefined();
+    workbench.removeMcpServer("github");
+    await answer(workbench, "remove");
+    expect(workbench.mcp.find("github")).toBeUndefined();
+    expect(state.calls).toContain("removeMcp github");
+  });
+
+  it("reports a refused server or secret without repeating the secret", async () => {
+    const { workbench } = await opened();
+    await expect(workbench.addMcpServer({ ...github, transport: { kind: "stdio", command: "npx -y server", args: [] } })).resolves.toBe(false);
+    await workbench.addMcpServer(github);
+    await expect(workbench.saveMcpSecret("github", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghp_x8ai\nsecret")).resolves.toBe(false);
+    const messages = workbench.notifications.get().map((n) => n.message);
+    expect(messages[0]).toContain("must be one program name");
+    expect(messages.join(" ")).not.toContain("ghp_x8ai");
+  });
+
+  it("launches with chosen session servers: approved and created together", async () => {
+    const { workbench, state } = await opened();
+    await workbench.agents.load();
+    await workbench.setTrust(true);
+    workbench.launchAgent("claude-code", null, ["github"]);
+    await settle();
+    await settle();
+    expect(state.calls).toContain("approve claude-code mcp:github");
+    expect(state.calls).toContain("createSession claude-code mcp:github");
+    await workbench.agents.loadSessions();
+    expect(workbench.agents.session(1)?.mcp.map((s) => s.id)).toEqual(["github"]);
+  });
+
+  it("asks for approval again before an existing session runs again, and respects a no", async () => {
+    const { workbench, state } = await opened();
+    await workbench.agents.load();
+    await workbench.setTrust(true);
+    workbench.launchAgent("claude-code");
+    await settle();
+    await settle();
+    const [pane] = workbench.terminals.agentPanes("claude-code");
+    workbench.terminals.closePane(pane!.key);
+    await workbench.agents.loadSessions();
+
+    state.allowAgent = false;
+    workbench.openAgentTerminal(1);
+    await settle();
+    expect(state.calls).toContain("approveSession 1");
+    expect(workbench.terminals.agentPanes("claude-code")).toEqual([]);
+    state.allowAgent = true;
+    workbench.openAgentTerminal(1);
+    await settle();
+    expect(workbench.terminals.agentPanes("claude-code")).toHaveLength(1);
   });
 });

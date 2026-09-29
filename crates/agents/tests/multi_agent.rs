@@ -188,7 +188,13 @@ impl Fixture {
         let repo = self.repo();
         let worktree = self
             .isolation
-            .create(&self.git, &repo, &IntegrationId::new(agent).unwrap(), None)
+            .create(
+                &self.git,
+                &repo,
+                &IntegrationId::new(agent).unwrap(),
+                None,
+                &[],
+            )
             .unwrap();
         let id = self
             .runtime
@@ -359,6 +365,7 @@ fn a_symlinked_worktree_directory_is_refused() {
         &repo,
         &IntegrationId::new("agent-one").unwrap(),
         None,
+        &[],
     );
     assert!(
         matches!(result, Err(IsolationError::Unsafe(_))),
@@ -529,6 +536,7 @@ fn a_repository_without_commits_cannot_be_isolated() {
         &repo,
         &IntegrationId::new("agent-one").unwrap(),
         None,
+        &[],
     );
     assert!(
         matches!(result, Err(IsolationError::NoCommits)),
@@ -569,6 +577,7 @@ fn a_worktree_that_cannot_be_made_leaves_nothing_behind() {
         &repo,
         &IntegrationId::new("agent-one").unwrap(),
         None,
+        &[],
     );
     assert!(result.is_err());
     let dir = f.isolation.repository_dir(&repo);

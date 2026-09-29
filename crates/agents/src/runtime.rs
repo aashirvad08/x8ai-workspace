@@ -60,6 +60,8 @@ pub struct LaunchPlan {
     pub model: Option<ModelSelection>,
     /// Where the session's model configuration comes from, for the user.
     pub configuration: SessionConfiguration,
+    /// The MCP servers this launch gives the agent, by id (docs/mcp.md).
+    pub mcp: Vec<IntegrationId>,
 }
 
 /// A provider and the endpoint an agent is configured to send requests, and the
@@ -80,6 +82,7 @@ impl std::fmt::Debug for LaunchPlan {
             .field("env", &names(&self.env))
             .field("extra_args", &self.extra_args)
             .field("provider", &self.provider)
+            .field("mcp", &self.mcp)
             .finish_non_exhaustive()
     }
 }
@@ -163,6 +166,7 @@ pub fn plan(
         extra_args: Vec::new(),
         provider: None,
         model: None,
+        mcp: Vec::new(),
     })
 }
 
@@ -222,6 +226,8 @@ pub struct AgentSession {
     pub model: Option<ModelSelection>,
     /// As of its last launch, or its creation.
     pub configuration: SessionConfiguration,
+    /// The MCP servers attached when it was created. Never grows.
+    pub mcp: Vec<IntegrationId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -239,7 +245,7 @@ pub enum RunError {
     SharedBusy,
     #[error("the launch does not belong to this agent session")]
     Mismatch,
-    #[error("a worktree's model does not match its session")]
+    #[error("a worktree's model or MCP servers do not match its session")]
     ModelMismatch,
     #[error("the agent's directory is not inside its workspace")]
     OutsideWorkspace,
@@ -257,6 +263,7 @@ struct Record {
     started: u64,
     model: Option<ModelSelection>,
     configuration: SessionConfiguration,
+    mcp: Vec<IntegrationId>,
     pty: Option<Arc<Session>>,
     failure: Option<String>,
 }
@@ -285,6 +292,7 @@ impl Record {
             started: self.started,
             model: self.model.clone(),
             configuration: self.configuration.clone(),
+            mcp: self.mcp.clone(),
             terminal: self
                 .pty
                 .as_ref()
@@ -320,7 +328,10 @@ impl AgentRuntime {
         if !inside {
             return Err(RunError::OutsideWorkspace);
         }
-        if worktree.as_ref().is_some_and(|w| w.model != plan.model) {
+        if worktree
+            .as_ref()
+            .is_some_and(|w| w.model != plan.model || w.mcp != plan.mcp)
+        {
             return Err(RunError::ModelMismatch);
         }
         let mut records = self.lock();
@@ -342,6 +353,7 @@ impl AgentRuntime {
             started: now_ms(),
             model: plan.model.clone(),
             configuration: plan.configuration.clone(),
+            mcp: plan.mcp.clone(),
             pty: None,
             failure: None,
         });
@@ -376,6 +388,7 @@ impl AgentRuntime {
             started: worktree.created,
             model: worktree.model.clone(),
             configuration,
+            mcp: worktree.mcp.clone(),
             worktree: Some(worktree),
             pty: None,
             failure: None,
@@ -410,9 +423,12 @@ impl AgentRuntime {
             .position(|r| r.id == id)
             .ok_or(RunError::NotFound(id))?;
         let record = &records[index];
+        // A run may leave out servers the session had (disabled or removed since),
+        // never add one.
         if record.agent != plan.agent
             || record.workspace != plan.workspace
             || record.model != plan.model
+            || !plan.mcp.iter().all(|id| record.mcp.contains(id))
         {
             return Err(RunError::Mismatch);
         }

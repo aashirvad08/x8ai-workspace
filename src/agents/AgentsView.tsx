@@ -8,6 +8,8 @@ import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
 import type { WorkspaceIsolation } from "../contracts/generated/WorkspaceIsolation";
 import type { Store } from "../lib/store";
 import { useStore } from "../lib/useStore";
+import type { SessionMcpServer } from "../contracts/generated/SessionMcpServer";
+import { type McpChoices, mcpChoices, type McpServers } from "../mcp/servers";
 import { type ModelChoice, modelChoices, type Providers } from "../models/providers";
 import { type AgentRunStatus, agentRunStatus, type Terminals } from "../terminal/terminals";
 import type { AgentActions } from "./actions";
@@ -16,6 +18,7 @@ import type { Agents } from "./agents";
 interface Props {
   agents: Agents;
   providers: Providers;
+  mcp: McpServers;
   terminals: Terminals;
   workspace: Store<WorkspaceInfo | null>;
   actions: AgentActions;
@@ -35,9 +38,10 @@ const LABELS: Record<Shown, string> = {
 };
 
 /** The agents the app can run, and the sessions they work in (⇧⌘A). */
-export function AgentsView({ agents, providers, terminals, workspace, actions }: Props) {
+export function AgentsView({ agents, providers, mcp, terminals, workspace, actions }: Props) {
   const { agents: list, loading, environmentProblem, isolation, sessions, changes, error } = useStore(agents);
   const { providers: providerList } = useStore(providers);
+  const { servers: mcpList } = useStore(mcp);
   const info = useStore(workspace);
   const { panes } = useStore(terminals);
 
@@ -45,7 +49,8 @@ export function AgentsView({ agents, providers, terminals, workspace, actions }:
     if (agents.get().agents === null) void agents.load();
     // Keys and models only; local providers are looked for in the Models view.
     if (providers.get().providers === null) void providers.load();
-  }, [agents, providers]);
+    if (mcp.get().servers === null) void mcp.load();
+  }, [agents, providers, mcp]);
 
   return (
     <div className="agents">
@@ -82,6 +87,7 @@ export function AgentsView({ agents, providers, terminals, workspace, actions }:
             key={agent.id}
             agent={agent}
             choices={modelChoices(agent, providerList ?? [])}
+            mcpChoices={mcpChoices(agent, mcpList ?? [], info?.root ?? null)}
             canLaunch={info !== null}
             actions={actions}
           />
@@ -130,15 +136,18 @@ function IsolationNote({ isolation }: { isolation: WorkspaceIsolation }) {
 function AgentCard({
   agent,
   choices,
+  mcpChoices,
   canLaunch,
   actions,
 }: {
   agent: AgentStatus;
   choices: readonly ModelChoice[];
+  mcpChoices: McpChoices;
   canLaunch: boolean;
   actions: AgentActions;
 }) {
   const [chosen, setChosen] = useState(-1);
+  const [chosenMcp, setChosenMcp] = useState<readonly string[]>([]);
   const shown: Shown = agent.availability.state === "installed" ? "installed" : agent.availability.state;
   const installed = agent.availability.state === "installed";
   const choice = choices[chosen];
@@ -186,11 +195,18 @@ function AgentCard({
       {installed && supported > 0 && choices.length === 0 && (
         <p className="agent-approval">To choose a model here, add a provider key or model in Models.</p>
       )}
+      {installed && <McpLaunchChoices agent={agent} choices={mcpChoices} chosen={chosenMcp} onChange={setChosenMcp} />}
       <button
         type="button"
         className="button-primary agent-launch"
         disabled={!canLaunch || !installed}
-        onClick={() => actions.launchAgent(agent.id, choice?.selection ?? null)}
+        onClick={() =>
+          actions.launchAgent(
+            agent.id,
+            choice?.selection ?? null,
+            chosenMcp.filter((id) => mcpChoices.optional.some((s) => s.server.id === id)),
+          )
+        }
       >
         Launch
       </button>
@@ -226,6 +242,7 @@ function SessionCard({
         {session.state.state === "exited" && ` · exit ${session.state.exit.signal ?? session.state.exit.code}`}
       </p>
       <ConfigurationNote name={session.name} configuration={session.configuration} />
+      {session.mcp.length > 0 && <SessionMcp servers={session.mcp} />}
       {session.state.state === "failed" && <p className="agent-approval agents-error">{session.state.message}</p>}
       <div className="agent-actions">
         <button type="button" onClick={() => actions.openAgentTerminal(session.id)}>
@@ -279,6 +296,74 @@ function SessionCard({
         </div>
       )}
     </li>
+  );
+}
+
+/** Which MCP servers a new session gets, and the per-session ones to choose. */
+function McpLaunchChoices({
+  agent,
+  choices,
+  chosen,
+  onChange,
+}: {
+  agent: AgentStatus;
+  choices: McpChoices;
+  chosen: readonly string[];
+  onChange: (chosen: readonly string[]) => void;
+}) {
+  if (!agent.mcp.supported) {
+    return (
+      <p className="agent-approval" title={agent.mcp.reason ?? undefined}>
+        MCP: not supported for {agent.name}
+      </p>
+    );
+  }
+  if (choices.always.length === 0 && choices.optional.length === 0) return null;
+  return (
+    <div className="agent-mcp">
+      {choices.always.length > 0 && (
+        <p className="agent-approval">MCP: {choices.always.map((s) => s.server.name).join(", ")}</p>
+      )}
+      {choices.optional.map((s) => (
+        <label key={s.server.id} className="agent-model">
+          <input
+            type="checkbox"
+            checked={chosen.includes(s.server.id)}
+            aria-label={`Attach ${s.server.name}`}
+            onChange={(e) => onChange(e.target.checked ? [...chosen, s.server.id] : chosen.filter((id) => id !== s.server.id))}
+          />
+          <span>MCP: {s.server.name}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+const MCP_STATES = {
+  idle: "not running",
+  remote: "remote",
+  waiting: "ready",
+  running: "running",
+  exited: "ended",
+  failed: "failed",
+  skipped: "not used",
+} as const;
+
+/** The session's MCP servers and what each is doing; never a secret. */
+function SessionMcp({ servers }: { servers: readonly SessionMcpServer[] }) {
+  return (
+    <ul className="agent-files" aria-label="MCP servers">
+      {servers.map((s) => {
+        const detail = s.state.state === "failed" ? s.state.message : s.state.state === "skipped" ? s.state.reason : undefined;
+        return (
+          <li key={s.id} className="agent-approval" title={detail}>
+            MCP: {s.name} · {MCP_STATES[s.state.state]}
+            {s.state.state === "running" && ` (pid ${s.state.pid})`}
+            {detail && ` · ${detail}`}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

@@ -785,6 +785,63 @@ kbd {
   font-family: var(--font-code);
 }
 
+/* MCP */
+
+.mcp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.agents > .mcp-form {
+  margin: 0 8px 8px;
+}
+
+.mcp-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-muted);
+}
+
+.mcp-form label.agent-model {
+  flex-direction: row;
+}
+
+.mcp-args {
+  height: auto;
+  min-height: 48px;
+  padding: 4px 6px;
+  font-family: var(--font-code);
+  resize: vertical;
+}
+
+.mcp-variables {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+}
+
+.mcp-variables legend {
+  padding: 0 4px;
+}
+
+.agent-mcp {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .link-button {
   padding: 0;
   border: none;

@@ -111,6 +111,17 @@ pub struct AgentStatus {
     /// agent's adapter says. An agent without an adapter supports none: it uses
     /// only its own configuration.
     pub providers: Vec<ProviderSupport>,
+    /// Whether the app can give this agent MCP servers (docs/mcp.md).
+    pub mcp: FeatureSupport,
+}
+
+/// Whether something is supported, and why not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FeatureSupport {
+    pub supported: bool,
+    pub reason: Option<String>,
 }
 
 /// Whether an agent's adapter can point it at a provider.
@@ -222,6 +233,9 @@ pub struct AgentSessionInfo {
     /// The terminal session while the agent runs.
     pub terminal: Option<crate::terminal::SessionId>,
     pub configuration: SessionConfiguration,
+    /// The MCP servers attached when the session was created, and what each is
+    /// doing. Fixed for the session: servers enabled later are not added.
+    pub mcp: Vec<crate::mcp::SessionMcpServer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

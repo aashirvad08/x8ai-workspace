@@ -8,7 +8,11 @@
 //! the model configuration from the agent's adapter and the provider's built-in
 //! definition, with the key read here from the Keychain (docs/models.md); the
 //! directory is a worktree this module makes (docs/multi-agent.md), or the open
-//! workspace itself when it is not a Git repository. Creating a session and every run require the workspace to be
+//! workspace itself when it is not a Git repository. A session's MCP servers are
+//! chosen natively from the registry (docs/mcp.md): the webview names only the
+//! session-scoped servers it wants, by id; stdio servers are started by this
+//! module, for the session, behind a private socket, after the same trust and
+//! approval checks. Creating a session and every run require the workspace to be
 //! trusted and the agent to be approved for it, checked here, natively. Approval is
 //! granted only in a native dialog the webview cannot answer. A running agent is a
 //! terminal session, driven with the `terminal_*` commands.
@@ -19,7 +23,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use x8ai_agents::adapter::{self, ConfigureError};
+use x8ai_agents::adapter::{self, AgentMcpServer, AgentMcpTransport, ConfigureError};
 use x8ai_agents::discovery::find_executable;
 use x8ai_agents::environment::{RESOLVE_TIMEOUT, resolve, var};
 use x8ai_agents::isolation::{self, Isolation};
@@ -30,12 +34,18 @@ use x8ai_core::agent::{
     ProviderSupport, SessionConfiguration, WorkspaceIsolation,
 };
 use x8ai_core::error::{CommandError, ErrorCode};
+use x8ai_core::id::IntegrationId;
+use x8ai_core::mcp::{McpEnvSource, McpServerTransport};
 use x8ai_core::model::{CredentialState, ModelSelection};
+use x8ai_core::terminal::TerminalExit;
 use x8ai_core::terminal::{TerminalInfo, TerminalSize};
 use x8ai_core::workspace::FileContent;
 use x8ai_git::{FileStatus, Git, Repository};
+use x8ai_mcp::{Launch, MaterialTransport, Prepared};
+use x8ai_pty::SessionEvents;
 use x8ai_workspace::Workspace;
 
+use crate::mcp::{Mcp, RunServer};
 use crate::providers::Providers;
 use crate::terminal::{ChannelEvents, Terminals, info};
 use crate::workspace::Workspaces;
@@ -216,6 +226,329 @@ fn launch_plan(
     adapter::configure(plan, provider, &model.model, credential.as_ref()).map_err(configure_error)
 }
 
+/// A launch's MCP servers: every one attached to the session, those that will
+/// run, exactly as they would, and the others with the reason.
+struct McpSelection {
+    attached: Vec<IntegrationId>,
+    prepared: Vec<Prepared>,
+    skipped: Vec<(IntegrationId, String)>,
+}
+
+/// The servers a new session of `definition` in `root` gets: every enabled global
+/// and workspace server the agent can use, and the session servers `chosen`.
+/// Choosing servers for an agent that cannot use them is refused; the others are
+/// simply not attached to it.
+fn mcp_for_new_session(
+    mcp: &Mcp,
+    definition: &AgentDefinition,
+    root: &Path,
+    chosen: &[String],
+    path: Option<&str>,
+) -> Result<McpSelection, CommandError> {
+    let chosen: Vec<IntegrationId> = chosen
+        .iter()
+        .map(|c| {
+            IntegrationId::new(c.clone())
+                .map_err(|e| CommandError::new(ErrorCode::InvalidInput, e.to_string()))
+        })
+        .collect::<Result<_, _>>()?;
+    let transports = &definition.capabilities.mcp_transports;
+    if let Err(reason) = adapter::mcp_support(definition.id.as_str(), transports) {
+        if chosen.is_empty() {
+            return Ok(McpSelection {
+                attached: Vec::new(),
+                prepared: Vec::new(),
+                skipped: Vec::new(),
+            });
+        }
+        return Err(configure_error(ConfigureError::McpUnsupported {
+            agent: definition.name.clone(),
+            reason,
+        }));
+    }
+    let servers = mcp.servers();
+    let selected = x8ai_mcp::attach(&servers, root, &chosen)
+        .map_err(|e| CommandError::new(ErrorCode::InvalidInput, e.to_string()))?;
+    let mut attached = Vec::new();
+    for server in selected {
+        if transports.contains(&server.transport.kind()) {
+            attached.push(server.clone());
+        } else if chosen.contains(&server.id) {
+            return Err(CommandError::new(
+                ErrorCode::InvalidInput,
+                format!(
+                    "{} cannot use {}: it does not support that transport",
+                    definition.name, server.name
+                ),
+            ));
+        }
+    }
+    let (prepared, skipped) = prepare_all(mcp, &attached, path);
+    Ok(McpSelection {
+        attached: attached.iter().map(|s| s.id.clone()).collect(),
+        prepared,
+        skipped,
+    })
+}
+
+/// The servers another run of a session uses: those it was created with that
+/// still exist, are enabled, and can run. Never one it did not have.
+fn mcp_for_run(
+    mcp: &Mcp,
+    definition: &AgentDefinition,
+    root: &Path,
+    attached: &[IntegrationId],
+    path: Option<&str>,
+) -> McpSelection {
+    let servers = mcp.servers();
+    let (kept, mut skipped) = x8ai_mcp::still_attached(&servers, root, attached);
+    let transports = &definition.capabilities.mcp_transports;
+    let supported = adapter::mcp_support(definition.id.as_str(), transports);
+    let mut usable = Vec::new();
+    for server in kept {
+        match &supported {
+            Err(reason) => skipped.push((server.id.clone(), reason.clone())),
+            Ok(()) if !transports.contains(&server.transport.kind()) => {
+                skipped.push((
+                    server.id.clone(),
+                    "the agent does not support its transport".to_owned(),
+                ));
+            }
+            Ok(()) => usable.push(server.clone()),
+        }
+    }
+    let (prepared, more) = prepare_all(mcp, &usable, path);
+    skipped.extend(more);
+    McpSelection {
+        attached: attached.to_vec(),
+        prepared,
+        skipped,
+    }
+}
+
+/// Each server as it would run; one whose command is not found or whose secret
+/// is not saved is left out, with the reason. Nothing half configured runs.
+fn prepare_all(
+    mcp: &Mcp,
+    servers: &[x8ai_core::mcp::McpServer],
+    path: Option<&str>,
+) -> (Vec<Prepared>, Vec<(IntegrationId, String)>) {
+    let mut prepared = Vec::new();
+    let mut skipped = Vec::new();
+    for server in servers {
+        let missing: Vec<&str> = server
+            .secret_names()
+            .filter(|name| {
+                !mcp.secrets
+                    .contains(&x8ai_mcp::secret_account(server.id.as_str(), name))
+                    .unwrap_or(false)
+            })
+            .collect();
+        if !missing.is_empty() {
+            skipped.push((
+                server.id.clone(),
+                format!("secret not saved: {}", missing.join(", ")),
+            ));
+            continue;
+        }
+        match x8ai_mcp::prepare(server, path) {
+            Ok(p) => prepared.push(p),
+            Err(error) => skipped.push((server.id.clone(), error.to_string())),
+        }
+    }
+    (prepared, skipped)
+}
+
+/// What the approval dialog says about MCP servers: each one's transport, the
+/// exact command or URL, and its variables by name.
+fn describe_servers(agent: &str, servers: &[&Prepared]) -> String {
+    let mut text = String::new();
+    for prepared in servers {
+        let server = &prepared.server;
+        match &prepared.material.transport {
+            MaterialTransport::Stdio { program, args } => {
+                let command = std::iter::once(program.display().to_string())
+                    .chain(args.iter().map(|a| {
+                        if a.contains(char::is_whitespace) || a.is_empty() {
+                            format!("“{a}”")
+                        } else {
+                            a.clone()
+                        }
+                    }))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                text.push_str(&format!(
+                    "• {} (stdio): {command}
+",
+                    server.name
+                ));
+                let variables: Vec<String> = server
+                    .env
+                    .iter()
+                    .map(|v| match v.source {
+                        McpEnvSource::Secret => format!("{} (saved secret)", v.name),
+                        McpEnvSource::Inherit => format!("{} (from your shell)", v.name),
+                    })
+                    .collect();
+                if !variables.is_empty() {
+                    text.push_str(&format!(
+                        "   Variables: {}
+",
+                        variables.join(", ")
+                    ));
+                }
+                text.push_str(&format!(
+                    "   Started by the app when {agent} connects, with no other variables of yours.
+"
+                ));
+            }
+            MaterialTransport::StreamableHttp { url } => {
+                text.push_str(&format!(
+                    "• {} (HTTP): {url}
+   {agent} connects to it directly.
+",
+                    server.name
+                ));
+            }
+        }
+    }
+    text
+}
+
+/// Asks the user, in a native dialog, to allow what is not yet allowed: the
+/// agent's launch (if `agent_needed`), and the MCP servers `servers`. Records
+/// the approvals if the user agrees. Returns whether they did.
+fn ask_approval(
+    window: &WebviewWindow,
+    app: &AppHandle,
+    plan: &LaunchPlan,
+    agent_needed: bool,
+    servers: &[&Prepared],
+) -> Result<bool, CommandError> {
+    let workspaces = app.state::<Workspaces>();
+    let root = plan.workspace.clone();
+    let folder = root.file_name().map_or_else(
+        || root.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let mcp_text = if servers.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "MCP servers for {name}'s sessions here:\n{}\n",
+            describe_servers(&plan.name, servers),
+            name = plan.name
+        )
+    };
+    let (title, message) = if agent_needed {
+        let command = std::iter::once(plan.program.display().to_string())
+            .chain(plan.args.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let model_line = match &plan.configuration {
+            SessionConfiguration::App {
+                provider_name,
+                endpoint,
+                credential,
+                ..
+            } => format!(
+                "Model provider: {provider_name}, at {endpoint}\n{name} will send your code and \
+                 prompts there{key}. The app replaces any provider settings in your shell for these \
+                 sessions.\n\n",
+                name = plan.name,
+                key = match credential {
+                    CredentialState::InKeychain => ", with your saved API key",
+                    _ => "",
+                },
+            ),
+            SessionConfiguration::Agent { .. } => format!(
+                "Model provider: {}'s own configuration (its settings and your shell)\n\n",
+                plan.name
+            ),
+        };
+        (
+            format!("Allow {} to work in “{folder}”?", plan.name),
+            format!(
+                "{name} will work in:\n{root}\n(in a Git worktree of its own for each session, \
+                 when the folder is a Git repository)\n\nProgram: {command}\n{model_line}{mcp_text}{name} \
+                 runs as you, with access to your files, network and credentials, as if you started \
+                 it in a terminal yourself. This allows it in this folder only. You can revoke it in \
+                 the Agents panel.",
+                name = plan.name,
+                root = root.display(),
+            ),
+        )
+    } else {
+        let what = match servers {
+            [one] => format!("the MCP server “{}”", one.server.name),
+            many => format!("{} MCP servers", many.len()),
+        };
+        (
+            format!("Allow {what} in “{folder}”?"),
+            format!(
+                "Workspace: {root}\n\n{mcp_text}MCP servers run as you, with access to your files and \
+                 network. This allows exactly this configuration in this folder only: a change to a \
+                 server's command, arguments, URL or variables asks again.",
+                root = root.display(),
+            ),
+        )
+    };
+    let confirmed = window
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Allow".into(),
+            "Cancel".into(),
+        ))
+        .parent(window)
+        .blocking_show();
+    if !confirmed {
+        return Ok(false);
+    }
+    // The dialog may have been open for a while: approve only if the same
+    // workspace is still open and still trusted.
+    if workspaces.root().as_deref() != Some(root.as_path()) || !workspaces.is_trusted(&root) {
+        return Err(CommandError::new(
+            ErrorCode::Conflict,
+            "the workspace changed while the approval was open; nothing was approved",
+        ));
+    }
+    if agent_needed {
+        workspaces.approve(plan)?;
+    }
+    if !servers.is_empty() {
+        let pairs: Vec<(&str, &x8ai_mcp::Material)> = servers
+            .iter()
+            .map(|p| (p.server.id.as_str(), &p.material))
+            .collect();
+        app.state::<Mcp>()
+            .with_approvals(|a| a.approve(&root, &pairs))?
+            .map_err(crate::mcp::io_error)?;
+    }
+    Ok(true)
+}
+
+/// Whether the MCP servers of `selection` may run in `root`, for a clear error
+/// before anything starts.
+fn check_mcp(app: &AppHandle, root: &Path, selection: &McpSelection) -> Result<(), CommandError> {
+    let mcp = app.state::<Mcp>();
+    let outcome = app
+        .state::<Workspaces>()
+        .with_trust(|trust| {
+            mcp.with_approvals(|approvals| {
+                x8ai_mcp::authorize(root, &selection.prepared, trust, approvals).map(|_| ())
+            })
+        })
+        .ok_or_else(|| CommandError::new(ErrorCode::PermissionDenied, "trust is unavailable"))??;
+    outcome.map_err(mcp_denied)
+}
+
+fn mcp_denied(reason: x8ai_mcp::Denied) -> CommandError {
+    CommandError::new(ErrorCode::PermissionDenied, format!("MCP: {reason}"))
+}
+
 /// The `PATH` of the user's login environment, to look for local providers.
 pub async fn login_path(app: &AppHandle) -> Result<Option<String>, CommandError> {
     let environment = resolved(app, false).await?;
@@ -240,7 +573,12 @@ fn cwd_in(worktree: &Path, repo: &Repository) -> PathBuf {
     }
 }
 
-fn home() -> PathBuf {
+/// The built-in agent definitions.
+pub(crate) fn definitions(app: &AppHandle) -> Vec<AgentDefinition> {
+    app.state::<Agents>().definitions.clone()
+}
+
+pub(crate) fn home() -> PathBuf {
     std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"))
 }
 
@@ -288,6 +626,16 @@ pub async fn agent_list(refresh: bool, app: AppHandle) -> Result<AgentList, Comm
                 description: definition.description.clone(),
                 availability,
                 approved,
+                mcp: {
+                    let support = adapter::mcp_support(
+                        definition.id.as_str(),
+                        &definition.capabilities.mcp_transports,
+                    );
+                    x8ai_core::agent::FeatureSupport {
+                        supported: support.is_ok(),
+                        reason: support.err(),
+                    }
+                },
                 providers: providers
                     .definitions()
                     .iter()
@@ -336,104 +684,111 @@ fn isolation_of(git: Option<&Git>, root: &Path) -> WorkspaceIsolation {
 }
 
 /// Makes sure `agent` may run in the open workspace, with its own configuration
-/// or pointed at `model`: the workspace must be trusted, and if the agent is not
-/// yet approved there (with the executable it would run now, and the provider
-/// and endpoint `model` would use), the user is asked in a native dialog.
-/// Returns whether it is approved now; `false` if the user declined.
+/// or pointed at `model`, and with the MCP servers a new session would get (the
+/// session servers `mcp` among them): the workspace must be trusted, and what is
+/// not yet approved there (the executable it would run now, the provider and
+/// endpoint `model` would use, each MCP server exactly as it would run) is asked
+/// for in one native dialog. Returns whether all is approved now; `false` if the
+/// user declined.
 #[tauri::command]
 pub async fn agent_request_approval(
     agent: String,
     model: Option<ModelSelection>,
+    mcp: Option<Vec<String>>,
     window: WebviewWindow,
     app: AppHandle,
 ) -> Result<bool, CommandError> {
     let environment = resolved(&app, false).await?;
     let task_app = app.clone();
-    let plan = tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let agents = task_app.state::<Agents>();
         let workspaces = task_app.state::<Workspaces>();
         let definition = agents.definition(&agent)?;
         let root = open_root(&workspaces)?;
-        launch_plan(
+        let plan = launch_plan(
             definition,
             &environment,
             &root,
             model.as_ref(),
             &task_app.state::<Providers>(),
-        )
+        )?;
+        let selection = mcp_for_new_session(
+            &task_app.state::<Mcp>(),
+            definition,
+            &root,
+            &mcp.unwrap_or_default(),
+            var(&environment.vars, "PATH"),
+        )?;
+        request_approval(&window, &task_app, &plan, &selection)
     })
     .await
-    .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))??;
+    .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
+}
+
+/// The same for an existing session, before it runs again: what it would run
+/// now (its model, the MCP servers it still has) must be approved. Asks only for
+/// what is not.
+#[tauri::command]
+pub async fn agent_request_session_approval(
+    session: AgentSessionId,
+    window: WebviewWindow,
+    app: AppHandle,
+) -> Result<bool, CommandError> {
+    let environment = resolved(&app, false).await?;
+    let task_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let agents = task_app.state::<Agents>();
+        let workspaces = task_app.state::<Workspaces>();
+        let record = agents
+            .runtime
+            .get(session)
+            .ok_or_else(|| run_error(RunError::NotFound(session)))?;
+        let root = open_root(&workspaces)?;
+        if record.workspace != root {
+            return Err(CommandError::new(
+                ErrorCode::PermissionDenied,
+                "this agent session belongs to another workspace",
+            ));
+        }
+        let definition = agents.definition(record.agent.as_str())?;
+        let plan = launch_plan(
+            definition,
+            &environment,
+            &root,
+            record.model.as_ref(),
+            &task_app.state::<Providers>(),
+        )?;
+        let selection = mcp_for_run(
+            &task_app.state::<Mcp>(),
+            definition,
+            &root,
+            &record.mcp,
+            var(&environment.vars, "PATH"),
+        );
+        request_approval(&window, &task_app, &plan, &selection)
+    })
+    .await
+    .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
+}
+
+fn request_approval(
+    window: &WebviewWindow,
+    app: &AppHandle,
+    plan: &LaunchPlan,
+    selection: &McpSelection,
+) -> Result<bool, CommandError> {
     let workspaces = app.state::<Workspaces>();
-    let root = plan.workspace.clone();
-    if !workspaces.is_trusted(&root) {
-        return Err(denied(Denied::Untrusted(root)));
+    if !workspaces.is_trusted(&plan.workspace) {
+        return Err(denied(Denied::Untrusted(plan.workspace.clone())));
     }
-    if workspaces.is_approved(&plan) {
+    let agent_needed = !workspaces.is_approved(plan);
+    let servers: Vec<&Prepared> = app
+        .state::<Mcp>()
+        .with_approvals(|a| x8ai_mcp::unapproved(&plan.workspace, &selection.prepared, a))?;
+    if !agent_needed && servers.is_empty() {
         return Ok(true);
     }
-
-    let folder = root.file_name().map_or_else(
-        || root.display().to_string(),
-        |n| n.to_string_lossy().into_owned(),
-    );
-    let command = std::iter::once(plan.program.display().to_string())
-        .chain(plan.args.iter().cloned())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let model_line = match &plan.configuration {
-        SessionConfiguration::App {
-            provider_name,
-            endpoint,
-            credential,
-            ..
-        } => format!(
-            "Model provider: {provider_name}, at {endpoint}\n{name} will send your code and \
-             prompts there{key}. The app replaces any provider settings in your shell for these \
-             sessions.\n\n",
-            name = plan.name,
-            key = match credential {
-                CredentialState::InKeychain => ", with your saved API key",
-                _ => "",
-            },
-        ),
-        SessionConfiguration::Agent { .. } => format!(
-            "Model provider: {}'s own configuration (its settings and your shell)\n\n",
-            plan.name
-        ),
-    };
-    let confirmed = window
-        .dialog()
-        .message(format!(
-            "{name} will work in:\n{root}\n(in a Git worktree of its own for each session, \
-             when the folder is a Git repository)\n\nProgram: {command}\n{model_line}{name} \
-             runs as you, with access to your files, network and credentials, as if you started \
-             it in a terminal yourself. This allows it in this folder only. You can revoke it in \
-             the Agents panel.",
-            name = plan.name,
-            root = root.display(),
-        ))
-        .title(format!("Allow {} to work in “{folder}”?", plan.name))
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Allow".into(),
-            "Cancel".into(),
-        ))
-        .parent(&window)
-        .blocking_show();
-    if !confirmed {
-        return Ok(false);
-    }
-    // The dialog may have been open for a while: approve only if the same
-    // workspace is still open and still trusted.
-    if workspaces.root().as_deref() != Some(root.as_path()) || !workspaces.is_trusted(&root) {
-        return Err(CommandError::new(
-            ErrorCode::Conflict,
-            "the workspace changed while the approval was open; nothing was approved",
-        ));
-    }
-    workspaces.approve(&plan)?;
-    Ok(true)
+    ask_approval(window, app, plan, agent_needed, &servers)
 }
 
 /// Forgets `agent`'s approval in the open workspace. Running sessions continue.
@@ -449,14 +804,17 @@ pub fn agent_revoke(
 }
 
 /// Creates a session for `agent` in the open workspace, with the agent's own
-/// configuration or pointed at `model`: in a Git repository, a new worktree on a
-/// new branch from the checked-out commit; otherwise the folder itself, for one
-/// agent at a time. Refused unless the workspace is trusted and the agent
-/// approved there for that provider. The user's working tree is not touched.
+/// configuration or pointed at `model`, and the MCP servers a new session gets
+/// (the session servers `mcp` among them): in a Git repository, a new worktree on
+/// a new branch from the checked-out commit; otherwise the folder itself, for one
+/// agent at a time. Refused unless the workspace is trusted and the agent and its
+/// MCP servers approved there. Nothing runs yet. The user's working tree is not
+/// touched.
 #[tauri::command]
 pub async fn agent_create_session(
     agent: String,
     model: Option<ModelSelection>,
+    mcp: Option<Vec<String>>,
     app: AppHandle,
 ) -> Result<AgentSessionInfo, CommandError> {
     let environment = resolved(&app, false).await?;
@@ -466,15 +824,24 @@ pub async fn agent_create_session(
         let workspaces = task_app.state::<Workspaces>();
         let definition = agents.definition(&agent)?;
         let root = open_root(&workspaces)?;
-        let plan = launch_plan(
+        let mut plan = launch_plan(
             definition,
             &environment,
             &root,
             model.as_ref(),
             &task_app.state::<Providers>(),
         )?;
-        // 1. trust, 2. approval.
+        let selection = mcp_for_new_session(
+            &task_app.state::<Mcp>(),
+            definition,
+            &root,
+            &mcp.unwrap_or_default(),
+            var(&environment.vars, "PATH"),
+        )?;
+        // 1. trust, 2. approval, of the agent and its MCP servers.
         workspaces.authorize(&plan).map_err(denied)?;
+        check_mcp(&task_app, &root, &selection)?;
+        plan.mcp = selection.attached;
         // 3. Git, 4. a worktree of its own.
         let git = git_in(&environment);
         let repo = match &git {
@@ -485,7 +852,7 @@ pub async fn agent_create_session(
             (Some(git), Some(repo)) => {
                 let worktree = agents
                     .isolation
-                    .create(git, &repo, &definition.id, plan.model.as_ref())
+                    .create(git, &repo, &definition.id, plan.model.as_ref(), &plan.mcp)
                     .map_err(isolation_error)?;
                 (cwd_in(&worktree.path, &repo), Some(worktree))
             }
@@ -495,7 +862,10 @@ pub async fn agent_create_session(
             .runtime
             .create(&plan, cwd, worktree)
             .map_err(run_error)?;
-        session_info(&agents.runtime.get(id).expect("just created"))
+        session_info(
+            &agents.runtime.get(id).expect("just created"),
+            &task_app.state::<Mcp>(),
+        )
     })
     .await
     .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
@@ -505,7 +875,10 @@ pub async fn agent_create_session(
 /// session, in the session's own directory, with the session's model. Refused
 /// unless the session belongs to the open workspace, the workspace is trusted,
 /// the agent approved there for the session's provider, and the provider's key
-/// is still saved. Output and exit arrive on `events` as for `terminal_create`.
+/// is still saved. Its MCP servers are the ones it was created with that are
+/// still enabled, each approved as it would run; stdio servers get sockets and
+/// start when the agent connects, and stop when it ends. Output and exit arrive
+/// on `events` as for `terminal_create`.
 #[tauri::command]
 pub async fn agent_run(
     session: AgentSessionId,
@@ -541,24 +914,178 @@ pub async fn agent_run(
             &providers,
         )
         .inspect_err(|error| agents.runtime.fail(session, error.message.clone()))?;
+        let fail = |error: CommandError| {
+            agents.runtime.fail(session, error.message.clone());
+            error
+        };
+        workspaces
+            .authorize(&plan)
+            .map_err(|reason| fail(denied(reason)))?;
+
+        // Its MCP servers, checked the same way, then ready for the agent.
+        let mcp = task_app.state::<Mcp>();
+        let selection = mcp_for_run(
+            &mcp,
+            definition,
+            &root,
+            &record.mcp,
+            var(&environment.vars, "PATH"),
+        );
+        check_mcp(&task_app, &root, &selection).map_err(fail)?;
+        let plan = start_mcp(
+            &task_app,
+            session,
+            &environment,
+            definition,
+            plan,
+            &record.cwd,
+            &selection,
+        )
+        .map_err(fail)?;
         let authorized = workspaces.authorize(&plan).map_err(|reason| {
-            agents.runtime.fail(session, reason.to_string());
-            denied(reason)
+            mcp.stop(session.0);
+            fail(denied(reason))
         })?;
+        let events = Arc::new(AgentEvents {
+            channel: ChannelEvents(events),
+            app: task_app.clone(),
+            session: session.0,
+            mcp_run: mcp.runtime.run_token(session.0),
+        });
         let pty = agents
             .runtime
-            .run(
-                terminals.sessions(),
-                session,
-                authorized,
-                size,
-                Arc::new(ChannelEvents(events)),
-            )
-            .map_err(run_error)?;
+            .run(terminals.sessions(), session, authorized, size, events)
+            .map_err(|error| {
+                mcp.stop(session.0);
+                run_error(error)
+            })?;
+        if let Some(pid) = pty.pid() {
+            mcp.runtime.set_owner(session.0, pid);
+        }
         Ok(info(&pty))
     })
     .await
     .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
+}
+
+/// Prepares the MCP servers of a run: a socket for each stdio server (started
+/// when the agent connects), and the agent configured, through its adapter, to
+/// reach them. Returns the plan with the MCP configuration added.
+fn start_mcp(
+    app: &AppHandle,
+    session: AgentSessionId,
+    environment: &Resolved,
+    definition: &AgentDefinition,
+    plan: LaunchPlan,
+    cwd: &Path,
+    selection: &McpSelection,
+) -> Result<LaunchPlan, CommandError> {
+    let mcp = app.state::<Mcp>();
+    // An earlier run of this session is stopped first, without holding any store.
+    mcp.stop(session.0);
+    let mut launches = Vec::new();
+    for prepared in &selection.prepared {
+        let env = x8ai_mcp::environment(&prepared.server, &environment.vars, mcp.secrets.as_ref())
+            .map_err(|e| CommandError::new(ErrorCode::NotFound, format!("MCP: {e}")))?;
+        launches.extend(Launch::new(prepared, env, cwd.to_owned()));
+    }
+    let endpoints = if launches.is_empty() {
+        Vec::new()
+    } else {
+        let root = plan.workspace.clone();
+        app.state::<Workspaces>()
+            .with_trust(|trust| {
+                mcp.with_approvals(|approvals| {
+                    let authorized =
+                        x8ai_mcp::authorize(&root, &selection.prepared, trust, approvals)
+                            .map_err(mcp_denied)?;
+                    mcp.runtime
+                        .start(session.0, &authorized, launches)
+                        .map_err(|e| CommandError::new(ErrorCode::Internal, format!("MCP: {e}")))
+                })
+            })
+            .ok_or_else(|| {
+                CommandError::new(ErrorCode::PermissionDenied, "trust is unavailable")
+            })???
+    };
+    let bridge = crate::mcp::bridge()?;
+    let servers: Vec<AgentMcpServer> = selection
+        .prepared
+        .iter()
+        .map(|prepared| AgentMcpServer {
+            id: prepared.server.id.clone(),
+            transport: match &prepared.server.transport {
+                McpServerTransport::StreamableHttp { url } => {
+                    AgentMcpTransport::StreamableHttp { url: url.clone() }
+                }
+                McpServerTransport::Stdio { .. } => {
+                    let socket = endpoints
+                        .iter()
+                        .find(|e| e.id == prepared.server.id)
+                        .map(|e| e.socket.display().to_string())
+                        .unwrap_or_default();
+                    AgentMcpTransport::Stdio {
+                        command: bridge.clone(),
+                        args: vec![x8ai_mcp::bridge::FLAG.to_owned(), socket],
+                    }
+                }
+            },
+        })
+        .collect();
+    mcp.record_run(
+        session.0,
+        selection
+            .attached
+            .iter()
+            .map(|id| RunServer {
+                id: id.clone(),
+                transport: selection
+                    .prepared
+                    .iter()
+                    .find(|p| p.server.id == *id)
+                    .map(|p| p.server.transport.kind()),
+                skipped: selection
+                    .skipped
+                    .iter()
+                    .find(|(s, _)| s == id)
+                    .map(|(_, r)| r.clone()),
+            })
+            .collect(),
+    );
+    adapter::attach_mcp(plan, &definition.capabilities.mcp_transports, &servers).map_err(|e| {
+        mcp.stop(session.0);
+        configure_error(e)
+    })
+}
+
+/// A running agent's terminal events, and the end of its MCP servers when it
+/// exits.
+struct AgentEvents {
+    channel: ChannelEvents,
+    app: AppHandle,
+    session: u32,
+    /// The run of MCP servers started with this agent.
+    mcp_run: Option<u64>,
+}
+
+impl SessionEvents for AgentEvents {
+    fn output(&self, bytes: Vec<u8>) {
+        self.channel.output(bytes);
+    }
+
+    fn error(&self, message: String) {
+        self.channel.error(message);
+    }
+
+    fn exited(&self, exit: TerminalExit) {
+        self.channel.exited(exit);
+        // Off the terminal's thread: stopping waits for the servers to exit. Only
+        // this agent's run: a restart may already have started another.
+        if let Some(token) = self.mcp_run {
+            let (app, session) = (self.app.clone(), self.session);
+            std::thread::spawn(move || app.state::<Mcp>().runtime.stop_run(session, token));
+        }
+    }
 }
 
 /// The agent sessions of the open workspace, oldest first, including worktrees
@@ -580,14 +1107,15 @@ pub async fn agent_sessions(app: AppHandle) -> Result<Vec<AgentSessionInfo>, Com
                 &environment.vars,
             )
             .iter()
-            .map(session_info)
+            .map(|s| session_info(s, &task_app.state::<Mcp>()))
             .collect()
     })
     .await
     .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
 }
 
-/// Stops the agent of `session`. Its worktree stays.
+/// Stops the agent of `session`. Its worktree stays. Its MCP servers stop when
+/// it has exited.
 #[tauri::command]
 pub fn agent_stop(
     session: AgentSessionId,
@@ -734,7 +1262,7 @@ fn worktree_of(
     })
 }
 
-fn session_info(session: &AgentSession) -> Result<AgentSessionInfo, CommandError> {
+fn session_info(session: &AgentSession, mcp: &Mcp) -> Result<AgentSessionInfo, CommandError> {
     Ok(AgentSessionInfo {
         id: session.id,
         agent: session.agent.clone(),
@@ -757,6 +1285,11 @@ fn session_info(session: &AgentSession) -> Result<AgentSessionInfo, CommandError
         },
         terminal: session.terminal,
         configuration: session.configuration.clone(),
+        mcp: mcp.session_servers(
+            session.id.0,
+            &session.mcp,
+            session.state == SessionState::Running,
+        ),
     })
 }
 
@@ -789,7 +1322,8 @@ fn configure_error(error: ConfigureError) -> CommandError {
         ConfigureError::MissingCredential(_) => ErrorCode::NotFound,
         ConfigureError::Unsupported { .. }
         | ConfigureError::NoAdapter(_)
-        | ConfigureError::InvalidModel(_) => ErrorCode::InvalidInput,
+        | ConfigureError::InvalidModel(_)
+        | ConfigureError::McpUnsupported { .. } => ErrorCode::InvalidInput,
     };
     CommandError::new(code, error.to_string())
 }

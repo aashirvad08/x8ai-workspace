@@ -16,6 +16,7 @@ const agent: AgentStatus = {
     { provider: "ollama", supported: true, reason: null },
     { provider: "openrouter", supported: true, reason: null },
   ],
+  mcp: { supported: true, reason: null },
 };
 
 function provider(id: string, credential: ProviderStatus["credential"], models: string[]): ProviderStatus {

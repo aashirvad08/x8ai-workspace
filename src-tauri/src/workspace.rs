@@ -26,6 +26,7 @@ use x8ai_workspace::{
 };
 
 use crate::agents::Agents;
+use crate::mcp::Mcp;
 use crate::terminal::Terminals;
 
 /// Quick open lists at most this many files.
@@ -110,6 +111,11 @@ impl Workspaces {
         lock(&self.stores)
             .as_ref()
             .is_some_and(|s| s.trust.is_trusted(root))
+    }
+
+    /// Reads the trust store, for checks made elsewhere (MCP servers).
+    pub(crate) fn with_trust<T>(&self, f: impl FnOnce(&TrustStore) -> T) -> Option<T> {
+        lock(&self.stores).as_ref().map(|s| f(&s.trust))
     }
 
     /// Whether the user approved exactly this agent launch in its workspace.
@@ -313,6 +319,7 @@ pub async fn workspace_set_trust(
     workspaces: State<'_, Workspaces>,
     agents: State<'_, Agents>,
     terminals: State<'_, Terminals>,
+    mcp: State<'_, Mcp>,
 ) -> Result<WorkspaceInfo, CommandError> {
     let workspace = current(&workspaces)?;
     let root = workspace.root().to_owned();
@@ -347,6 +354,7 @@ pub async fn workspace_set_trust(
         }
     })?;
     if !trusted {
+        mcp.revoke_all(&root)?;
         // Nothing keeps running in a folder the user no longer trusts.
         agents.stop_in(&terminals, &root);
     }

@@ -241,9 +241,9 @@ built-in definitions).
   P, model M" into documented variables and flags, with the key from the Keychain
   in that one agent's environment. `EnvValue::Secret` in a definition is still
   refused.
-- **MCP (Phase 7):** `capabilities.mcpTransports` already says which transports an
-  agent supports; an adapter will write the workspace's enabled MCP servers into
-  the agent's own configuration before `start`.
+- **MCP** [built: Phase 7, docs/mcp.md]: the adapter gives the agent its
+  session's MCP servers through its documented per-session mechanism; stdio
+  servers are started by the app when the agent connects, and stop with it.
 - **More agents:** a definition in `builtin.json`, later from the catalog
   (Phase 8), whose approvals pin the definition's hash.
 - **Structured agents:** a second runtime kind for agents with machine interfaces

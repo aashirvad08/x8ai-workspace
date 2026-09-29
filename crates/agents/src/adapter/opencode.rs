@@ -11,13 +11,21 @@
 //! OpenCode provider; it is declared inline as OpenCode's documentation shows
 //! (`@ai-sdk/openai-compatible`, which OpenCode fetches itself on first use).
 //!
+//! MCP servers (opencode.ai/docs/mcp-servers): an `mcp` key in the same inline
+//! configuration, `{name: {"type": "local", "command": [program, args…],
+//! "enabled": true} | {"type": "remote", "url", "enabled": true}}`, merged into
+//! the configuration the session already has (the app's, or the shell's
+//! `OPENCODE_CONFIG_CONTENT`), for this session only.
+//!
 //! Not verified against a running OpenCode yet (docs/models.md).
 
 use serde_json::json;
 use x8ai_core::model::{ModelProviderDefinition, ProviderApi, ProviderEndpoint};
 use x8ai_secrets::SecretValue;
 
-use super::{AgentAdapter, Configuration, endpoint_for};
+use super::{
+    AgentAdapter, AgentMcpServer, AgentMcpTransport, Configuration, McpConfiguration, endpoint_for,
+};
 
 pub struct OpenCode;
 
@@ -126,6 +134,43 @@ impl AgentAdapter for OpenCode {
             env,
             args: Vec::new(),
             endpoint: base,
+        }
+    }
+
+    fn mcp(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn configure_mcp(
+        &self,
+        servers: &[AgentMcpServer],
+        env: &[(String, String)],
+    ) -> McpConfiguration {
+        let current = env
+            .iter()
+            .find(|(n, _)| n == "OPENCODE_CONFIG_CONTENT")
+            .and_then(|(_, v)| serde_json::from_str::<serde_json::Value>(v).ok())
+            .filter(serde_json::Value::is_object);
+        let mut config =
+            current.unwrap_or_else(|| json!({ "$schema": "https://opencode.ai/config.json" }));
+        if !config["mcp"].is_object() {
+            config["mcp"] = json!({});
+        }
+        for server in servers {
+            config["mcp"][server.name()] = match &server.transport {
+                AgentMcpTransport::Stdio { command, args } => {
+                    let mut argv = vec![command.display().to_string()];
+                    argv.extend(args.iter().cloned());
+                    json!({ "type": "local", "command": argv, "enabled": true })
+                }
+                AgentMcpTransport::StreamableHttp { url } => {
+                    json!({ "type": "remote", "url": url, "enabled": true })
+                }
+            };
+        }
+        McpConfiguration {
+            env: vec![("OPENCODE_CONFIG_CONTENT".to_owned(), config.to_string())],
+            args: Vec::new(),
         }
     }
 }

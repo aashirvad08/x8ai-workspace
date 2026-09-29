@@ -2,8 +2,8 @@
 //!
 //! This crate is the only one that knows about Tauri. It owns the window and menu,
 //! registers the IPC commands the webview may call, and holds native state:
-//! terminal sessions, agents, model providers, the open workspace, and the quit
-//! guard. Logic that does not
+//! terminal sessions, agents, model providers, MCP servers, the open workspace,
+//! and the quit guard. Logic that does not
 //! need Tauri belongs in `crates/`.
 
 mod agents;
@@ -11,6 +11,7 @@ mod app;
 mod commands;
 #[cfg(target_os = "macos")]
 mod macos;
+mod mcp;
 mod menu;
 mod providers;
 mod terminal;
@@ -21,6 +22,7 @@ use tauri::{Manager, RunEvent, WindowEvent};
 
 use agents::Agents;
 use app::AppState;
+use mcp::Mcp;
 use providers::Providers;
 use terminal::Terminals;
 use workspace::Workspaces;
@@ -35,6 +37,7 @@ pub fn run() {
         .manage(AppState::default())
         .manage(Agents::default())
         .manage(Providers::default())
+        .manage(Mcp::default())
         .setup(|app| {
             let workspaces = app.state::<Workspaces>();
             match app.path().app_data_dir() {
@@ -42,6 +45,8 @@ pub fn run() {
                     workspaces.load_stores(&data_dir);
                     app.state::<Providers>()
                         .load_settings(&data_dir, &workspaces);
+                    // Loads the registry and approvals; starts no server.
+                    app.state::<Mcp>().load(&data_dir, &workspaces);
                 }
                 // The app still works; it just cannot remember folders or trust.
                 Err(e) => workspaces.warn(format!("Recent folders and trust are unavailable: {e}")),
@@ -75,6 +80,8 @@ pub fn run() {
             if payload.event() == PageLoadEvent::Started {
                 webview.state::<Terminals>().close_all();
                 webview.state::<Agents>().forget_all();
+                let app = webview.app_handle().clone();
+                std::thread::spawn(move || app.state::<Mcp>().stop_all());
                 webview.state::<Workspaces>().close();
                 webview.state::<AppState>().reset();
             }
@@ -87,6 +94,7 @@ pub fn run() {
             app::app_take_warnings,
             agents::agent_list,
             agents::agent_request_approval,
+            agents::agent_request_session_approval,
             agents::agent_revoke,
             agents::agent_create_session,
             agents::agent_run,
@@ -100,6 +108,13 @@ pub fn run() {
             providers::provider_remove_credential,
             providers::provider_add_model,
             providers::provider_remove_model,
+            mcp::mcp_list,
+            mcp::mcp_add,
+            mcp::mcp_update,
+            mcp::mcp_set_enabled,
+            mcp::mcp_remove,
+            mcp::mcp_set_secret,
+            mcp::mcp_remove_secret,
             terminal::terminal_create,
             terminal::terminal_write,
             terminal::terminal_resize,
@@ -128,6 +143,8 @@ pub fn run() {
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 app.state::<Terminals>().shutdown();
+                // Agents are gone; their MCP servers go with them.
+                app.state::<Mcp>().stop_all();
             }
         });
 }

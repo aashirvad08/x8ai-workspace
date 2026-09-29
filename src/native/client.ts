@@ -9,6 +9,9 @@ import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { FileContent } from "../contracts/generated/FileContent";
 import type { FileList } from "../contracts/generated/FileList";
 import type { FileVersion } from "../contracts/generated/FileVersion";
+import type { McpServerInput } from "../contracts/generated/McpServerInput";
+import type { McpServerList } from "../contracts/generated/McpServerList";
+import type { McpServerStatus } from "../contracts/generated/McpServerStatus";
 import type { ModelSelection } from "../contracts/generated/ModelSelection";
 import type { ProviderList } from "../contracts/generated/ProviderList";
 import type { ProviderStatus } from "../contracts/generated/ProviderStatus";
@@ -135,20 +138,24 @@ export interface AgentApi {
   listAgents(refresh: boolean): Promise<AgentList>;
   /**
    * Makes sure the agent may run in the open workspace, with its own model
-   * configuration (`model` null) or pointed at `model`, asking the user in a native
-   * dialog if that is not approved there yet. Fails with `permissionDenied` if the
-   * workspace is not trusted. Resolves to `false` if the user declined.
+   * configuration (`model` null) or pointed at `model`, and with the MCP servers a
+   * new session gets (the session-scoped servers `mcp` among them), asking the user
+   * in one native dialog for what is not approved there yet. Fails with
+   * `permissionDenied` if the workspace is not trusted. Resolves to `false` if the
+   * user declined.
    */
-  requestAgentApproval(agent: string, model: ModelSelection | null): Promise<boolean>;
+  requestAgentApproval(agent: string, model: ModelSelection | null, mcp: readonly string[]): Promise<boolean>;
+  /** The same for an existing session, before it runs again. */
+  requestSessionApproval(session: AgentSessionId): Promise<boolean>;
   /** Forgets the agent's approval in the open workspace. */
   revokeAgentApproval(agent: string): Promise<void>;
   /**
    * A new session for an approved agent in the open workspace (docs/multi-agent.md):
    * a worktree of its own in a Git repository, the folder itself otherwise. The
    * native side decides where; nothing is started yet. The session keeps `model`
-   * (null: the agent's own configuration) for every run.
+   * (null: the agent's own configuration) and its MCP servers for every run.
    */
-  createAgentSession(agent: string, model: ModelSelection | null): Promise<AgentSessionInfo>;
+  createAgentSession(agent: string, model: ModelSelection | null, mcp: readonly string[]): Promise<AgentSessionInfo>;
   /**
    * Runs the session's agent (again) on a new terminal session, driven afterwards
    * like any other with the `TerminalApi` methods.
@@ -182,10 +189,26 @@ export interface ProviderApi {
 }
 
 /**
+ * MCP servers the user configured (docs/mcp.md). A secret goes to the native side
+ * once, to be saved, and is never returned. Nothing here starts or contacts a
+ * server: agent sessions do, after trust and approval.
+ */
+export interface McpApi {
+  listMcpServers(): Promise<McpServerList>;
+  addMcpServer(server: McpServerInput): Promise<McpServerStatus>;
+  updateMcpServer(id: string, server: McpServerInput): Promise<McpServerStatus>;
+  setMcpServerEnabled(id: string, enabled: boolean): Promise<McpServerStatus>;
+  removeMcpServer(id: string): Promise<void>;
+  /** Saves the value of one of the server's secret variables in the macOS Keychain. */
+  setMcpSecret(id: string, name: string, value: string): Promise<McpServerStatus>;
+  removeMcpSecret(id: string, name: string): Promise<McpServerStatus>;
+}
+
+/**
  * Typed access to the native host. Each method maps to one command in
  * `src-tauri/src/`. UI code depends on these interfaces, never on Tauri.
  */
-export interface NativeClient extends AppApi, TerminalApi, WorkspaceApi, AgentApi, ProviderApi {}
+export interface NativeClient extends AppApi, TerminalApi, WorkspaceApi, AgentApi, ProviderApi, McpApi {}
 
 export function createNativeClient({ invoke, createChannel }: NativeBridge): NativeClient {
   // Return values come from the trusted side and are typed by the generated
@@ -246,9 +269,10 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     cancelSearch: () => call<void>("workspace_search_cancel"),
 
     listAgents: (refresh) => call<AgentList>("agent_list", { refresh }),
-    requestAgentApproval: (agent, model) => call<boolean>("agent_request_approval", { agent, model }),
+    requestAgentApproval: (agent, model, mcp) => call<boolean>("agent_request_approval", { agent, model, mcp }),
+    requestSessionApproval: (session) => call<boolean>("agent_request_session_approval", { session }),
     revokeAgentApproval: (agent) => call<void>("agent_revoke", { agent }),
-    createAgentSession: (agent, model) => call<AgentSessionInfo>("agent_create_session", { agent, model }),
+    createAgentSession: (agent, model, mcp) => call<AgentSessionInfo>("agent_create_session", { agent, model, mcp }),
     runAgentSession: (session, size, listener) =>
       call<TerminalInfo>("agent_run", { session, size, events: sessionChannel(listener) }),
     agentSessions: () => call<AgentSessionInfo[]>("agent_sessions"),
@@ -262,6 +286,14 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     removeProviderCredential: (provider) => call<ProviderStatus>("provider_remove_credential", { provider }),
     addProviderModel: (provider, model) => call<ProviderStatus>("provider_add_model", { provider, model }),
     removeProviderModel: (provider, model) => call<ProviderStatus>("provider_remove_model", { provider, model }),
+
+    listMcpServers: () => call<McpServerList>("mcp_list"),
+    addMcpServer: (server) => call<McpServerStatus>("mcp_add", { server }),
+    updateMcpServer: (id, server) => call<McpServerStatus>("mcp_update", { id, server }),
+    setMcpServerEnabled: (id, enabled) => call<McpServerStatus>("mcp_set_enabled", { id, enabled }),
+    removeMcpServer: (id) => call<void>("mcp_remove", { id }),
+    setMcpSecret: (id, name, value) => call<McpServerStatus>("mcp_set_secret", { id, name, value }),
+    removeMcpSecret: (id, name) => call<McpServerStatus>("mcp_remove_secret", { id, name }),
   };
 
   /**

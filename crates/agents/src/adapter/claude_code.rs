@@ -22,11 +22,21 @@
 //!
 //! OpenAI and Google are not supported: Claude Code speaks only the Anthropic
 //! Messages API.
+//!
+//! MCP servers (code.claude.com/docs/en/mcp, /cli-reference): `--mcp-config` with
+//! a JSON string, `{"mcpServers": {name: {"type": "stdio", "command", "args"} |
+//! {"type": "http", "url"}}}`, for this session only. It adds to the user's and
+//! the project's own MCP servers, which stay as they are; `~/.claude.json` is
+//! never written. The JSON holds only the bridge and a socket path, or a URL: no
+//! secret, nothing to expand.
 
+use serde_json::{Map, json};
 use x8ai_core::model::{ModelProviderDefinition, ProviderApi, ProviderEndpoint};
 use x8ai_secrets::SecretValue;
 
-use super::{AgentAdapter, Configuration, endpoint_for};
+use super::{
+    AgentAdapter, AgentMcpServer, AgentMcpTransport, Configuration, McpConfiguration, endpoint_for,
+};
 
 pub struct ClaudeCode;
 
@@ -129,6 +139,34 @@ impl AgentAdapter for ClaudeCode {
             env,
             args: vec!["--model".to_owned(), model.to_owned()],
             endpoint: endpoint.base_url.clone(),
+        }
+    }
+
+    fn mcp(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn configure_mcp(
+        &self,
+        servers: &[AgentMcpServer],
+        _env: &[(String, String)],
+    ) -> McpConfiguration {
+        let mut entries = Map::new();
+        for server in servers {
+            let entry = match &server.transport {
+                AgentMcpTransport::Stdio { command, args } => {
+                    json!({ "type": "stdio", "command": command.display().to_string(), "args": args })
+                }
+                AgentMcpTransport::StreamableHttp { url } => json!({ "type": "http", "url": url }),
+            };
+            entries.insert(server.name(), entry);
+        }
+        McpConfiguration {
+            env: Vec::new(),
+            args: vec![
+                "--mcp-config".to_owned(),
+                json!({ "mcpServers": entries }).to_string(),
+            ],
         }
     }
 }

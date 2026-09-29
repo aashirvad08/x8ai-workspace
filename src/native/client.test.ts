@@ -189,14 +189,14 @@ describe("native client agent commands", () => {
 
   it("passes only ids for sessions, never paths for worktrees", async () => {
     const { calls, client } = bridge();
-    await client.createAgentSession("claude-code", null);
+    await client.createAgentSession("claude-code", null, ["docs"]);
     await client.agentSessions();
     await client.stopAgentSession(3);
     await client.removeAgentSession(3, false);
     await client.agentChanges(3);
     await client.readAgentFile(3, "src/main.rs");
     expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
-      { command: "agent_create_session", args: { agent: "claude-code", model: null } },
+      { command: "agent_create_session", args: { agent: "claude-code", model: null, mcp: ["docs"] } },
       { command: "agent_sessions", args: undefined },
       { command: "agent_stop", args: { session: 3 } },
       { command: "agent_remove", args: { session: 3, discard: false } },
@@ -208,14 +208,16 @@ describe("native client agent commands", () => {
   it("lists, approves and revokes with named arguments", async () => {
     const { calls, client } = bridge();
     await client.listAgents(true);
-    await client.requestAgentApproval("claude-code", { provider: "openrouter", model: "anthropic/claude-sonnet-5" });
+    await client.requestAgentApproval("claude-code", { provider: "openrouter", model: "anthropic/claude-sonnet-5" }, []);
+    await client.requestSessionApproval(4);
     await client.revokeAgentApproval("claude-code");
     expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
       { command: "agent_list", args: { refresh: true } },
       {
         command: "agent_request_approval",
-        args: { agent: "claude-code", model: { provider: "openrouter", model: "anthropic/claude-sonnet-5" } },
+        args: { agent: "claude-code", model: { provider: "openrouter", model: "anthropic/claude-sonnet-5" }, mcp: [] },
       },
+      { command: "agent_request_session_approval", args: { session: 4 } },
       { command: "agent_revoke", args: { agent: "claude-code" } },
     ]);
   });
@@ -237,6 +239,40 @@ describe("native client provider commands", () => {
       { command: "provider_remove_model", args: { provider: "ollama", model: "qwen3-coder:30b" } },
     ]);
     const methods = Object.keys(client).filter((name) => /credential|key|secret/i.test(name));
-    expect(methods.sort()).toEqual(["removeProviderCredential", "setProviderCredential"]);
+    // Secrets can be saved and removed, provider keys and MCP secrets alike; never read.
+    expect(methods.sort()).toEqual(["removeMcpSecret", "removeProviderCredential", "setMcpSecret", "setProviderCredential"]);
+  });
+});
+
+describe("native client MCP commands", () => {
+  it("sends a secret once, to save it, and names servers by id", async () => {
+    const { calls, client } = bridge();
+    const server = {
+      name: "GitHub",
+      description: "",
+      transport: { kind: "stdio" as const, command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] },
+      env: [{ name: "GITHUB_PERSONAL_ACCESS_TOKEN", source: "secret" as const }],
+      enabled: true,
+      scope: "global" as const,
+    };
+    await client.listMcpServers();
+    await client.addMcpServer(server);
+    await client.updateMcpServer("github", server);
+    await client.setMcpServerEnabled("github", false);
+    await client.setMcpSecret("github", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghp_test_invalid");
+    await client.removeMcpSecret("github", "GITHUB_PERSONAL_ACCESS_TOKEN");
+    await client.removeMcpServer("github");
+    expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
+      { command: "mcp_list", args: undefined },
+      { command: "mcp_add", args: { server } },
+      { command: "mcp_update", args: { id: "github", server } },
+      { command: "mcp_set_enabled", args: { id: "github", enabled: false } },
+      { command: "mcp_set_secret", args: { id: "github", name: "GITHUB_PERSONAL_ACCESS_TOKEN", value: "ghp_test_invalid" } },
+      { command: "mcp_remove_secret", args: { id: "github", name: "GITHUB_PERSONAL_ACCESS_TOKEN" } },
+      { command: "mcp_remove", args: { id: "github" } },
+    ]);
+    // Nothing reads a secret back, and nothing starts a server.
+    const methods = Object.keys(client).filter((name) => /mcp/i.test(name));
+    expect(methods.filter((m) => /get|read|start|run|test/i.test(m))).toEqual([]);
   });
 });

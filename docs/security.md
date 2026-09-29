@@ -12,14 +12,14 @@ protection. Do not rely on it.
 
 ---
 
-## 1. What is enforced today (Phases 0–6)
+## 1. What is enforced today (Phases 0–7)
 
 These protections exist and are verified:
 
 | Control | Where | Verified by |
 | --- | --- | --- |
 | Every native command needs an explicit grant to a window. Tauri rejects ungranted calls before the command's code runs. | `src-tauri/build.rs`, `src-tauri/capabilities/` | Manual: revoking the grant yields `Command get_app_info not allowed by ACL` in the UI |
-| The webview's commands are `get_app_info`, `app_*` (quit guard, startup warnings), `terminal_*`, `workspace_*` (files, recent folders, trust, search), `agent_*` and `provider_*` (keys, model ids), each granted explicitly. No shell, fs, HTTP or opener plugins are installed. `tauri-plugin-dialog` is used only from Rust, and none of its webview commands are granted. | `src-tauri/Cargo.toml`, `capabilities/main-window.json` | Code review, `tauri-build` ACL output; `src/architecture.test.ts` checks that the grants are exactly the commands the client calls |
+| The webview's commands are `get_app_info`, `app_*` (quit guard, startup warnings), `terminal_*`, `workspace_*` (files, recent folders, trust, search), `agent_*`, `provider_*` (keys, model ids) and `mcp_*` (MCP servers and their secrets), each granted explicitly. No shell, fs, HTTP or opener plugins are installed. `tauri-plugin-dialog` is used only from Rust, and none of its webview commands are granted. | `src-tauri/Cargo.toml`, `capabilities/main-window.json` | Code review, `tauri-build` ACL output; `src/architecture.test.ts` checks that the grants are exactly the commands the client calls |
 | **The webview cannot choose what a terminal runs, or where.** `terminal_create` always starts the user's login shell, in the open workspace's root or the home directory, and accepts only a size. | `src-tauri/src/terminal.rs` | Code review; manual `pwd` |
 | **The webview cannot name a new folder to open.** A workspace is whatever the user picks in the native folder picker, or a folder from the recent list, which only ever holds folders picked that way. Reopening also requires the path to still lead to the same folder, so replacing it with a symlink does not redirect it. | `src-tauri/src/workspace.rs`, `crates/workspace` | Code review; test `reopening_refuses_a_path_that_now_leads_elsewhere` |
 | **Only the user can trust a folder.** Trust is granted only in a native confirmation dialog the webview cannot answer, applies to exactly one folder (not its parent or subfolders), and is stored outside the folder, so a repository cannot declare itself trusted (ADR 0010). | `src-tauri/src/workspace.rs`, `crates/workspace/src/store.rs` | Store tests (`trust_is_explicit_exact_and_persistent`); code review |
@@ -40,6 +40,9 @@ These protections exist and are verified:
 | **Nothing prints a key.** `SecretValue` has no `Display` or `Serialize` and a redacted `Debug`; `LaunchPlan`, adapter `Configuration` and the PTY `Environment` print variable names only; errors never echo input. | `crates/secrets`, `crates/agents`, `crates/pty` | Tests (`a_secret_is_never_printed`, `a_credential_never_appears_in_debug_output_or_errors`, `an_environment_prints_names_but_never_values`); review of every log line |
 | **The shell cannot redirect an app-configured session, and the two are never mixed.** Every variable the agent's adapter controls is removed before the adapter's are set; Claude Code is told its provider is host-managed, so its settings files cannot change it; OpenCode's endpoint is pinned inline (ADR 0015). | `crates/agents/src/adapter/` | Tests (`claude_code_with_anthropic_uses_the_apps_key_and_nothing_from_the_shell`, …); live test with the real Claude Code |
 | **The destination is approved.** An approval pins the provider and endpoint too; another provider or endpoint asks again; a model or key change does not. Endpoints come only from built-in definitions. Model ids are checked and can never become options. | `crates/workspace/src/store.rs`, `crates/core/src/model.rs` | Tests (`a_new_provider_or_endpoint_needs_approval_and_a_new_model_does_not`, `a_model_id_can_never_become_a_command_line_option`, …) |
+| **An MCP server runs only for an agent session, in a trusted folder, once approved there exactly as it runs.** Approval pins the resolved executable, every argument, the URL, and the variables by name and source; any change asks again. Nothing starts at startup or because a server exists; a stdio server starts when the session's agent connects, and only a process of that agent may connect. | `crates/mcp`, `src-tauri/src/agents.rs` | Tests (`a_server_runs_only_in_a_trusted_workspace_once_approved_there`, `a_changed_command_arguments_endpoint_or_variables_need_a_new_approval`, `a_server_starts_only_when_the_sessions_agent_connects`, `a_connection_from_outside_the_session_starts_nothing`, `only_exactly_what_was_approved_can_be_started`); live test with the real Claude Code |
+| **MCP servers are never run through a shell, and get only their own variables.** A command is one program (absolute or on the login `PATH`, never relative, never a shell); arguments are structured. The environment is a base (`PATH`, `HOME`, locale…), the server's listed inherited variables and its Keychain secrets: no provider key, no other server's secret. | `crates/core/src/mcp.rs`, `crates/mcp/src/environment.rs` | Tests (`a_stdio_command_is_one_program_never_a_command_line`, `a_servers_environment_is_the_base_its_variables_and_nothing_else`); live test (decoy provider keys absent from the server) |
+| **MCP server processes do not outlive their session.** Startup timeout, bounded restarts and error output (redacted); process group killed when the agent ends, the folder loses trust, the page reloads or the app quits; stale sockets swept at startup. | `crates/mcp/src/runtime.rs` | Tests (`stopping_the_session_ends_the_server_and_everything_it_started`, `a_crash_is_reported_redacted_and_restarts_are_bounded`, `a_server_that_never_answers_is_stopped_after_the_startup_timeout`, `sessions_and_servers_are_isolated_and_quitting_leaves_nothing_running`) |
 | **No network access at startup, none to hosted providers.** Ollama is probed on the loopback address only when the user opens Models or refreshes. | `crates/providers/src/ollama.rs`, `src/models/` | Workbench test (`looks for local providers when Models opens, not when Agents opens`); review |
 | **A running program is not ended by accident.** Closing a terminal pane or tab, or quitting, asks first when a program other than the shell is in the terminal's foreground (read from the PTY with `tcgetpgrp`). | `crates/pty`, `src/workbench/workbench.ts` | Tests (`knows_when_a_job_is_in_the_foreground`, workbench tests) |
 | Terminal command arguments are validated in Rust: sizes (1–4096 × 1–2048), session ids (`notFound` otherwise), and raw input only to an existing session | `crates/core/src/terminal.rs`, `crates/pty` | Unit and integration tests |
@@ -136,20 +139,23 @@ weaken it.
 ### 3.3 MCP tools
 
 - **A stdio MCP server is arbitrary local code** with user privileges. Starting one
-  is equivalent to running an installer. **Phase 7:** show the exact command line,
-  the resolved executable path and the secrets passed before first start, then
-  require approval.
+  is equivalent to running an installer. **Enforced (Phase 7):** the approval
+  dialog shows the exact command line, the resolved executable path and the
+  variables passed (by name and source) before first start, and again after any
+  change; servers start only for a session of a trusted folder.
 - **Unpinned versions** (`npx pkg@latest`, `docker … :latest`) let a server change
   under the user. Built-in and catalog definitions must pin versions (the test
   fixtures do). Pin by digest where the ecosystem allows it.
-- **Tool poisoning.** Malicious tool descriptions can instruct the agent. **Phase 7:**
-  show tool lists and descriptions at enable time, and re-prompt when they change.
+- **Tool poisoning.** Malicious tool descriptions can instruct the agent. Showing
+  tool lists at enable time needs the app to act as an MCP client, which Phase 7
+  deliberately does not; **not yet enforced** (deferred with the inspection
+  client).
 - **Rug pulls.** Record a content hash of each approved definition and require
   re-approval when it changes. **Phase 8.**
 - **Remote MCP servers** receive workspace content through tool calls. HTTPS is
-  required for non-loopback hosts (enforced in definition validation). Auth
-  follows the MCP OAuth specification, and tokens are held natively and scoped to
-  one server. **Phase 7.**
+  required for non-loopback hosts, and URLs cannot carry credentials or
+  environment references (enforced in validation, Phase 7). Authentication is the
+  agent's own (OAuth); app-held tokens are **not yet** supported.
 - **Project-scoped MCP configuration in a repository** (for example files that
   agents read automatically) must never be started by the app without workspace
   trust (§3.8).
@@ -268,8 +274,12 @@ tasks or hooks.
   agent also needs the user's approval in that exact workspace (ADR 0012).
   Removing trust removes the folder's approvals and stops its agents. Opening a
   folder still only lists and reads files and, when the user opens a terminal,
-  starts their own login shell there. Next enforcement point: MCP (Phase 7:
-  repository-provided MCP configuration never starts in an untrusted workspace).
+  starts their own login shell there.
+- **Enforced (Phase 7):** MCP servers the app starts need trust and a
+  per-workspace approval of exactly what runs; removing trust removes the
+  folder's MCP approvals and stops its agents' servers. The app never starts
+  repository-provided MCP configuration; a project's `.mcp.json` stays the
+  agent's, behind the agent's own approval, in folders the user trusted.
 - **Agent isolation (Phase 5)** is by working directory: each agent works in its
   own worktree, which prevents accidental interference through normal work. It is
   not a sandbox; an agent running as the user can still write elsewhere.

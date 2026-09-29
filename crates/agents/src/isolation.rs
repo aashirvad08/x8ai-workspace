@@ -65,6 +65,9 @@ pub struct Worktree {
     /// The model chosen for the session it was made for; `None` for the agent's
     /// own configuration. Kept so the session keeps it across restarts.
     pub model: Option<ModelSelection>,
+    /// The MCP servers attached to its session, by id (never their
+    /// configuration or secrets).
+    pub mcp: Vec<IntegrationId>,
 }
 
 /// What removing a worktree kept.
@@ -87,6 +90,9 @@ struct Metadata {
     /// A provider id and a model id: never a credential.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<ModelSelection>,
+    /// MCP server ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    mcp: Vec<IntegrationId>,
 }
 
 const METADATA_VERSION: u32 = 1;
@@ -136,15 +142,16 @@ impl Isolation {
     }
 
     /// Makes a new worktree for `agent` on a new branch, starting from the commit
-    /// the user has checked out, for a session using `model`. The user's working
-    /// tree is not touched; changes they have not committed are not in the
-    /// worktree.
+    /// the user has checked out, for a session using `model` and the MCP servers
+    /// `mcp`. The user's working tree is not touched; changes they have not
+    /// committed are not in the worktree.
     pub fn create(
         &self,
         git: &Git,
         repo: &Repository,
         agent: &IntegrationId,
         model: Option<&ModelSelection>,
+        mcp: &[IntegrationId],
     ) -> Result<Worktree, Error> {
         if model.is_some_and(|m| !is_model_id(&m.model)) {
             return Err(Error::Unsafe("not a model id".into()));
@@ -163,6 +170,7 @@ impl Isolation {
                 base: base.clone(),
                 created: now_ms(),
                 model: model.cloned(),
+                mcp: mcp.to_vec(),
             };
             check_branch(&worktree.branch)?;
             if worktree.path.exists() || git.branch_exists(repo, &worktree.branch)? {
@@ -196,6 +204,7 @@ impl Isolation {
                     base,
                     created: worktree.created,
                     model: worktree.model.clone(),
+                    mcp: worktree.mcp.clone(),
                 },
             )?;
             return Ok(Worktree {
@@ -249,6 +258,7 @@ impl Isolation {
                         base: meta.base,
                         created: meta.created,
                         model: meta.model,
+                        mcp: meta.mcp,
                     })
             })
             .collect();

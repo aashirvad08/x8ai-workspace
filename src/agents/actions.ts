@@ -5,9 +5,10 @@ export interface AgentActions {
   /**
    * Checks trust and approval (asking the user as needed), creates a session and
    * starts the agent in a terminal: with its own model configuration (`model`
-   * null), or pointed at `model`.
+   * null), or pointed at `model`, and with the MCP servers a new session gets
+   * (the session-scoped servers `mcp` among them).
    */
-  launchAgent(id: string, model: ModelSelection | null): void;
+  launchAgent(id: string, model: ModelSelection | null, mcp?: readonly string[]): void;
   /** Forgets the agent's approval in the open workspace. */
   revokeAgent(id: string): void;
   /** Asks the native side to trust the open folder. */

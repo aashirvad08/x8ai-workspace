@@ -2166,6 +2166,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -5023,6 +5024,7 @@ dependencies = [
  "x8ai-agents",
  "x8ai-core",
  "x8ai-git",
+ "x8ai-mcp",
  "x8ai-providers",
  "x8ai-pty",
  "x8ai-secrets",
@@ -5036,6 +5038,23 @@ dependencies = [
  "nix",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "x8ai-mcp"
+version = "0.1.0"
+dependencies = [
+ "nix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "x8ai-agents",
+ "x8ai-core",
+ "x8ai-providers",
+ "x8ai-pty",
+ "x8ai-secrets",
+ "x8ai-workspace",
 ]
 
 [[package]]

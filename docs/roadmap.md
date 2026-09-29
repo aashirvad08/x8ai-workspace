@@ -13,8 +13,8 @@ are part of every phase, not a final pass (`docs/security.md`).
 | 4 | Agent runtime | **Complete** |
 | 5 | Multi-agent workspaces | **Complete** |
 | 6 | Model providers, secrets and local models | **Complete** |
-| 7 | MCP layer | Next |
-| 8 | Catalog | Planned |
+| 7 | MCP layer | **Complete** |
+| 8 | Catalog | Next |
 | 9 | Review and merge | Planned |
 | 10 | Editor intelligence | Planned |
 | 11 | Skills, templates and presets | Planned |
@@ -221,18 +221,43 @@ and endpoint. A Models view and a model choice at launch.
 **Objective.** Let users enable MCP servers per workspace and have every compatible
 agent use them.
 
-**Major components.** An `mcp` crate. Built-in definitions for GitHub, Playwright,
-filesystem and a database server (pinned). Requirement checks. An inspection
-client that runs `initialize` and lists tools. Per-agent MCP config generation.
-Remote MCP with OAuth. The approval flow.
+**Delivered** (docs/mcp.md; ADR 0017).
+- An `x8ai-mcp` crate: a registry of servers the user adds (stdio or Streamable
+  HTTP, variables by name and source, enabled, scope global, workspace or
+  session), secrets in the Keychain, and per-workspace approvals pinning exactly
+  what runs.
+- An environment policy that keeps provider keys and every unlisted variable out
+  of servers.
+- Session-owned stdio processes behind a private socket and a bridge: started
+  when the agent connects, with a startup timeout, bounded restarts and error
+  output, stopped with the agent.
+- MCP adapters for Claude Code (`--mcp-config`) and OpenCode
+  (`OPENCODE_CONFIG_CONTENT`); agents without one are reported unsupported.
+- An MCP tab, launch choices and per-session server state.
 
 **Acceptance criteria.**
-- Enabling a server in a workspace makes it available to every compatible agent
-  through that agent's own configuration mechanism.
-- Before first start, the user sees the exact command line, the resolved path, the
-  secrets passed and the tool list. Changes to any of these require re-approval.
+- Enabling a server makes it available to every compatible agent through that
+  agent's own configuration mechanism, for the session only. **Met**, verified
+  with the real Claude Code.
+- Before first start, the user sees the exact command line, the resolved path and
+  the variables passed (by name), and changes require re-approval. **Met**, except
+  the tool list: showing it needs the app to act as an MCP client, which this
+  phase deliberately does not do (see below).
 - Repository-provided MCP configuration never starts in an untrusted workspace.
-- An ADR decides whether an MCP gateway is needed.
+  **Met**: the app starts only servers the user registered, and agents run only in
+  trusted folders (Phase 4). A project's own `.mcp.json` stays the agent's, with
+  the agent's own approval.
+- An ADR decides whether an MCP gateway is needed. **ADR 0017**: not now.
+
+**Deferred from Phase 7**, deliberately:
+- Built-in and catalog server definitions (GitHub, Playwright, databases):
+  Phase 8, pinned and reviewed.
+- An inspection client (`initialize`, list tools) and a "test" action: they would
+  start servers or contact URLs outside a session; they need their own approval
+  design.
+- App-managed authentication for remote servers (OAuth, header tokens): agents
+  authenticate themselves today.
+- SSE, an MCP gateway, and OS sandboxing of servers (Phase 12).
 
 ## Phase 8 — Catalog
 

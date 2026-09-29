@@ -14,13 +14,23 @@
 //! so the agent sees the app's provider configuration and nothing else; the rest
 //! of the environment is unchanged. When the app configures nothing, the
 //! environment is inherited as it is. The two are never mixed.
+//!
+//! An adapter can also give its agent MCP servers for one session
+//! (docs/mcp.md, ADR 0017): [`attach_mcp`] adds, through the agent's documented
+//! per-session mechanism, where each server is. The app starts stdio servers
+//! itself; the agent is told to run the app's bridge to reach them, so it never
+//! sees their command, their variables or their secrets. An agent whose adapter
+//! does not implement it, or that has no adapter, gets no MCP servers.
 
 mod claude_code;
 mod opencode;
 
 use std::fmt;
+use std::path::PathBuf;
 
 use x8ai_core::agent::SessionConfiguration;
+use x8ai_core::id::IntegrationId;
+use x8ai_core::mcp::McpTransportKind;
 use x8ai_core::model::{
     CredentialState, MODEL_ID_RULE, ModelProviderDefinition, ModelSelection, ProviderAuth,
     ProviderEndpoint, is_model_id,
@@ -72,6 +82,61 @@ pub enum ConfigureError {
     MissingCredential(String),
     #[error("model id {0:?} {MODEL_ID_RULE}")]
     InvalidModel(String),
+    #[error("{agent} cannot use MCP servers from the app: {reason}")]
+    McpUnsupported { agent: String, reason: String },
+}
+
+/// An MCP server as an agent is told about it for one session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentMcpServer {
+    pub id: IntegrationId,
+    pub transport: AgentMcpTransport,
+}
+
+impl AgentMcpServer {
+    /// The name the agent shows it under: prefixed, so it cannot collide with
+    /// servers in the agent's own configuration.
+    pub fn name(&self) -> String {
+        format!("x8ai-{}", self.id)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentMcpTransport {
+    /// The app's bridge to the server's socket: a program and its arguments.
+    /// Never the server's own command.
+    Stdio {
+        command: PathBuf,
+        args: Vec<String>,
+    },
+    StreamableHttp {
+        url: String,
+    },
+}
+
+impl AgentMcpTransport {
+    pub fn kind(&self) -> McpTransportKind {
+        match self {
+            Self::Stdio { .. } => McpTransportKind::Stdio,
+            Self::StreamableHttp { .. } => McpTransportKind::StreamableHttp,
+        }
+    }
+}
+
+/// What an adapter adds so its agent uses a session's MCP servers.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct McpConfiguration {
+    pub env: Vec<(String, String)>,
+    pub args: Vec<String>,
+}
+
+impl fmt::Debug for McpConfiguration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("McpConfiguration")
+            .field("env", &names(&self.env))
+            .field("args", &self.args)
+            .finish()
+    }
 }
 
 /// One agent's knowledge of how it is configured. Every implementation cites the
@@ -97,6 +162,25 @@ pub trait AgentAdapter: Send + Sync {
         model: &str,
         credential: Option<&SecretValue>,
     ) -> Configuration;
+    /// Whether the app can give the agent MCP servers for one session, and why
+    /// not. Unsupported unless the adapter implements it.
+    fn mcp(&self) -> Result<(), String> {
+        Err(
+            "the app does not know a documented way to give it MCP servers for one session"
+                .to_owned(),
+        )
+    }
+    /// The variables and arguments that give the agent `servers` for this session
+    /// only. `env` is the launch's environment so far. Called only when
+    /// [`mcp`](Self::mcp) says it is supported.
+    fn configure_mcp(
+        &self,
+        servers: &[AgentMcpServer],
+        env: &[(String, String)],
+    ) -> McpConfiguration {
+        let _ = (servers, env);
+        McpConfiguration::default()
+    }
 }
 
 static ADAPTERS: [&dyn AgentAdapter; 2] = [&ClaudeCode, &OpenCode];
@@ -129,6 +213,55 @@ pub fn shell_variables(agent: &str, env: &[(String, String)]) -> Vec<String> {
     found.sort();
     found.dedup();
     found
+}
+
+/// Whether the agent (by id, declaring `transports` in its definition) can be
+/// given MCP servers by the app, and why not.
+pub fn mcp_support(agent: &str, transports: &[McpTransportKind]) -> Result<(), String> {
+    let adapter = adapter(agent).ok_or_else(|| {
+        "the app has no adapter for this agent, so it gets no MCP servers from the app".to_owned()
+    })?;
+    if transports.is_empty() {
+        return Err("its definition declares no MCP transports".to_owned());
+    }
+    adapter.mcp()
+}
+
+/// Gives the agent of `plan` these MCP servers, for this launch only, through its
+/// adapter. The agent's own and project MCP configuration are left as they are.
+/// Refused if the agent cannot use them; nothing is added then. `transports`
+/// are the MCP transports the agent's definition declares.
+pub fn attach_mcp(
+    mut plan: LaunchPlan,
+    transports: &[McpTransportKind],
+    servers: &[AgentMcpServer],
+) -> Result<LaunchPlan, ConfigureError> {
+    if servers.is_empty() {
+        return Ok(plan);
+    }
+    let unsupported = |reason: String| ConfigureError::McpUnsupported {
+        agent: plan.name.clone(),
+        reason,
+    };
+    mcp_support(plan.agent.as_str(), transports).map_err(unsupported)?;
+    if let Some(server) = servers
+        .iter()
+        .find(|s| !transports.contains(&s.transport.kind()))
+    {
+        return Err(unsupported(format!(
+            "{} needs a transport it does not support",
+            server.id
+        )));
+    }
+    let adapter = adapter(plan.agent.as_str()).expect("supported");
+    let configuration = adapter.configure_mcp(servers, &plan.env);
+    for (name, value) in configuration.env {
+        plan.env.retain(|(n, _)| *n != name);
+        plan.env.push((name, value));
+    }
+    plan.extra_args.extend(configuration.args);
+    plan.mcp = servers.iter().map(|s| s.id.clone()).collect();
+    Ok(plan)
 }
 
 /// Points `plan` at `model` from `provider`. `credential` is the provider's saved

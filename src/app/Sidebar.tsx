@@ -1,5 +1,6 @@
 import { AgentsView } from "../agents/AgentsView";
 import { useStore } from "../lib/useStore";
+import { McpView } from "../mcp/McpView";
 import { ModelsView } from "../models/ModelsView";
 import type { SidebarView } from "../workbench/layout";
 import type { Workbench } from "../workbench/workbench";
@@ -11,9 +12,10 @@ const VIEWS: readonly { view: SidebarView; label: string; shortcut: string }[] =
   { view: "search", label: "Search", shortcut: "⇧⌘F" },
   { view: "agents", label: "Agents", shortcut: "⇧⌘A" },
   { view: "models", label: "Models", shortcut: "⇧⌘M" },
+  { view: "mcp", label: "MCP", shortcut: "⇧⌘U" },
 ];
 
-/** The left column: the file explorer, search, agents or models, switched by tabs at the top. */
+/** The left column: the file explorer, search, agents, models or MCP servers, switched by tabs at the top. */
 export function Sidebar({ workbench }: { workbench: Workbench }) {
   const { sidebar } = useStore(workbench.layout);
   return (
@@ -31,6 +33,7 @@ export function Sidebar({ workbench }: { workbench: Workbench }) {
               if (view === "search") workbench.showSearch();
               else if (view === "agents") workbench.showAgents();
               else if (view === "models") workbench.showModels();
+              else if (view === "mcp") workbench.showMcp();
               else workbench.layout.showSidebar(view);
             }}
           >
@@ -51,10 +54,16 @@ export function Sidebar({ workbench }: { workbench: Workbench }) {
           <AgentsView
             agents={workbench.agents}
             providers={workbench.providers}
+            mcp={workbench.mcp}
             terminals={workbench.terminals}
             workspace={workbench.workspace}
             actions={workbench}
           />
+        </aside>
+      )}
+      {sidebar === "mcp" && (
+        <aside className="explorer" aria-label="MCP servers">
+          <McpView mcp={workbench.mcp} agents={workbench.agents} workspace={workbench.workspace} actions={workbench} />
         </aside>
       )}
       {sidebar === "models" && (

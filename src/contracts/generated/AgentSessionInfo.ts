@@ -5,6 +5,7 @@ import type { AgentWorktree } from "./AgentWorktree";
 import type { IntegrationId } from "./IntegrationId";
 import type { SessionConfiguration } from "./SessionConfiguration";
 import type { SessionId } from "./SessionId";
+import type { SessionMcpServer } from "./SessionMcpServer";
 
 /**
  * One agent session: where it works and what it is doing.
@@ -30,4 +31,9 @@ startedAt: number, state: AgentSessionState,
 /**
  * The terminal session while the agent runs.
  */
-terminal: SessionId | null, configuration: SessionConfiguration, };
+terminal: SessionId | null, configuration: SessionConfiguration, 
+/**
+ * The MCP servers attached when the session was created, and what each is
+ * doing. Fixed for the session: servers enabled later are not added.
+ */
+mcp: Array<SessionMcpServer>, };

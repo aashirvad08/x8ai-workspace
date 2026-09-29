@@ -24,3 +24,4 @@ NNNN), **Context**, **Decision**, **Consequences**, and **Alternatives considere
 | [0014](0014-secret-storage.md) | Provider credentials in the macOS Keychain, native only | Accepted |
 | [0015](0015-environment-precedence.md) | Environment precedence, and what an approval covers | Accepted |
 | [0016](0016-provider-and-model-configuration.md) | Providers as data, agents configured by adapters | Accepted |
+| [0017](0017-platform-managed-mcp.md) | MCP servers managed by the app, owned by agent sessions | Accepted |
