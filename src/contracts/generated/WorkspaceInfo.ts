@@ -14,6 +14,6 @@ root: string,
 name: string, 
 /**
  * Whether the user has explicitly trusted this folder. New folders are
- * untrusted. See `docs/decisions/0010-workspace-trust.md`.
+ * untrusted. See `docs/decisions/0010-workspace-trust-and-recent-workspaces.md`.
  */
 trusted: boolean, };

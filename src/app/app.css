@@ -490,6 +490,127 @@ kbd {
   color: var(--error);
 }
 
+/* Agents */
+
+.agents {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.agents-banner,
+.agents-note {
+  margin: 0 8px 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.agents-banner p {
+  margin: 0 0 8px;
+}
+
+.agents-banner-warning {
+  background: var(--warning-bg);
+  color: var(--text);
+}
+
+.agents-error {
+  color: var(--error);
+}
+
+.agents-list {
+  margin: 0;
+  padding: 0 8px 16px;
+  list-style: none;
+}
+
+.agent {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+}
+
+.agent + .agent {
+  margin-top: 8px;
+}
+
+.agent-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-name {
+  flex: 1;
+  font-weight: 600;
+}
+
+.agent-status {
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--bg-active);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.agent-status-running,
+.agent-status-starting {
+  background: var(--selection);
+  color: var(--text);
+}
+
+.agent-status-failed {
+  color: var(--error);
+}
+
+.agent-description,
+.agent-path,
+.agent-approval {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.agent-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-code);
+  font-size: 11px;
+}
+
+.agent-path code {
+  font-family: inherit;
+}
+
+.agent-launch {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+.agent-launch:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.link-button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
 /* Search */
 
 .search {

@@ -1,14 +1,17 @@
-import { type KeyboardEvent, type PointerEvent, type RefObject, useRef } from "react";
+import { type KeyboardEvent, type PointerEvent, type RefObject, useMemo, useRef } from "react";
 
 import { useStore } from "../lib/useStore";
-import type { TerminalApi } from "../native";
+import type { AgentApi, TerminalApi } from "../native";
 import type { TerminalActions } from "./actions";
 import { layoutPanes, type PaneLayout, paneKeys, type Rect, type SplitDirection } from "./panes";
-import { type Terminals, tabTitle } from "./terminals";
+import type { SessionNative } from "./session";
+import { type PaneKind, type TerminalPane, type Terminals, tabTitle } from "./terminals";
 import { TerminalView } from "./TerminalView";
 
+type PanelNative = TerminalApi & Pick<AgentApi, "startAgent">;
+
 interface Props {
-  native: TerminalApi;
+  native: PanelNative;
   terminals: Terminals;
   actions: TerminalActions;
   /** Hidden panels keep their sessions running. */
@@ -105,13 +108,13 @@ export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Pr
               aria-label={title}
               onFocus={() => terminals.focusPane(key)}
             >
-              <TerminalView
+              <PaneTerminal
                 native={native}
+                pane={panes.get(key)}
                 visible={tab.key === active}
                 focused={focused}
                 focusRequest={focusRequest}
-                onStart={(info) => terminals.started(key, info)}
-                onEnd={() => terminals.ended(key)}
+                terminals={terminals}
               />
               {split && (
                 <button
@@ -145,6 +148,46 @@ export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Pr
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * A pane's terminal. For an agent pane, the session is started with `agent_start`
+ * for that agent instead of `terminal_create`; everything after that is the same.
+ */
+function PaneTerminal({
+  native,
+  pane,
+  visible,
+  focused,
+  focusRequest,
+  terminals,
+}: {
+  native: PanelNative;
+  pane: TerminalPane | undefined;
+  visible: boolean;
+  focused: boolean;
+  focusRequest: number;
+  terminals: Terminals;
+}) {
+  const kind: PaneKind = pane?.kind ?? { type: "shell" };
+  const agent = kind.type === "agent" ? kind.agent : null;
+  // Stable per pane: a new object would restart the session.
+  const sessionNative = useMemo<SessionNative>(
+    () => (agent === null ? native : { ...native, createTerminal: (size, listener) => native.startAgent(agent, size, listener) }),
+    [native, agent],
+  );
+  if (!pane) return null;
+  return (
+    <TerminalView
+      native={sessionNative}
+      program={kind.type === "agent" ? kind.name : undefined}
+      visible={visible}
+      focused={focused}
+      focusRequest={focusRequest}
+      onStart={(info) => terminals.started(pane.key, info)}
+      onEnd={(ending) => terminals.ended(pane.key, ending)}
+    />
   );
 }
 

@@ -12,7 +12,7 @@ protection. Do not rely on it.
 
 ---
 
-## 1. What is enforced today (Phases 0–3)
+## 1. What is enforced today (Phases 0–4)
 
 These protections exist and are verified:
 
@@ -29,6 +29,10 @@ These protections exist and are verified:
 | **Saves never silently overwrite an external change,** and never leave a half-written file: version-checked, atomic replace, permissions kept | `crates/workspace/src/workspace.rs` | Tests; manual conflict check |
 | **Delete is recoverable.** Entries move to the Trash (NSFileManager, no `osascript`), after a confirmation dialog whose default is Cancel. | `crates/workspace`, `src/workbench/workbench.ts` | Manual |
 | Unsaved changes are not lost on ⌘W, on opening another folder, or on quitting: ⌘Q, closing the window, and on macOS Quit from the Dock, logout and shutdown (ADR 0011). Force Quit, `kill -9`, crashes and power loss cannot be intercepted by any app. | `src/workbench/workbench.ts`, `src-tauri/src/app.rs`, `src-tauri/src/macos.rs` | Unit tests; manual |
+| **No agent runs in an untrusted folder, or without the user's approval for that folder.** `agent_start` takes only an agent id and a size. The program comes from a built-in definition, resolved to an absolute path on the user's login `PATH`; it runs in the open workspace, never through a shell. Trust and the approval (exact agent, executable, arguments and folder) are checked natively on every start, and a start without them does not type-check (`Authorized`). | `crates/agents`, `src-tauri/src/agents.rs` | Tests (`an_untrusted_workspace_blocks_the_launch`, `a_trusted_workspace_without_approval_blocks_the_launch`, `an_approval_for_one_workspace_does_not_cover_another`, `a_different_executable_on_the_path_needs_a_new_approval`) |
+| **Only the user can approve an agent, and only per folder.** Approval is granted in a native dialog showing the folder and the exact command line; stored in the app data directory (0600), never in the project; revocable; removed with the folder's trust. | `crates/workspace/src/store.rs`, `src-tauri/src/agents.rs` | Store tests (`a_project_cannot_approve_agents_for_itself`, …) |
+| **Agents stop when their permission ends:** when their terminal closes, another folder opens, the folder loses trust, or the app quits, with a question first while they run. | `crates/agents/src/runtime.rs`, `src/workbench/workbench.ts` | Tests (`closing_the_agents_terminal_ends_the_agent_and_its_children`, `quitting_the_app_ends_every_agent`, `opening_another_workspace_stops_…`, `removing_trust_can_stop_…`) |
+| **Built-in agents never launch with approval-bypass flags or secrets.** | `crates/agents/src/builtin.json` | Test (`no_builtin_agent_bypasses_its_own_approvals_or_needs_a_secret`) |
 | **A running program is not ended by accident.** Closing a terminal pane or tab, or quitting, asks first when a program other than the shell is in the terminal's foreground (read from the PTY with `tcgetpgrp`). | `crates/pty`, `src/workbench/workbench.ts` | Tests (`knows_when_a_job_is_in_the_foreground`, workbench tests) |
 | Terminal command arguments are validated in Rust: sizes (1–4096 × 1–2048), session ids (`notFound` otherwise), and raw input only to an existing session | `crates/core/src/terminal.rs`, `crates/pty` | Unit and integration tests |
 | No terminal content is persisted. Scrollback (10,000 lines) exists only in webview memory. Native output buffering is bounded by flow control (512 KiB per session). | `src/terminal/TerminalView.tsx`, `crates/pty/src/session.rs` | Tests (`output_pauses_until_acknowledged`) |
@@ -107,8 +111,9 @@ its own approval model. That model is the primary control, and the app must not
 weaken it.
 
 - The app never launches an agent with approval-bypass or "yolo" flags by default.
-  If a user opts in, the choice is per workspace, visible in the UI, and remembered
-  explicitly. **Not yet enforced (Phase 4).**
+  **Enforced (Phase 4)** for the built-in definitions by a test; the approval
+  dialog shows the exact command line. A per-workspace opt-in for such flags does
+  not exist.
 - **Prompt injection** from repository content, web pages or MCP tool results can
   steer an agent. The app cannot solve this. It reduces the impact by giving each
   agent session only the secrets it needs, not placing app-held secrets in the
@@ -186,10 +191,17 @@ weaken it.
 
 ### 3.6 External processes
 
-- **PATH hijacking.** A GUI app's `PATH` differs from the user's shell. Programs are
-  resolved to absolute paths through the user's login environment, and the
-  resolved path is shown at approval. A binary appearing earlier on `PATH` later
-  changes the resolved path, which triggers re-approval. **Phase 4.**
+- **PATH hijacking.** A GUI app's `PATH` differs from the user's shell. Agents are
+  resolved to absolute paths through the user's login environment (absolute `PATH`
+  entries only, so `.` never resolves into a workspace), and the resolved path is
+  shown at approval and recorded with it. A binary appearing earlier on `PATH`
+  later changes the resolved path, which requires approval again. **Enforced
+  (Phase 4).**
+- **Reading the login environment** runs the user's shell startup files once per
+  app run, in the home directory (never a workspace), with no input, a 10 s timeout
+  and process-group kill. This is the user's own configuration, as when they open
+  a terminal. Agents receive that environment, including anything the user's
+  startup files export; the app adds nothing of its own. **Phase 4.**
 - **Orphans and runaway processes.** Every terminal process is a session leader
   tracked in a registry. Close, reload and quit send SIGHUP to it and its
   foreground job, then SIGKILL to its process group after a grace period. Jobs the
@@ -235,12 +247,12 @@ tasks or hooks.
   decision is stored per exact folder, outside the folder, and shown in the status
   bar. The native side answers "is this workspace trusted?" in one place
   (`Workspaces::is_trusted`).
-- **Not yet enforced:** nothing checks trust yet, because nothing runs
-  automatically in any folder. Opening a folder lists and reads files and, when
-  the user opens a terminal, starts their own login shell there. The first
-  enforcement points arrive with the agent runtime (Phase 4: no agent or tool
-  starts in an untrusted workspace) and MCP (Phase 7: repository-provided MCP
-  configuration never starts in an untrusted workspace).
+- **Enforced (Phase 4):** no agent starts in an untrusted workspace, and each
+  agent also needs the user's approval in that exact workspace (ADR 0012).
+  Removing trust removes the folder's approvals and stops its agents. Opening a
+  folder still only lists and reads files and, when the user opens a terminal,
+  starts their own login shell there. Next enforcement point: MCP (Phase 7:
+  repository-provided MCP configuration never starts in an untrusted workspace).
 - **Honest limit:** trust is a statement by the user, not an analysis of the
   folder. It does not make a folder's contents safe, and it does not constrain what
   the user's own shell does there.

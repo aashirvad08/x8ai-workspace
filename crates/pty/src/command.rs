@@ -15,13 +15,30 @@ pub enum Program {
     /// minimal environment. `cwd` defaults to the home directory.
     LoginShell { cwd: Option<PathBuf> },
     /// A specific executable with arguments, never interpreted by a shell. `cwd`
-    /// defaults to the home directory. Used by tests today and by the agent runtime
-    /// in Phase 4.
+    /// defaults to the home directory. Used by the agent runtime and by tests.
     Exec {
         program: PathBuf,
         args: Vec<OsString>,
         cwd: Option<PathBuf>,
+        env: Environment,
     },
+}
+
+/// The environment a program starts with, before the terminal variables every
+/// session gets (`TERM`, `COLORTERM`, `TERM_PROGRAM`, and `LANG` if unset).
+#[derive(Debug, Clone, Default)]
+pub enum Environment {
+    /// The app's own environment.
+    #[default]
+    Inherit,
+    /// Exactly these variables, and nothing from the app's environment.
+    Exactly(Vec<(String, String)>),
+}
+
+/// The user's default shell: `$SHELL` if it is executable, otherwise the shell in
+/// their account record, otherwise `/bin/sh`. The one [`Program::LoginShell`] runs.
+pub fn user_shell() -> String {
+    CommandBuilder::new_default_prog().get_shell()
 }
 
 impl Program {
@@ -36,9 +53,20 @@ impl Program {
                 let shell = cmd.get_shell();
                 (cmd, shell, cwd.clone().unwrap_or_else(home))
             }
-            Self::Exec { program, args, cwd } => {
+            Self::Exec {
+                program,
+                args,
+                cwd,
+                env,
+            } => {
                 let mut cmd = CommandBuilder::new(program);
                 cmd.args(args);
+                if let Environment::Exactly(vars) = env {
+                    cmd.env_clear();
+                    for (name, value) in vars {
+                        cmd.env(name, value);
+                    }
+                }
                 (
                     cmd,
                     program.display().to_string(),

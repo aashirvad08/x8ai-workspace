@@ -4,7 +4,7 @@ import type { SessionId } from "../contracts/generated/SessionId";
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
 import type { TerminalSize } from "../contracts/generated/TerminalSize";
 import type { TerminalListener } from "../native";
-import { type SessionNative, type TerminalScreen, TerminalSession } from "./session";
+import { type SessionEnding, type SessionNative, type TerminalScreen, TerminalSession } from "./session";
 
 /** A screen that renders synchronously and lets the test type into it. */
 class FakeScreen implements TerminalScreen {
@@ -242,5 +242,34 @@ describe("TerminalSession callbacks", () => {
     await settle();
     native.created[0]!.listener.event({ type: "exited", code: 0, signal: null });
     expect(events).toEqual(["start /Users/me", "end"]);
+  });
+});
+
+describe("TerminalSession running an agent", () => {
+  it("names the agent when it ends, and restarts the agent on Enter", async () => {
+    const native = new FakeNative();
+    const screen = new FakeScreen();
+    const endings: SessionEnding[] = [];
+    new TerminalSession(native, screen, { onEnd: (ending) => endings.push(ending) }, { program: "Claude Code" }).start();
+    native.created[0]!.resolve(info(4));
+    await settle();
+
+    native.created[0]!.listener.event({ type: "exited", code: 2, signal: null });
+    expect(endings).toEqual([{ type: "exited", exit: { code: 2, signal: null } }]);
+    expect(screen.text()).toContain("Process exited with code 2, press Enter to restart Claude Code");
+    screen.type("\r");
+    expect(native.created).toHaveLength(2);
+  });
+
+  it("reports why an agent could not start", async () => {
+    const native = new FakeNative();
+    const screen = new FakeScreen();
+    const endings: SessionEnding[] = [];
+    new TerminalSession(native, screen, { onEnd: (ending) => endings.push(ending) }, { program: "Claude Code" }).start();
+    native.created[0]!.reject(new Error("agents run only in folders you trust"));
+    await settle();
+
+    expect(endings).toEqual([{ type: "failed", message: "agents run only in folders you trust" }]);
+    expect(screen.text()).toContain("Could not start Claude Code: agents run only in folders you trust");
   });
 });

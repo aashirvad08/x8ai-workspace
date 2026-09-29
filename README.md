@@ -9,11 +9,11 @@ installable catalog are organized around it. The app hosts and orchestrates thes
 existing tools. It does not implement its own LLM or its own coding agent, and it
 does not privilege any vendor.
 
-> **Status: Phase 3 (workspace sessions).** Open a folder to get a file explorer,
-> workspace search and a code editor above real PTY terminals that start in that
-> folder and split into panes. The app reopens the last folder, remembers recent
-> ones, and records which folders you trust. AI features are not implemented yet.
-> See [docs/roadmap.md](docs/roadmap.md).
+> **Status: Phase 4 (agent runtime).** Open a folder to get a file explorer,
+> workspace search and a code editor above real PTY terminals. Coding agents such
+> as Claude Code run in the folder's terminals once you trust the folder and allow
+> the agent there. The app does not implement an agent or a model. See
+> [docs/roadmap.md](docs/roadmap.md) and [docs/agent-runtime.md](docs/agent-runtime.md).
 
 ## Documentation
 
@@ -21,6 +21,7 @@ does not privilege any vendor.
   future designs
 - [Roadmap](docs/roadmap.md): Phases 0–12 with acceptance criteria
 - [Security](docs/security.md): threat model, risks, and what is enforced today
+- [Agent runtime](docs/agent-runtime.md): how agents are found, approved, started and stopped
 - [Decisions](docs/decisions/): architecture decision records
 
 ## Prerequisites
@@ -48,7 +49,7 @@ does not privilege any vendor.
 
 ⌘O Open Folder · ⌃R Open Recent · ⌘P Go to File · ⇧⌘P All Commands · ⌘N New File ·
 ⌘S Save · ⌥⌘S Save All · ⌘W Close Editor · ⌘B Toggle Sidebar · ⇧⌘E Files ·
-⇧⌘F Search in Folder · ⌘F Find in File · ⌃` Toggle Terminal · ⌃⇧` New Terminal.
+⇧⌘F Search in Folder · ⇧⌘A Agents · ⌘F Find in File · ⌃` Toggle Terminal · ⌃⇧` New Terminal.
 In a terminal: ⌘D Split Right · ⇧⌘D Split Down · ⌘] / ⌘[ Next / Previous Pane ·
 ⌘W Close Pane. In the explorer: arrows, Enter, F2 to rename, ⌘⌫ to move to the
 Trash.
@@ -58,19 +59,21 @@ Trash.
 ```
 crates/core/        x8ai-core — IPC contracts and integration definitions (no Tauri, no I/O)
 crates/pty/         x8ai-pty — PTY sessions: the user's shell, streamed output, lifecycle (no Tauri)
-crates/workspace/   x8ai-workspace — the chosen folder, scoped file operations, search, recent and trust (no Tauri)
+crates/workspace/   x8ai-workspace — the chosen folder, scoped file operations, search, recent, trust, approvals (no Tauri)
+crates/agents/      x8ai-agents — agent definitions, discovery and runtime on PTY sessions (no Tauri)
 src-tauri/          x8ai-desktop — the Tauri host: window, commands, capability grants
 src/app/            UI shell: layout, sidebar, splitters, overlays, shortcuts (React)
 src/workbench/      user actions and coordination; notifications, dialogs, commands
 src/workspace/      file explorer and workspace search
 src/editor/         editor tabs and CodeMirror
 src/terminal/       terminal sessions, tabs, split panes and xterm.js view
+src/agents/         agents view and store
 src/native/         typed client for native commands; the only code that imports Tauri
 src/contracts/      TypeScript types generated from crates/core (do not edit)
 docs/               architecture, roadmap, security, decisions
 ```
 
-Subsystem modules (agents, models, MCP, git and catalog) are added in the phase
+Subsystem modules (models, MCP, git and catalog) are added in the phase
 that implements them. The planned homes are in
 [docs/architecture.md §3](docs/architecture.md#3-repository-map).
 

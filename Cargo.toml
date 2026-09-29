@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/pty", "crates/workspace", "src-tauri"]
+members = ["crates/core", "crates/pty", "crates/workspace", "crates/agents", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,7 @@ publish = false
 x8ai-core = { path = "crates/core" }
 x8ai-pty = { path = "crates/pty" }
 x8ai-workspace = { path = "crates/workspace" }
+x8ai-agents = { path = "crates/agents" }
 
 # Tauri (desktop host). Tauri 3 is alpha; stay on the 2.x stable line.
 tauri = { version = "2.12", features = [] }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-agent-revoke"
+description = "Enables the agent_revoke command without any pre-configured scope."
+commands.allow = ["agent_revoke"]
+
+[[permission]]
+identifier = "deny-agent-revoke"
+description = "Denies the agent_revoke command without any pre-configured scope."
+commands.deny = ["agent_revoke"]

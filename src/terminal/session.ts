@@ -22,12 +22,20 @@ export type SessionNative = Pick<
   "createTerminal" | "writeTerminal" | "resizeTerminal" | "ackTerminal" | "closeTerminal"
 >;
 
+/** How a session ended. */
+export type SessionEnding = { readonly type: "exited"; readonly exit: TerminalExit } | { readonly type: "failed"; readonly message: string };
+
 /** Optional notifications, e.g. for a tab title. */
 export interface SessionCallbacks {
-  /** A shell started (again, after a restart). */
+  /** The program started (again, after a restart). */
   onStart?(info: TerminalInfo): void;
-  /** The shell exited, or could not start. */
-  onEnd?(): void;
+  /** The program exited, or could not start. */
+  onEnd?(ending: SessionEnding): void;
+}
+
+export interface SessionOptions {
+  /** What runs in the session, for messages: an agent's name. The user's shell if unset. */
+  readonly program?: string;
 }
 
 /** One native session: from creation until it exits or is replaced. */
@@ -59,14 +67,16 @@ export class TerminalSession {
   readonly #native: SessionNative;
   readonly #screen: TerminalScreen;
   readonly #callbacks: SessionCallbacks;
+  readonly #program: string | undefined;
   readonly #subscriptions: Disposable[];
   #attempt: Attempt | undefined;
   #disposed = false;
 
-  constructor(native: SessionNative, screen: TerminalScreen, callbacks: SessionCallbacks = {}) {
+  constructor(native: SessionNative, screen: TerminalScreen, callbacks: SessionCallbacks = {}, options: SessionOptions = {}) {
     this.#native = native;
     this.#screen = screen;
     this.#callbacks = callbacks;
+    this.#program = options.program;
     this.#subscriptions = [
       screen.onData((data) => this.#input(data, encoder.encode(data))),
       // Binary data is a string of byte values, used by some mouse reports.
@@ -97,8 +107,8 @@ export class TerminalSession {
       (error: unknown) => {
         if (!this.#isCurrent(attempt)) return;
         attempt.over = true;
-        this.#callbacks.onEnd?.();
-        this.#report("Could not start the shell", error);
+        this.#callbacks.onEnd?.({ type: "failed", message: error instanceof Error ? error.message : String(error) });
+        this.#report(`Could not start ${this.#program ?? "the shell"}`, error);
         this.#notice("press Enter to try again");
       },
     );
@@ -189,10 +199,12 @@ export class TerminalSession {
         break;
       case "exited":
         attempt.over = true;
-        this.#callbacks.onEnd?.();
+        this.#callbacks.onEnd?.({ type: "exited", exit: { code: event.code, signal: event.signal } });
         // The process is gone; closing releases the native session.
         if (attempt.info) this.#close(attempt.info);
-        this.#notice(`${describeExit(event)}, press Enter to start a new shell`);
+        this.#notice(
+          `${describeExit(event)}, press Enter to ${this.#program === undefined ? "start a new shell" : `restart ${this.#program}`}`,
+        );
         break;
       default:
         // Unreachable while the contracts and this switch agree; loud if they drift.

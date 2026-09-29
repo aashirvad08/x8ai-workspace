@@ -2,15 +2,33 @@ import type { SessionId } from "../contracts/generated/SessionId";
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
 import { Store } from "../lib/store";
 import { type PaneTree, pane, paneKeys, removePane, resizeSplit, type SplitDirection, splitPane } from "./panes";
+import type { SessionEnding } from "./session";
+
+/** What runs in a pane: the user's login shell, or an agent started by the native runtime. */
+export type PaneKind = { readonly type: "shell" } | { readonly type: "agent"; readonly agent: string; readonly name: string };
+
+export const SHELL: PaneKind = { type: "shell" };
 
 /** One terminal: a view and the native session it owns. */
 export interface TerminalPane {
   /** Identifies the pane in the UI; the native session changes on restart. */
   readonly key: number;
+  readonly kind: PaneKind;
   readonly title: string;
   readonly running: boolean;
   /** The live native session, while `running`. */
   readonly session: SessionId | null;
+  /** How the last session ended, until a new one starts. */
+  readonly ending: SessionEnding | null;
+}
+
+/** An agent pane's state, as shown to the user. */
+export type AgentRunStatus = "starting" | "running" | "exited" | "failed";
+
+export function agentRunStatus(pane: TerminalPane): AgentRunStatus {
+  if (pane.running) return "running";
+  if (!pane.ending) return "starting";
+  return pane.ending.type === "exited" && pane.ending.exit.code === 0 && !pane.ending.exit.signal ? "exited" : "failed";
 }
 
 /** A terminal tab: one or more panes, split side by side or one above the other. */
@@ -45,13 +63,13 @@ export class Terminals extends Store<TerminalsSnapshot> {
     super({ tabs: [], panes: new Map(), active: null, focusRequest: 0 });
   }
 
-  /** Opens a new tab with one pane. Returns the tab's key. */
-  add(): number {
+  /** Opens a new tab with one pane running `kind`. Returns the tab's key. */
+  add(kind: PaneKind = SHELL): number {
     const tab = this.#nextKey++;
     const first = this.#nextKey++;
     this.update((s) => ({
       tabs: [...s.tabs, { key: tab, tree: pane(first), focused: first }],
-      panes: withPane(s.panes, first),
+      panes: withPane(s.panes, first, kind),
       active: tab,
       focusRequest: s.focusRequest + 1,
     }));
@@ -68,7 +86,8 @@ export class Terminals extends Store<TerminalsSnapshot> {
     const added = this.#nextKey++;
     const id = this.#nextKey++;
     this.#patchTab(tab.key, (t) => ({ ...t, tree: splitPane(t.tree, t.focused, added, direction, id), focused: added }), (s) => ({
-      panes: withPane(s.panes, added),
+      // A split runs the user's shell, whatever the pane next to it runs.
+      panes: withPane(s.panes, added, SHELL),
       focusRequest: s.focusRequest + 1,
     }));
   }
@@ -133,11 +152,23 @@ export class Terminals extends Store<TerminalsSnapshot> {
   }
 
   started(key: number, info: TerminalInfo): void {
-    this.#patchPane(key, { title: titleOf(info), running: true, session: info.id });
+    const kind = this.get().panes.get(key)?.kind;
+    const title = kind?.type === "agent" ? agentTitle(kind.name, info) : titleOf(info);
+    this.#patchPane(key, { title, running: true, session: info.id, ending: null });
   }
 
-  ended(key: number): void {
-    this.#patchPane(key, { running: false, session: null });
+  ended(key: number, ending: SessionEnding): void {
+    this.#patchPane(key, { running: false, session: null, ending });
+  }
+
+  /** Panes running an agent, optionally only one agent. */
+  agentPanes(agent?: string): TerminalPane[] {
+    return [...this.get().panes.values()].filter((p) => p.kind.type === "agent" && (agent === undefined || p.kind.agent === agent));
+  }
+
+  /** Closes every agent pane, e.g. when the workspace they belong to is gone. */
+  closeAgents(): void {
+    for (const pane of this.agentPanes()) this.closePane(pane.key);
   }
 
   activeTab(): TerminalTab | undefined {
@@ -195,13 +226,22 @@ export function tabTitle(tab: TerminalTab, panes: ReadonlyMap<number, TerminalPa
 /** `zsh — project`, from the shell and the directory it started in. */
 export function titleOf({ program, cwd }: TerminalInfo): string {
   const shell = program.slice(program.lastIndexOf("/") + 1);
-  const dir = cwd.slice(cwd.lastIndexOf("/") + 1) || "/";
-  return `${shell} — ${dir}`;
+  return `${shell} — ${dirName(cwd)}`;
 }
 
-function withPane(panes: ReadonlyMap<number, TerminalPane>, key: number): Map<number, TerminalPane> {
+/** `Claude Code — project`. */
+function agentTitle(name: string, { cwd }: TerminalInfo): string {
+  return `${name} — ${dirName(cwd)}`;
+}
+
+function dirName(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1) || "/";
+}
+
+function withPane(panes: ReadonlyMap<number, TerminalPane>, key: number, kind: PaneKind): Map<number, TerminalPane> {
   const next = new Map(panes);
-  next.set(key, { key, title: "Terminal", running: false, session: null });
+  const title = kind.type === "agent" ? kind.name : "Terminal";
+  next.set(key, { key, kind, title, running: false, session: null, ending: null });
   return next;
 }
 

@@ -2,7 +2,8 @@
 //!
 //! The webview cannot name a folder to open. A workspace is either chosen in the
 //! native folder picker, or reopened from the recent list, which holds only
-//! folders previously chosen that way. Trust is granted only through a native
+//! folders previously chosen that way. Opening one stops the agents that were
+//! running in the previous one. Trust is granted only through a native
 //! confirmation dialog, so the webview cannot grant it itself. Every other command
 //! takes workspace paths, which `x8ai-workspace` validates and resolves beneath
 //! the root.
@@ -14,12 +15,18 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tauri::ipc::Channel;
 use tauri::{State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use x8ai_agents::{Authorized, Denied, LaunchPlan};
 use x8ai_core::error::{CommandError, ErrorCode};
 use x8ai_core::workspace::{
     DirEntry, FileContent, FileList, FileVersion, RecentWorkspace, SearchEvent, SearchQuery,
     WorkspaceEvent, WorkspaceInfo,
 };
-use x8ai_workspace::{RecentWorkspaces, Removal, SearchLimits, TrustStore, Watcher, Workspace};
+use x8ai_workspace::{
+    ApprovalStore, RecentWorkspaces, Removal, SearchLimits, TrustStore, Watcher, Workspace,
+};
+
+use crate::agents::Agents;
+use crate::terminal::Terminals;
 
 /// Quick open lists at most this many files.
 const MAX_LISTED_FILES: usize = 50_000;
@@ -45,17 +52,30 @@ struct Open {
 struct Stores {
     recent: RecentWorkspaces,
     trust: TrustStore,
+    approvals: ApprovalStore,
 }
 
 impl Workspaces {
-    /// Loads the recent list and trust from the app's data directory. Problems
-    /// reading them are kept for the frontend to show (`app_take_warnings`).
+    /// Loads the recent list, trust and agent approvals from the app's data
+    /// directory. Problems reading them are kept for the frontend to show
+    /// (`app_take_warnings`).
     pub fn load_stores(&self, data_dir: &Path) {
         let (recent, recent_warning) =
             RecentWorkspaces::load(data_dir.join("recent-workspaces.json"));
         let (trust, trust_warning) = TrustStore::load(data_dir.join("trusted-workspaces.json"));
-        lock(&self.warnings).extend(recent_warning.into_iter().chain(trust_warning));
-        *lock(&self.stores) = Some(Stores { recent, trust });
+        let (approvals, approvals_warning) =
+            ApprovalStore::load(data_dir.join("agent-approvals.json"));
+        lock(&self.warnings).extend(
+            recent_warning
+                .into_iter()
+                .chain(trust_warning)
+                .chain(approvals_warning),
+        );
+        *lock(&self.stores) = Some(Stores {
+            recent,
+            trust,
+            approvals,
+        });
     }
 
     /// Keeps a problem for the frontend to show (`app_take_warnings`).
@@ -86,10 +106,36 @@ impl Workspaces {
     }
 
     /// Whether the user explicitly trusted exactly this folder (ADR 0010).
-    fn is_trusted(&self, root: &Path) -> bool {
+    pub(crate) fn is_trusted(&self, root: &Path) -> bool {
         lock(&self.stores)
             .as_ref()
             .is_some_and(|s| s.trust.is_trusted(root))
+    }
+
+    /// Whether the user approved exactly this agent launch in its workspace.
+    pub(crate) fn is_approved(&self, plan: &LaunchPlan) -> bool {
+        lock(&self.stores)
+            .as_ref()
+            .is_some_and(|s| s.approvals.is_approved(&plan.approval()))
+    }
+
+    /// Allows the launch only if its workspace is trusted and it is approved there
+    /// (`x8ai_agents::authorize`).
+    pub(crate) fn authorize<'a>(&self, plan: &'a LaunchPlan) -> Result<Authorized<'a>, Denied> {
+        let stores = lock(&self.stores);
+        let Some(stores) = stores.as_ref() else {
+            return Err(Denied::Untrusted(plan.workspace.clone()));
+        };
+        x8ai_agents::authorize(plan, &stores.trust, &stores.approvals)
+    }
+
+    /// Records the user's approval of this launch in its workspace.
+    pub(crate) fn approve(&self, plan: &LaunchPlan) -> Result<(), CommandError> {
+        self.with_stores(|s| s.approvals.approve(&plan.approval()))
+    }
+
+    pub(crate) fn revoke(&self, root: &Path, agent: &str) -> Result<(), CommandError> {
+        self.with_stores(|s| s.approvals.revoke(root, agent))
     }
 
     fn with_stores<T>(
@@ -157,6 +203,8 @@ pub async fn workspace_open(
     window: WebviewWindow,
     events: Channel<WorkspaceEvent>,
     workspaces: State<'_, Workspaces>,
+    agents: State<'_, Agents>,
+    terminals: State<'_, Terminals>,
 ) -> Result<Option<WorkspaceInfo>, CommandError> {
     let picked = window
         .dialog()
@@ -171,7 +219,9 @@ pub async fn workspace_open(
         .into_path()
         .map_err(|e| CommandError::new(ErrorCode::InvalidInput, format!("unusable folder: {e}")))?;
     let workspace = blocking(move || Workspace::open(&path)).await?;
-    workspaces.install(workspace, events).map(Some)
+    let info = workspaces.install(workspace, events)?;
+    agents.stop_outside(&terminals, Path::new(&info.root));
+    Ok(Some(info))
 }
 
 /// Reopens a folder from the recent list. Only folders in that list, which the
@@ -182,6 +232,8 @@ pub async fn workspace_open_recent(
     root: String,
     events: Channel<WorkspaceEvent>,
     workspaces: State<'_, Workspaces>,
+    agents: State<'_, Agents>,
+    terminals: State<'_, Terminals>,
 ) -> Result<WorkspaceInfo, CommandError> {
     let path = PathBuf::from(&root);
     if !workspaces.with_stores(|s| Ok(s.recent.contains(&path)))? {
@@ -195,7 +247,11 @@ pub async fn workspace_open_recent(
         .await
         .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?;
     match reopened {
-        Ok(workspace) => workspaces.install(workspace, events),
+        Ok(workspace) => {
+            let info = workspaces.install(workspace, events)?;
+            agents.stop_outside(&terminals, Path::new(&info.root));
+            Ok(info)
+        }
         // Gone, no longer a folder, or now a different folder: not worth keeping.
         Err(
             error @ (x8ai_workspace::Error::NotFound(_)
@@ -239,13 +295,16 @@ pub fn workspace_forget_recent(
 
 /// Trusts or stops trusting the open workspace. Trusting asks for confirmation in
 /// a native dialog, which the webview cannot answer on the user's behalf; removing
-/// trust never needs confirmation. Returns the workspace with its trust as it now
+/// trust never needs confirmation, and also removes the folder's agent approvals
+/// and stops its running agents. Returns the workspace with its trust as it now
 /// is (unchanged if the user declined).
 #[tauri::command]
 pub async fn workspace_set_trust(
     trusted: bool,
     window: WebviewWindow,
     workspaces: State<'_, Workspaces>,
+    agents: State<'_, Agents>,
+    terminals: State<'_, Terminals>,
 ) -> Result<WorkspaceInfo, CommandError> {
     let workspace = current(&workspaces)?;
     let root = workspace.root().to_owned();
@@ -270,7 +329,19 @@ pub async fn workspace_set_trust(
             return Ok(workspace.info(false));
         }
     }
-    workspaces.with_stores(|s| s.trust.set(&root, trusted))?;
+    workspaces.with_stores(|s| {
+        s.trust.set(&root, trusted)?;
+        // Without trust, approvals mean nothing; they are not kept for later.
+        if trusted {
+            Ok(())
+        } else {
+            s.approvals.revoke_all(&root)
+        }
+    })?;
+    if !trusted {
+        // Nothing keeps running in a folder the user no longer trusts.
+        agents.stop_in(&terminals, &root);
+    }
     Ok(workspace.info(workspaces.is_trusted(&root)))
 }
 

@@ -10,6 +10,10 @@
 //! How configuration is injected into each agent (flags, environment variables,
 //! config files) differs per agent and is implemented by per-agent adapters in
 //! Phase 5 and Phase 7. It is deliberately not modelled here yet.
+//!
+//! The second half of this module is the IPC contract of the agent runtime
+//! (`crates/agents`, `docs/agent-runtime.md`): what the webview learns about each
+//! agent. It never contains an environment or anything read from one.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -33,6 +37,30 @@ pub struct AgentDefinition {
     #[serde(default)]
     pub requirements: Vec<Requirement>,
     pub capabilities: AgentCapabilities,
+    /// Operating systems the agent runs on. Empty means every platform.
+    #[serde(default)]
+    pub platforms: Vec<Platform>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum Platform {
+    Macos,
+    Linux,
+}
+
+impl Platform {
+    /// The platform this build runs on, if it is one an agent can declare.
+    pub fn current() -> Option<Self> {
+        if cfg!(target_os = "macos") {
+            Some(Self::Macos)
+        } else if cfg!(target_os = "linux") {
+            Some(Self::Linux)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -49,6 +77,12 @@ pub struct AgentCapabilities {
 }
 
 impl AgentDefinition {
+    /// Whether the agent declares support for the platform this build runs on.
+    pub fn supports_this_platform(&self) -> bool {
+        self.platforms.is_empty()
+            || Platform::current().is_some_and(|p| self.platforms.contains(&p))
+    }
+
     pub fn validate(&self) -> Result<(), DefinitionError> {
         check_name(&self.name)?;
         self.launch.validate("launch")?;
@@ -56,5 +90,91 @@ impl AgentDefinition {
             requirement.validate(&format!("requirements[{i}]"))?;
         }
         Ok(())
+    }
+}
+
+/// What the webview knows about one agent: whether it can run here, and whether it
+/// is approved for the open workspace. Returned by `agent_list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentStatus {
+    pub id: IntegrationId,
+    pub name: String,
+    pub description: String,
+    pub availability: AgentAvailability,
+    /// Approved to run in the open workspace, with the executable it would run
+    /// now. `false` when no workspace is open.
+    pub approved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "state", rename_all = "camelCase")]
+#[ts(export)]
+pub enum AgentAvailability {
+    /// Found: the absolute path that would be started.
+    Installed { executable: String },
+    /// Not found on the user's `PATH`. Nothing is ever installed automatically.
+    NotInstalled { program: String },
+    /// The agent does not run on this operating system.
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentList {
+    pub agents: Vec<AgentStatus>,
+    /// Set when the user's login-shell environment could not be read, so agents
+    /// were looked up with the app's own `PATH` instead. Says why.
+    pub environment_problem: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn definition(platforms: Vec<Platform>) -> AgentDefinition {
+        AgentDefinition {
+            id: IntegrationId::new("fixture-agent").unwrap(),
+            name: "Fixture".into(),
+            description: String::new(),
+            launch: LaunchSpec {
+                program: "fixture".into(),
+                args: vec![],
+                env: vec![],
+            },
+            requirements: vec![],
+            capabilities: AgentCapabilities {
+                model_apis: vec![],
+                mcp_transports: vec![],
+            },
+            platforms,
+        }
+    }
+
+    #[test]
+    fn no_platforms_means_every_platform() {
+        assert!(definition(vec![]).supports_this_platform());
+        let here = Platform::current().unwrap();
+        assert!(definition(vec![here]).supports_this_platform());
+        let elsewhere = if here == Platform::Macos {
+            Platform::Linux
+        } else {
+            Platform::Macos
+        };
+        assert!(!definition(vec![elsewhere]).supports_this_platform());
+    }
+
+    #[test]
+    fn availability_is_tagged_by_state() {
+        let json = serde_json::to_value(AgentAvailability::Installed {
+            executable: "/usr/local/bin/fixture".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "state": "installed", "executable": "/usr/local/bin/fixture" })
+        );
     }
 }

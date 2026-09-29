@@ -1,7 +1,8 @@
+import type { AgentActions } from "../agents/actions";
+import { Agents } from "../agents/agents";
 import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchMatch } from "../contracts/generated/SearchMatch";
-import type { SessionId } from "../contracts/generated/SessionId";
 import type { WorkspaceEvent } from "../contracts/generated/WorkspaceEvent";
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
 import type { EditorActions } from "../editor/actions";
@@ -11,7 +12,7 @@ import { Value } from "../lib/store";
 import { type NativeClient, NativeError } from "../native";
 import type { TerminalActions } from "../terminal/actions";
 import type { SplitDirection } from "../terminal/panes";
-import { Terminals } from "../terminal/terminals";
+import { type TerminalPane, Terminals } from "../terminal/terminals";
 import type { ExplorerActions, SearchActions } from "../workspace/actions";
 import { Explorer } from "../workspace/explorer";
 import { Search } from "../workspace/search";
@@ -27,13 +28,14 @@ import { Picker } from "./picker";
  * action lives here, so components stay presentational and the behaviour is
  * testable without React.
  */
-export class Workbench implements ExplorerActions, EditorActions, TerminalActions, SearchActions {
+export class Workbench implements ExplorerActions, EditorActions, TerminalActions, SearchActions, AgentActions {
   readonly workspace = new Value<WorkspaceInfo | null>(null);
   /** Recently opened folders, most recent first. */
   readonly recent = new Value<readonly RecentWorkspace[]>([]);
   readonly explorer: Explorer;
   readonly editor: EditorStore;
   readonly search: Search;
+  readonly agents: Agents;
   readonly terminals = new Terminals();
   readonly notifications = new Notifications();
   readonly dialogs = new Dialogs();
@@ -51,6 +53,7 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     this.explorer = new Explorer(native);
     this.editor = new EditorStore(native);
     this.search = new Search(native);
+    this.agents = new Agents(native);
     this.editor.subscribe(() => this.#reportUnsaved());
   }
 
@@ -73,6 +76,7 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
   // Workspace
 
   async openFolder(): Promise<void> {
+    if (!(await this.#confirmStopAgents())) return;
     if (!(await this.#confirmDiscard("Opening another folder closes its open files."))) return;
     await this.#open((listener) => this.#native.openWorkspace(listener));
   }
@@ -83,6 +87,7 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
 
   async #openRecent(root: string): Promise<void> {
     if (this.workspace.get()?.root === root) return;
+    if (!(await this.#confirmStopAgents())) return;
     if (!(await this.#confirmDiscard("Opening another folder closes its open files."))) return;
     await this.#open((listener) => this.#native.openRecentWorkspace(root, listener));
   }
@@ -115,7 +120,8 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     if (!trusted) {
       const choice = await this.dialogs.ask({
         title: `Stop trusting “${current.name}”?`,
-        message: "The folder goes back to untrusted. Nothing in it is changed.",
+        message:
+          "The folder goes back to untrusted. Nothing in it is changed. Agents lose their approval for it, and agents running in it stop.",
         buttons: [
           { label: "Remove Trust", value: "untrust", role: "primary" },
           { label: "Cancel", value: "cancel" },
@@ -127,7 +133,11 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     try {
       const info = await this.#native.setWorkspaceTrust(trusted);
       // Only if the same workspace is still open.
-      if (this.workspace.get()?.root === info.root) this.workspace.set(info);
+      if (this.workspace.get()?.root !== info.root) return;
+      this.workspace.set(info);
+      // The native side stopped the folder's agents when trust went.
+      if (!info.trusted) this.terminals.closeAgents();
+      this.#reloadAgents();
     } catch (error) {
       this.notifications.error(`Could not change trust: ${messageOf(error)}`);
     }
@@ -160,8 +170,11 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     this.workspace.set(info);
     this.explorer.reset(true);
     this.search.reset();
-    // A new session starts in the new workspace. Existing ones stay where they are.
+    // Agents belong to the folder they were allowed in; the native side stopped
+    // them. Shells stay where they are, and a new one starts in the new folder.
+    this.terminals.closeAgents();
     this.terminals.add();
+    this.#reloadAgents();
     await this.#refreshRecent();
   }
 
@@ -393,6 +406,7 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
       { id: "view.explorer", title: "Toggle Sidebar", shortcut: { key: "b", meta: true }, run: () => this.layout.toggleExplorer() },
       { id: "view.files", title: "Show File Explorer", shortcut: { key: "e", meta: true, shift: true }, run: () => this.layout.showSidebar("files") },
       { id: "search.show", title: "Search in Folder", shortcut: { key: "f", meta: true, shift: true }, run: () => this.showSearch() },
+      { id: "view.agents", title: "Show Agents", shortcut: { key: "a", meta: true, shift: true }, run: () => this.showAgents() },
       { id: "terminal.toggle", title: "Toggle Terminal", shortcut: { key: "`", ctrl: true }, run: () => this.toggleTerminal() },
       { id: "terminal.new", title: "New Terminal", shortcut: { key: "`", ctrl: true, shift: true }, run: () => this.newTerminal() },
       { id: "terminal.splitRight", title: "Split Terminal Right", shortcut: { key: "d", meta: true }, when: "terminalFocused", run: () => this.splitTerminal("right") },
@@ -423,17 +437,30 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
   }
 
   closeTerminalPane(key: number): void {
-    void this.#closeTerminals(() => this.terminals.closePane(key), this.#sessionsOfPane(key));
+    const pane = this.terminals.get().panes.get(key);
+    void this.#closeTerminals(() => this.terminals.closePane(key), pane ? [pane] : []);
   }
 
   closeTerminalTab(key: number): void {
-    void this.#closeTerminals(() => this.terminals.closeTab(key), this.terminals.liveSessions(key));
+    void this.#closeTerminals(() => this.terminals.closeTab(key), this.#panes(key));
   }
 
-  /** Closes, asking first if that would end a running program. Resolves to whether it closed. */
-  async #closeTerminals(close: () => void, sessions: readonly SessionId[]): Promise<boolean> {
-    const busy = await this.#countBusy(sessions);
-    if (busy > 0) {
+  /** Closes, asking first if that would end a running program or agent. Resolves to whether it closed. */
+  async #closeTerminals(close: () => void, panes: readonly TerminalPane[]): Promise<boolean> {
+    const { agents, programs } = await this.#busy(panes);
+    if (agents.length > 0 && programs === 0) {
+      const choice = await this.dialogs.ask({
+        title: agents.length === 1 ? `Stop ${agents[0]}?` : `Stop ${agents.length} agents?`,
+        message: `Closing ${agents.length === 1 ? "this terminal ends the agent's session" : "these terminals ends their sessions"}.`,
+        buttons: [
+          { label: "Stop", value: "close", role: "destructive" },
+          { label: "Cancel", value: "cancel" },
+        ],
+        cancel: "cancel",
+      });
+      if (choice !== "close") return false;
+    } else if (agents.length + programs > 0) {
+      const busy = agents.length + programs;
       const choice = await this.dialogs.ask({
         title: "End the running program?",
         message:
@@ -452,15 +479,112 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     return true;
   }
 
-  #sessionsOfPane(key: number): SessionId[] {
-    const session = this.terminals.get().panes.get(key)?.session;
-    return session === undefined || session === null ? [] : [session];
+  /** The live panes of one tab, or of every tab. */
+  #panes(tabKey?: number): TerminalPane[] {
+    const { panes } = this.terminals.get();
+    const live = new Set(this.terminals.liveSessions(tabKey));
+    return [...panes.values()].filter((pane) => pane.session !== null && live.has(pane.session));
   }
 
-  /** How many sessions run a program besides their shell. A session that is gone counts as idle. */
-  async #countBusy(sessions: readonly SessionId[]): Promise<number> {
-    const busy = await Promise.all(sessions.map((id) => this.#native.isTerminalBusy(id).catch(() => false)));
-    return busy.filter(Boolean).length;
+  /**
+   * What closing these panes would end: running agents (always worth asking
+   * about), and shells running a program besides the shell itself. A session that
+   * is gone counts as idle.
+   */
+  async #busy(panes: readonly TerminalPane[]): Promise<{ agents: string[]; programs: number }> {
+    const agents = panes.flatMap((pane) => (pane.kind.type === "agent" && pane.running ? [pane.kind.name] : []));
+    const shells = panes.filter((pane) => pane.kind.type === "shell" && pane.session !== null);
+    const busy = await Promise.all(shells.map((pane) => this.#native.isTerminalBusy(pane.session!).catch(() => false)));
+    return { agents, programs: busy.filter(Boolean).length };
+  }
+
+  // Agents
+
+  /** ⇧⌘A: the agents in the sidebar. */
+  showAgents(): void {
+    this.layout.showSidebar("agents");
+    void this.agents.load();
+  }
+
+  refreshAgents(): void {
+    void this.agents.load(true);
+  }
+
+  trustWorkspace(): void {
+    void this.setTrust(true);
+  }
+
+  launchAgent(id: string): void {
+    void this.#launchAgent(id);
+  }
+
+  /**
+   * An agent starts only in a trusted folder, and only once the user allowed it
+   * there. Both are enforced natively; this walks the user through them: trust
+   * first (asked here, granted in a native dialog), then approval (a native
+   * dialog), then a terminal pane that starts the agent.
+   */
+  async #launchAgent(id: string): Promise<void> {
+    const workspace = this.workspace.get();
+    if (!workspace) {
+      this.notifications.info("Open a folder first (⌘O). Agents run in the open folder.");
+      return;
+    }
+    const name = this.agents.find(id)?.name ?? id;
+    if (!workspace.trusted) {
+      const choice = await this.dialogs.ask({
+        title: `“${workspace.name}” is not trusted`,
+        message: `${name} can run only in folders you trust. Trust a folder only if you trust the code in it.`,
+        buttons: [
+          { label: "Trust Folder…", value: "trust", role: "primary" },
+          { label: "Cancel", value: "cancel" },
+        ],
+        cancel: "cancel",
+      });
+      if (choice !== "trust") return;
+      await this.setTrust(true);
+      if (!this.workspace.get()?.trusted) return;
+    }
+    let approved: boolean;
+    try {
+      approved = await this.#native.requestAgentApproval(id);
+    } catch (error) {
+      this.notifications.error(`Could not start ${name}: ${messageOf(error)}`);
+      return;
+    }
+    this.#reloadAgents();
+    if (!approved) return;
+    this.layout.setTerminalVisible(true);
+    this.terminals.add({ type: "agent", agent: id, name });
+  }
+
+  revokeAgent(id: string): void {
+    this.#native
+      .revokeAgentApproval(id)
+      .catch((error: unknown) => this.notifications.error(`Could not revoke the approval: ${messageOf(error)}`))
+      .finally(() => this.#reloadAgents());
+  }
+
+  /** Resolves to whether it is fine to stop the running agents, which belong to the open folder. */
+  async #confirmStopAgents(): Promise<boolean> {
+    const running = this.terminals.agentPanes().filter((pane) => pane.running);
+    if (running.length === 0) return true;
+    const names = [...new Set(running.map((pane) => (pane.kind.type === "agent" ? pane.kind.name : "")))];
+    const choice = await this.dialogs.ask({
+      title: names.length === 1 ? `Stop ${names[0]}?` : `Stop ${running.length} agents?`,
+      message: "Agents run only in the folder they were allowed in. Opening another folder stops them.",
+      buttons: [
+        { label: "Stop and Continue", value: "stop", role: "destructive" },
+        { label: "Cancel", value: "cancel" },
+      ],
+      cancel: "cancel",
+    });
+    return choice === "stop";
+  }
+
+  /** Refreshes the agent list, if it has been shown: its approvals depend on the folder and its trust. */
+  #reloadAgents(): void {
+    if (this.agents.get().agents !== null) void this.agents.load();
   }
 
   // Quitting
@@ -488,13 +612,15 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
       if (choice === "cancel") return;
       if (choice === "save" && !(await this.saveAll())) return;
     }
-    const busy = await this.#countBusy(this.terminals.liveSessions());
+    const { agents, programs } = await this.#busy(this.#panes());
+    const busy = agents.length + programs;
     if (busy > 0) {
+      const what = agents.length === 1 && programs === 0 ? agents[0]! : busy === 1 ? "the running program" : `${busy} running programs`;
       const choice = await this.dialogs.ask({
-        title: busy === 1 ? "Quit and end the running program?" : `Quit and end ${busy} running programs?`,
+        title: agents.length === 1 && programs === 0 ? `Quit and stop ${what}?` : `Quit and end ${what}?`,
         message:
           busy === 1
-            ? "A program is still running in a terminal. Quitting ends it."
+            ? `${agents.length === 1 ? what : "A program"} is still running in a terminal. Quitting ends it.`
             : `Programs are still running in ${busy} terminals. Quitting ends them.`,
         buttons: [
           { label: "Quit", value: "quit", role: "destructive" },

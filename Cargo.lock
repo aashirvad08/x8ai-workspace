@@ -4961,6 +4961,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "x8ai-agents"
+version = "0.1.0"
+dependencies = [
+ "nix",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "x8ai-core",
+ "x8ai-pty",
+ "x8ai-workspace",
+]
+
+[[package]]
 name = "x8ai-core"
 version = "0.1.0"
 dependencies = [
@@ -4980,6 +4993,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "x8ai-agents",
  "x8ai-core",
  "x8ai-pty",
  "x8ai-workspace",

@@ -1,3 +1,4 @@
+import type { AgentList } from "../contracts/generated/AgentList";
 import type { AppEvent } from "../contracts/generated/AppEvent";
 import type { AppInfo } from "../contracts/generated/AppInfo";
 import type { DirEntry } from "../contracts/generated/DirEntry";
@@ -118,10 +119,33 @@ export interface WorkspaceApi {
 }
 
 /**
+ * External coding agents in the open workspace (docs/agent-runtime.md). The
+ * webview names an agent by id; the native side decides what runs, where, and
+ * whether it may.
+ */
+export interface AgentApi {
+  /** Every built-in agent: installed or not, approved for the open workspace or not. */
+  listAgents(refresh: boolean): Promise<AgentList>;
+  /**
+   * Makes sure the agent may run in the open workspace, asking the user in a native
+   * dialog if it is not approved there yet. Fails with `permissionDenied` if the
+   * workspace is not trusted. Resolves to `false` if the user declined.
+   */
+  requestAgentApproval(agent: string): Promise<boolean>;
+  /** Forgets the agent's approval in the open workspace. */
+  revokeAgentApproval(agent: string): Promise<void>;
+  /**
+   * Starts an approved agent in the open workspace on a new terminal session,
+   * driven afterwards like any other with the `TerminalApi` methods.
+   */
+  startAgent(agent: string, size: TerminalSize, listener: TerminalListener): Promise<TerminalInfo>;
+}
+
+/**
  * Typed access to the native host. Each method maps to one command in
  * `src-tauri/src/`. UI code depends on these interfaces, never on Tauri.
  */
-export interface NativeClient extends AppApi, TerminalApi, WorkspaceApi {}
+export interface NativeClient extends AppApi, TerminalApi, WorkspaceApi, AgentApi {}
 
 export function createNativeClient({ invoke, createChannel }: NativeBridge): NativeClient {
   // Return values come from the trusted side and are typed by the generated
@@ -143,18 +167,8 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     quit: () => call<void>("app_quit"),
     takeWarnings: () => call<string[]>("app_take_warnings"),
 
-    createTerminal: (size, listener) => {
-      // One channel carries both: output as raw bytes (an ArrayBuffer) and
-      // lifecycle events as JSON, in the order the native side sent them.
-      const events = createChannel((message) => {
-        if (message instanceof ArrayBuffer) {
-          listener.output(new Uint8Array(message));
-        } else {
-          listener.event(message as TerminalEvent);
-        }
-      });
-      return call<TerminalInfo>("terminal_create", { size, events });
-    },
+    createTerminal: (size, listener) =>
+      call<TerminalInfo>("terminal_create", { size, events: sessionChannel(listener) }),
     // Raw body: bytes reach the PTY exactly as given, without JSON encoding.
     writeTerminal: (id, data) =>
       call<void>("terminal_write", data, { headers: { [SESSION_ID_HEADER]: String(id) } }),
@@ -190,5 +204,25 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
         events: createChannel((message) => listener(message as SearchEvent)),
       }),
     cancelSearch: () => call<void>("workspace_search_cancel"),
+
+    listAgents: (refresh) => call<AgentList>("agent_list", { refresh }),
+    requestAgentApproval: (agent) => call<boolean>("agent_request_approval", { agent }),
+    revokeAgentApproval: (agent) => call<void>("agent_revoke", { agent }),
+    startAgent: (agent, size, listener) =>
+      call<TerminalInfo>("agent_start", { agent, size, events: sessionChannel(listener) }),
   };
+
+  /**
+   * One channel carries a session's output as raw bytes (an ArrayBuffer) and its
+   * lifecycle events as JSON, in the order the native side sent them.
+   */
+  function sessionChannel(listener: TerminalListener): unknown {
+    return createChannel((message) => {
+      if (message instanceof ArrayBuffer) {
+        listener.output(new Uint8Array(message));
+      } else {
+        listener.event(message as TerminalEvent);
+      }
+    });
+  }
 }

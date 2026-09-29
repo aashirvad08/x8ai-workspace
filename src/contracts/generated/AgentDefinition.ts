@@ -2,10 +2,15 @@
 import type { AgentCapabilities } from "./AgentCapabilities";
 import type { IntegrationId } from "./IntegrationId";
 import type { LaunchSpec } from "./LaunchSpec";
+import type { Platform } from "./Platform";
 import type { Requirement } from "./Requirement";
 
 export type AgentDefinition = { id: IntegrationId, name: string, description: string, 
 /**
  * How to start the agent's interactive CLI inside a terminal session.
  */
-launch: LaunchSpec, requirements: Array<Requirement>, capabilities: AgentCapabilities, };
+launch: LaunchSpec, requirements: Array<Requirement>, capabilities: AgentCapabilities, 
+/**
+ * Operating systems the agent runs on. Empty means every platform.
+ */
+platforms: Array<Platform>, };

@@ -3,8 +3,8 @@
 //! This crate is the filesystem boundary for the webview. Everything the editor,
 //! file explorer and search do on disk goes through [`Workspace`], which can reach
 //! only the workspace root and what lies beneath it. It also keeps what is
-//! remembered between launches: recent workspaces and trust ([`RecentWorkspaces`],
-//! [`TrustStore`]). No Tauri dependency.
+//! remembered between launches: recent workspaces, trust and agent approvals
+//! ([`RecentWorkspaces`], [`TrustStore`], [`ApprovalStore`]). No Tauri dependency.
 
 #![forbid(unsafe_code)]
 
@@ -18,6 +18,6 @@ mod workspace;
 
 pub use error::{ConflictReason, Error};
 pub use search::SearchLimits;
-pub use store::{MAX_RECENT, RecentWorkspaces, TrustStore};
+pub use store::{Approval, ApprovalStore, MAX_RECENT, RecentWorkspaces, TrustStore};
 pub use watch::Watcher;
 pub use workspace::{MAX_TEXT_FILE_BYTES, Removal, Workspace};

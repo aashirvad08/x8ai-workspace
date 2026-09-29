@@ -1,10 +1,11 @@
-//! Recent workspaces and trust, persisted across "launches" (reloads from disk).
+//! Recent workspaces, trust and agent approvals, persisted across "launches"
+//! (reloads from disk).
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use x8ai_workspace::{MAX_RECENT, RecentWorkspaces, TrustStore};
+use x8ai_workspace::{Approval, ApprovalStore, MAX_RECENT, RecentWorkspaces, TrustStore};
 
 fn dirs(n: usize) -> (tempfile::TempDir, Vec<PathBuf>) {
     let temp = tempfile::tempdir().unwrap();
@@ -143,4 +144,135 @@ fn trust_is_explicit_exact_and_persistent() {
     reloaded.set(&roots[0], false).unwrap();
     let (revoked, _) = TrustStore::load(file);
     assert!(!revoked.is_trusted(&roots[0]));
+}
+
+fn approval<'a>(root: &'a Path, program: &'a Path, args: &'a [String]) -> Approval<'a> {
+    Approval {
+        root,
+        agent: "claude-code",
+        program,
+        args,
+    }
+}
+
+#[test]
+fn approvals_survive_a_restart_and_apply_to_one_folder_only() {
+    let (temp, roots) = dirs(2);
+    let file = temp.path().join("state/approvals.json");
+    let program = Path::new("/Users/me/.local/bin/claude");
+    let nested = roots[0].join("sub");
+    fs::create_dir(&nested).unwrap();
+
+    let (mut approvals, warning) = ApprovalStore::load(file.clone());
+    assert!(warning.is_none());
+    assert!(!approvals.is_approved(&approval(&roots[0], program, &[])));
+    approvals
+        .approve(&approval(&roots[0], program, &[]))
+        .unwrap();
+
+    let (reloaded, _) = ApprovalStore::load(file.clone());
+    assert!(reloaded.is_approved(&approval(&roots[0], program, &[])));
+    // Another workspace cannot use it, nor a folder inside or around this one.
+    assert!(!reloaded.is_approved(&approval(&roots[1], program, &[])));
+    assert!(!reloaded.is_approved(&approval(&nested, program, &[])));
+    assert!(!reloaded.is_approved(&approval(temp.path(), program, &[])));
+    // Nor another agent.
+    let other = Approval {
+        agent: "opencode",
+        ..approval(&roots[0], program, &[])
+    };
+    assert!(!reloaded.is_approved(&other));
+    assert_eq!(
+        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn an_approval_covers_one_program_and_its_arguments() {
+    let (temp, roots) = dirs(1);
+    let (mut approvals, _) = ApprovalStore::load(temp.path().join("approvals.json"));
+    let program = Path::new("/Users/me/.local/bin/claude");
+    approvals
+        .approve(&approval(&roots[0], program, &[]))
+        .unwrap();
+
+    // A different executable earlier on PATH, or different arguments, is a
+    // different launch that the user has not seen.
+    let impostor = Path::new("/tmp/evil/claude");
+    assert!(!approvals.is_approved(&approval(&roots[0], impostor, &[])));
+    let args = ["--dangerously-skip-permissions".to_owned()];
+    assert!(!approvals.is_approved(&approval(&roots[0], program, &args)));
+
+    // Approving again replaces the earlier approval for that agent.
+    approvals
+        .approve(&approval(&roots[0], impostor, &[]))
+        .unwrap();
+    assert!(!approvals.is_approved(&approval(&roots[0], program, &[])));
+}
+
+#[test]
+fn approvals_can_be_revoked_per_agent_or_per_folder() {
+    let (temp, roots) = dirs(1);
+    let file = temp.path().join("approvals.json");
+    let (mut approvals, _) = ApprovalStore::load(file.clone());
+    let program = Path::new("/usr/local/bin/claude");
+    let opencode = Approval {
+        agent: "opencode",
+        program: Path::new("/usr/local/bin/opencode"),
+        ..approval(&roots[0], program, &[])
+    };
+    approvals
+        .approve(&approval(&roots[0], program, &[]))
+        .unwrap();
+    approvals.approve(&opencode).unwrap();
+
+    approvals.revoke(&roots[0], "claude-code").unwrap();
+    let (reloaded, _) = ApprovalStore::load(file.clone());
+    assert!(!reloaded.is_approved(&approval(&roots[0], program, &[])));
+    assert!(reloaded.is_approved(&opencode));
+
+    let (mut reloaded, _) = ApprovalStore::load(file.clone());
+    reloaded.revoke_all(&roots[0]).unwrap();
+    let (cleared, _) = ApprovalStore::load(file);
+    assert!(!cleared.is_approved(&opencode));
+}
+
+#[test]
+fn a_project_cannot_approve_agents_for_itself() {
+    let (temp, roots) = dirs(1);
+    let program = Path::new("/usr/local/bin/claude");
+    // A repository ships files claiming approval, in every format it might guess.
+    let claim = format!(
+        r#"{{"version":1,"workspaces":[{{"root":"{}","agents":[{{"id":"claude-code","program":"{}","args":[],"at":0}}]}}]}}"#,
+        roots[0].display(),
+        program.display()
+    );
+    for name in [
+        "agent-approvals.json",
+        ".x8ai/agent-approvals.json",
+        ".x8ai.json",
+    ] {
+        let path = roots[0].join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, &claim).unwrap();
+    }
+    // The store lives in the app's data directory, and only reads that file.
+    let (approvals, _) = ApprovalStore::load(temp.path().join("app-data/agent-approvals.json"));
+    assert!(!approvals.is_approved(&approval(&roots[0], program, &[])));
+}
+
+#[test]
+fn a_damaged_approval_file_approves_nothing() {
+    let (temp, roots) = dirs(1);
+    let file = temp.path().join("approvals.json");
+    fs::write(
+        &file,
+        r#"{"version":1,"workspaces":[{"root":"relative","agents":[]}], "#,
+    )
+    .unwrap();
+    let (approvals, warning) = ApprovalStore::load(file.clone());
+    assert!(warning.is_some());
+    assert!(!approvals.is_approved(&approval(&roots[0], Path::new("/bin/sh"), &[])));
+    assert!(file.with_extension("json.corrupt").exists());
 }

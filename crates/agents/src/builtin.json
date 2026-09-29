@@ -1,0 +1,23 @@
+[
+  {
+    "id": "claude-code",
+    "name": "Claude Code",
+    "description": "Anthropic's coding agent for the terminal.",
+    "launch": { "program": "claude" },
+    "requirements": [{ "kind": "executable", "program": "claude" }],
+    "capabilities": { "modelApis": ["anthropicMessages"], "mcpTransports": ["stdio", "streamableHttp"] },
+    "platforms": ["macos", "linux"]
+  },
+  {
+    "id": "opencode",
+    "name": "OpenCode",
+    "description": "Open-source coding agent for the terminal.",
+    "launch": { "program": "opencode" },
+    "requirements": [{ "kind": "executable", "program": "opencode" }],
+    "capabilities": {
+      "modelApis": ["anthropicMessages", "openAiChatCompletions", "openAiResponses", "gemini"],
+      "mcpTransports": ["stdio", "streamableHttp"]
+    },
+    "platforms": ["macos", "linux"]
+  }
+]

@@ -19,3 +19,4 @@ NNNN), **Context**, **Decision**, **Consequences**, and **Alternatives considere
 | [0009](0009-workspace-filesystem-boundary.md) | Workspace filesystem boundary | Accepted |
 | [0010](0010-workspace-trust-and-recent-workspaces.md) | Workspace trust and remembered workspaces | Accepted |
 | [0011](0011-intercepting-system-quit-on-macos.md) | Intercepting Quit from the Dock, logout and shutdown on macOS | Accepted |
+| [0012](0012-agent-runtime.md) | Agent runtime: PTY sessions, the login environment, and per-workspace approval | Accepted |

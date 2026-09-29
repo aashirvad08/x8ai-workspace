@@ -1,6 +1,7 @@
 //! What the app remembers about workspaces between launches: which folders were
-//! opened recently, and which the user trusts. Nothing else. No file names, no
-//! contents, no settings from inside the folder.
+//! opened recently, which the user trusts, and which agents the user allowed to
+//! run in which folder. Nothing else. No file names, no contents, no settings from
+//! inside the folder, and nothing the folder itself can change.
 //!
 //! Each store is a small JSON file in the app's data directory, readable only by
 //! the user (mode 0600), and replaced atomically on every change, so a crash
@@ -13,6 +14,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use x8ai_core::workspace::RecentWorkspace;
 
@@ -46,10 +48,63 @@ struct Entry {
     at: u64,
 }
 
+/// Agents the user allowed to run in a folder (ADR 0012).
+#[derive(Debug)]
+pub struct ApprovalStore {
+    file: PathBuf,
+    entries: Vec<ApprovalEntry>,
+}
+
+/// What an approval covers: one agent, launched as exactly this program with
+/// these arguments, in one folder. A different program found on `PATH` later, or
+/// changed arguments, is not covered and must be approved again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Approval<'a> {
+    pub root: &'a Path,
+    pub agent: &'a str,
+    pub program: &'a Path,
+    pub args: &'a [String],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApprovalEntry {
+    root: PathBuf,
+    agents: Vec<ApprovedAgent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApprovedAgent {
+    id: String,
+    program: PathBuf,
+    args: Vec<String>,
+    /// Milliseconds since the Unix epoch.
+    at: u64,
+}
+
+/// Every store file: a version and one entry per workspace.
 #[derive(Serialize, Deserialize)]
-struct StoreFile {
+struct StoreFile<T> {
     version: u32,
-    workspaces: Vec<Entry>,
+    workspaces: Vec<T>,
+}
+
+/// An entry that belongs to one workspace, identified by its absolute root.
+trait Rooted {
+    fn root(&self) -> &Path;
+}
+
+impl Rooted for Entry {
+    fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+impl Rooted for ApprovalEntry {
+    fn root(&self) -> &Path {
+        &self.root
+    }
 }
 
 const STORE_VERSION: u32 = 1;
@@ -137,11 +192,84 @@ impl TrustStore {
     }
 }
 
+impl ApprovalStore {
+    pub fn load(file: PathBuf) -> (Self, Option<String>) {
+        let (mut entries, warning) = load::<ApprovalEntry>(&file);
+        for entry in &mut entries {
+            entry.agents.retain(|a| a.program.is_absolute());
+        }
+        (Self { file, entries }, warning)
+    }
+
+    /// Whether exactly this launch was approved in exactly this folder.
+    pub fn is_approved(&self, approval: &Approval<'_>) -> bool {
+        self.entries.iter().any(|e| {
+            e.root == approval.root
+                && e.agents.iter().any(|a| {
+                    a.id == approval.agent
+                        && a.program == approval.program
+                        && a.args == approval.args
+                })
+        })
+    }
+
+    /// Records the approval, replacing an earlier one for the same agent in the
+    /// same folder.
+    pub fn approve(&mut self, approval: &Approval<'_>) -> Result<(), Error> {
+        let approved = ApprovedAgent {
+            id: approval.agent.to_owned(),
+            program: approval.program.to_owned(),
+            args: approval.args.to_vec(),
+            at: now(),
+        };
+        match self.entries.iter_mut().find(|e| e.root == approval.root) {
+            Some(entry) => {
+                entry.agents.retain(|a| a.id != approval.agent);
+                entry.agents.push(approved);
+            }
+            None => self.entries.push(ApprovalEntry {
+                root: approval.root.to_owned(),
+                agents: vec![approved],
+            }),
+        }
+        save(&self.file, &self.entries)
+    }
+
+    /// Forgets the agent's approval in this folder.
+    pub fn revoke(&mut self, root: &Path, agent: &str) -> Result<(), Error> {
+        let before = self.count();
+        for entry in &mut self.entries {
+            if entry.root == root {
+                entry.agents.retain(|a| a.id != agent);
+            }
+        }
+        self.entries.retain(|e| !e.agents.is_empty());
+        if self.count() == before {
+            return Ok(());
+        }
+        save(&self.file, &self.entries)
+    }
+
+    /// Forgets every approval in this folder, as when its trust is removed.
+    pub fn revoke_all(&mut self, root: &Path) -> Result<(), Error> {
+        let before = self.entries.len();
+        self.entries.retain(|e| e.root != root);
+        if self.entries.len() == before {
+            return Ok(());
+        }
+        save(&self.file, &self.entries)
+    }
+
+    fn count(&self) -> usize {
+        self.entries.iter().map(|e| e.agents.len()).sum()
+    }
+}
+
 /// Reads a store. A missing file is empty. A damaged or unexpected one is moved
 /// aside to `<name>.corrupt` (so nothing is silently destroyed) and treated as
 /// empty; the returned warning says so. Entries that are not absolute paths are
 /// dropped.
-fn load(file: &Path) -> (Vec<Entry>, Option<String>) {
+fn load<T: DeserializeOwned + Rooted>(file: &Path) -> (Vec<T>, Option<String>) {
     let parsed = match fs::metadata(file) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), None),
         Err(e) => Err(e.to_string()),
@@ -151,7 +279,7 @@ fn load(file: &Path) -> (Vec<Entry>, Option<String>) {
         Ok(_) => fs::read(file)
             .map_err(|e| e.to_string())
             .and_then(|bytes| {
-                serde_json::from_slice::<StoreFile>(&bytes).map_err(|e| e.to_string())
+                serde_json::from_slice::<StoreFile<T>>(&bytes).map_err(|e| e.to_string())
             })
             .and_then(|store| {
                 if store.version == STORE_VERSION {
@@ -163,7 +291,7 @@ fn load(file: &Path) -> (Vec<Entry>, Option<String>) {
     };
     match parsed {
         Ok(mut entries) => {
-            entries.retain(|e| e.root.is_absolute());
+            entries.retain(|e| e.root().is_absolute());
             (entries, None)
         }
         Err(reason) => {
@@ -183,7 +311,7 @@ fn load(file: &Path) -> (Vec<Entry>, Option<String>) {
     }
 }
 
-fn save(file: &Path, entries: &[Entry]) -> Result<(), Error> {
+fn save<T: Serialize + Clone>(file: &Path, entries: &[T]) -> Result<(), Error> {
     let shown = file.display().to_string();
     let io = |e: std::io::Error| Error::io(&shown, e);
     let json = serde_json::to_vec_pretty(&StoreFile {

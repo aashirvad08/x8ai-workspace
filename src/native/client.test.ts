@@ -168,3 +168,34 @@ describe("native client workspace commands", () => {
     ]);
   });
 });
+
+describe("native client agent commands", () => {
+  it("starts an agent with a session channel and names it by id only", async () => {
+    const created: TerminalInfo = { id: 9, program: "/Users/me/.local/bin/claude", cwd: "/Users/me/project", ackBytes: 65536 };
+    const { calls, channels, client } = bridge(() => created);
+    const output: Uint8Array[] = [];
+
+    await expect(
+      client.startAgent("claude-code", { cols: 80, rows: 24 }, { output: (d) => output.push(d), event: () => {} }),
+    ).resolves.toEqual(created);
+    channels[0]!(new Uint8Array([1, 2]).buffer);
+
+    expect(calls[0]).toMatchObject({
+      command: "agent_start",
+      args: { agent: "claude-code", size: { cols: 80, rows: 24 }, events: { channel: 1 } },
+    });
+    expect(output).toEqual([new Uint8Array([1, 2])]);
+  });
+
+  it("lists, approves and revokes with named arguments", async () => {
+    const { calls, client } = bridge();
+    await client.listAgents(true);
+    await client.requestAgentApproval("claude-code");
+    await client.revokeAgentApproval("claude-code");
+    expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
+      { command: "agent_list", args: { refresh: true } },
+      { command: "agent_request_approval", args: { agent: "claude-code" } },
+      { command: "agent_revoke", args: { agent: "claude-code" } },
+    ]);
+  });
+});

@@ -9,7 +9,8 @@ use nix::sys::signal::kill;
 use nix::unistd::Pid;
 use x8ai_core::terminal::{TerminalExit, TerminalSize};
 use x8ai_pty::{
-    ACK_BYTES, Error, FLOW_WINDOW, KILL_GRACE, Program, Session, SessionEvents, Sessions,
+    ACK_BYTES, Environment, Error, FLOW_WINDOW, KILL_GRACE, Program, Session, SessionEvents,
+    Sessions,
 };
 
 const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
@@ -97,6 +98,7 @@ fn exec(program: &str, args: &[&str]) -> Program {
         program: PathBuf::from(program),
         args: args.iter().map(Into::into).collect(),
         cwd: None,
+        env: Environment::Inherit,
     }
 }
 
@@ -509,4 +511,25 @@ fn knows_when_a_job_is_in_the_foreground() {
     type_line(&session, "echo back-$((2 + 2))");
     recorder.wait_for_output("back-4");
     assert!(!session.has_foreground_job());
+}
+
+#[test]
+fn an_exact_environment_replaces_the_apps() {
+    let program = Program::Exec {
+        program: PathBuf::from("/bin/sh"),
+        args: vec![
+            "-c".into(),
+            "echo \"[$ONLY_THIS|${HOME:-no home}|$TERM]\"".into(),
+        ],
+        cwd: None,
+        env: Environment::Exactly(vec![("ONLY_THIS".into(), "yes".into())]),
+    };
+    let (_session, recorder) = start(&program);
+    recorder.wait_for_exit();
+    // The app's HOME is gone; the terminal variables are still set.
+    assert!(
+        recorder.output().contains("[yes|no home|xterm-256color]"),
+        "{:?}",
+        recorder.output()
+    );
 }

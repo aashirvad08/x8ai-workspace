@@ -6,12 +6,14 @@ import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
 
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
-import type { TerminalApi } from "../native";
-import { TerminalSession } from "./session";
+import { type SessionEnding, type SessionNative, TerminalSession } from "./session";
 import { terminalTheme } from "./theme";
 
 interface Props {
-  native: TerminalApi;
+  /** Starts the session (a shell, or an agent) and drives it. Must be stable. */
+  native: SessionNative;
+  /** An agent's name, for messages; the user's shell if unset. */
+  program?: string | undefined;
   /** Hidden views (in other tabs) keep running. */
   visible: boolean;
   /** The pane that should have keyboard focus in its tab. */
@@ -19,14 +21,14 @@ interface Props {
   /** Focuses the terminal when this changes while it is visible and focused. */
   focusRequest: number;
   onStart?: (info: TerminalInfo) => void;
-  onEnd?: () => void;
+  onEnd?: (ending: SessionEnding) => void;
 }
 
 /**
  * Renders one terminal session with xterm.js. This component only wires the
  * emulator to the DOM; session behaviour lives in `TerminalSession`.
  */
-export function TerminalView({ native, visible, focused, focusRequest, onStart, onEnd }: Props) {
+export function TerminalView({ native, program, visible, focused, focusRequest, onStart, onEnd }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const callbacks = useRef({ onStart, onEnd });
@@ -57,10 +59,15 @@ export function TerminalView({ native, visible, focused, focusRequest, onStart, 
     loadWebglRenderer(terminal);
     fit.fit();
 
-    const session = new TerminalSession(native, terminal, {
-      onStart: (info) => callbacks.current.onStart?.(info),
-      onEnd: () => callbacks.current.onEnd?.(),
-    });
+    const session = new TerminalSession(
+      native,
+      terminal,
+      {
+        onStart: (info) => callbacks.current.onStart?.(info),
+        onEnd: (ending) => callbacks.current.onEnd?.(ending),
+      },
+      program === undefined ? {} : { program },
+    );
     const resized = terminal.onResize(({ cols, rows }) => session.resize(cols, rows));
     session.start();
 
@@ -84,7 +91,7 @@ export function TerminalView({ native, visible, focused, focusRequest, onStart, 
       terminal.dispose();
       terminalRef.current = null;
     };
-  }, [native]);
+  }, [native, program]);
 
   useEffect(() => {
     if (visible && focused) terminalRef.current?.focus();

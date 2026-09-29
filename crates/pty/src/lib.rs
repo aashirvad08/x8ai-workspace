@@ -22,6 +22,6 @@ mod locale;
 mod session;
 mod sessions;
 
-pub use command::Program;
+pub use command::{Environment, Program, user_shell};
 pub use session::{ACK_BYTES, Error, FLOW_WINDOW, KILL_GRACE, Session, SessionEvents};
 pub use sessions::Sessions;

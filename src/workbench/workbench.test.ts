@@ -34,6 +34,10 @@ function fakeNative() {
     busy: new Set<SessionId>(),
     warnings: [] as string[],
     searchEvents: [] as SearchEvent[],
+    /** Agents the native side approved, per workspace root. */
+    approvals: new Set<string>(),
+    /** What the native approval dialog answers. */
+    allowAgent: true,
     appListener: null as ((event: AppEvent) => void) | null,
     diskListener: null as ((event: WorkspaceEvent) => void) | null,
     unsaved: false,
@@ -136,6 +140,28 @@ function fakeNative() {
       for (const event of state.searchEvents) listener(event);
     },
     cancelSearch: async () => void calls.push("cancelSearch"),
+    listAgents: async () => ({
+      agents: [
+        {
+          id: "claude-code",
+          name: "Claude Code",
+          description: "",
+          availability: { state: "installed", executable: "/Users/me/.local/bin/claude" },
+          approved: state.approvals.has(`${state.open?.root}:claude-code`),
+        },
+      ],
+      environmentProblem: null,
+    }),
+    requestAgentApproval: async (agent) => {
+      calls.push(`approve ${agent}`);
+      const open = state.open!;
+      if (!state.trusted.has(open.root)) throw new NativeError("x", "permissionDenied", "not trusted");
+      const key = `${open.root}:${agent}`;
+      if (!state.approvals.has(key) && state.allowAgent) state.approvals.add(key);
+      return state.approvals.has(key);
+    },
+    revokeAgentApproval: async (agent) => void state.approvals.delete(`${state.open?.root}:${agent}`),
+    startAgent: () => new Promise(() => {}),
   };
   return { native, state };
 }
@@ -505,5 +531,127 @@ describe("Workbench terminals", () => {
     state.appListener!({ type: "quitRequested" });
     await answer(workbench, "quit");
     expect(state.quit).toBe(true);
+  });
+});
+
+describe("Workbench agents", () => {
+  const agentPanes = (workbench: Workbench) => workbench.terminals.agentPanes("claude-code");
+
+  async function withAgentList() {
+    const opened_ = await opened();
+    await opened_.workbench.agents.load();
+    return opened_;
+  }
+
+  it("does not start an agent in an untrusted folder unless the folder is trusted first", async () => {
+    const { workbench, state } = await withAgentList();
+
+    workbench.launchAgent("claude-code");
+    await answer(workbench, "cancel");
+    expect(state.calls).not.toContain("approve claude-code");
+    expect(agentPanes(workbench)).toEqual([]);
+
+    workbench.launchAgent("claude-code");
+    await answer(workbench, "trust");
+    await settle();
+    expect(workbench.workspace.get()?.trusted).toBe(true);
+    expect(state.calls).toContain("approve claude-code");
+    expect(agentPanes(workbench)).toHaveLength(1);
+  });
+
+  it("does not start an agent the user did not allow", async () => {
+    const { workbench, state } = await withAgentList();
+    await workbench.setTrust(true);
+    state.allowAgent = false;
+
+    workbench.launchAgent("claude-code");
+    await settle();
+    await settle();
+    expect(agentPanes(workbench)).toEqual([]);
+    expect(workbench.agents.find("claude-code")?.approved).toBe(false);
+  });
+
+  it("starts an allowed agent in a terminal of its own", async () => {
+    const { workbench } = await withAgentList();
+    await workbench.setTrust(true);
+
+    workbench.launchAgent("claude-code");
+    await settle();
+    await settle();
+    const [pane] = agentPanes(workbench);
+    expect(pane?.kind).toEqual({ type: "agent", agent: "claude-code", name: "Claude Code" });
+    expect(workbench.terminals.activeTab()?.focused).toBe(pane?.key);
+    expect(workbench.agents.find("claude-code")?.approved).toBe(true);
+  });
+
+  it("asks before closing a running agent", async () => {
+    const { workbench } = await withAgentList();
+    await workbench.setTrust(true);
+    workbench.launchAgent("claude-code");
+    await settle();
+    await settle();
+    const pane = agentPanes(workbench)[0]!;
+    started(workbench, pane.key, 11);
+
+    workbench.closeTerminalPane(pane.key);
+    await settle();
+    expect(workbench.dialogs.get()?.title).toBe("Stop Claude Code?");
+    await answer(workbench, "cancel");
+    expect(agentPanes(workbench)).toHaveLength(1);
+
+    workbench.closeTerminalPane(pane.key);
+    await answer(workbench, "close");
+    expect(agentPanes(workbench)).toEqual([]);
+  });
+
+  it("stops the agents when another folder opens, after asking", async () => {
+    const { workbench, state } = await withAgentList();
+    await workbench.setTrust(true);
+    workbench.launchAgent("claude-code");
+    await settle();
+    await settle();
+    started(workbench, agentPanes(workbench)[0]!.key, 12);
+    state.pickResult = { root: "/Users/me/other", name: "other", trusted: false };
+
+    const declined = workbench.openFolder();
+    await answer(workbench, "cancel");
+    await declined;
+    expect(workbench.workspace.get()?.name).toBe("project");
+    expect(agentPanes(workbench)).toHaveLength(1);
+
+    const opening = workbench.openFolder();
+    await answer(workbench, "stop");
+    await opening;
+    expect(workbench.workspace.get()?.name).toBe("other");
+    expect(agentPanes(workbench)).toEqual([]);
+  });
+
+  it("closes the folder's agents when its trust is removed", async () => {
+    const { workbench } = await withAgentList();
+    await workbench.setTrust(true);
+    workbench.launchAgent("claude-code");
+    await settle();
+    await settle();
+    started(workbench, agentPanes(workbench)[0]!.key, 13);
+
+    const removing = workbench.setTrust(false);
+    await answer(workbench, "untrust");
+    await removing;
+    expect(agentPanes(workbench)).toEqual([]);
+  });
+
+  it("asks before quitting while an agent runs", async () => {
+    const { workbench, state } = await withAgentList();
+    await workbench.setTrust(true);
+    workbench.launchAgent("claude-code");
+    await settle();
+    await settle();
+    started(workbench, agentPanes(workbench)[0]!.key, 14);
+
+    state.appListener!({ type: "quitRequested" });
+    await settle();
+    expect(workbench.dialogs.get()?.title).toBe("Quit and stop Claude Code?");
+    await answer(workbench, "cancel");
+    expect(state.quit).toBe(false);
   });
 });

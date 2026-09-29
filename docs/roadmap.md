@@ -10,8 +10,8 @@ are part of every phase, not a final pass (`docs/security.md`).
 | 1 | Real terminal | **Complete** |
 | 2 | Workspace, files and editor | **Complete** |
 | 3 | Workspace sessions: persistence, trust and layout | **Complete** |
-| 4 | Agent runtime | Next |
-| 5 | Secrets and model providers | Planned |
+| 4 | Agent runtime | **Complete** |
+| 5 | Secrets and model providers | Next |
 | 6 | Local models | Planned |
 | 7 | MCP layer | Planned |
 | 8 | Git and worktrees | Planned |
@@ -133,20 +133,27 @@ Per-window scoping of native state waits until the app has more than one window.
 **Objective.** Run any compatible coding agent inside a workspace as a first-class
 session, without coupling to one agent.
 
-**Major components.** An `agents` crate. Built-in definitions for Claude Code,
-OpenCode, Codex and Aider (pinned and reviewed). Installed-agent detection through
-the login environment. Resolution to absolute paths. `AgentRuntime` built on the
-session substrate. An agent launcher UI. Session status (running, waiting,
-exited).
+**Major components.** `crates/agents` (docs/agent-runtime.md, ADR 0012): built-in
+definitions for Claude Code and OpenCode, the user's login-shell environment,
+discovery on its `PATH`, and `AgentRuntime` on the PTY session substrate. Workspace
+trust enforced; per-workspace agent approval (native dialog, stored in the app
+data directory). An Agents view with status (not installed, installed, starting,
+running, exited, failed). Agent terminal panes.
 
 **Acceptance criteria.**
-- Each built-in agent that is installed can be started, used interactively,
-  resized, interrupted and stopped, with the same code path for all of them.
-- Adding a new agent that needs no special configuration takes only a definition
-  (tested with a fixture agent).
-- The launch shows the resolved executable path and arguments. The first launch per
-  workspace requires approval.
-- No approval-bypass flags are added by default.
+- An installed built-in agent can be started, used interactively, resized,
+  interrupted and stopped, with the same code path for every agent. Claude Code
+  validates it.
+- No agent starts in an untrusted workspace, or without approval for that
+  workspace; approval shows and pins the resolved executable and arguments;
+  another workspace, executable or argument list needs approval again (tests).
+- Approvals survive restarts and cannot be granted by project files (tests).
+- Agents end when their terminal closes, another folder opens, trust is removed,
+  or the app quits; no orphaned agents (tests, `ps`).
+- No approval-bypass flags are added by default (test).
+
+**Deferred.** Codex and Aider definitions (adding them is data). Pinning approvals
+to a definition hash (catalog, Phase 10).
 
 ## Phase 5 — Secrets and model providers
 

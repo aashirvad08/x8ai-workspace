@@ -1,8 +1,8 @@
 //! App lifecycle: quitting without losing work.
 //!
 //! Quitting asks first when it would lose something: unsaved editor changes
-//! (which the frontend reports) or a program running in a terminal (which the
-//! native side sees). Then closing the window, choosing Quit, and on macOS also
+//! (which the frontend reports), or a program running in a terminal or a running
+//! agent (which the native side sees). Then closing the window, choosing Quit, and on macOS also
 //! Quit from the Dock, logout and shutdown, send `AppEvent::QuitRequested`, and
 //! nothing closes until the frontend calls `app_quit`. If nothing would be lost,
 //! or the frontend never subscribed, quitting is immediate, so a frontend that
@@ -19,6 +19,7 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 use x8ai_core::app::AppEvent;
 
+use crate::agents::Agents;
 use crate::terminal::Terminals;
 use crate::workspace::Workspaces;
 
@@ -59,7 +60,9 @@ pub fn must_ask(app: &AppHandle) -> bool {
     let state = app.state::<AppState>();
     !state.is_quitting()
         && state.lock_events().is_some()
-        && (state.unsaved.load(Ordering::SeqCst) || app.state::<Terminals>().any_busy())
+        && (state.unsaved.load(Ordering::SeqCst)
+            || app.state::<Terminals>().any_busy()
+            || app.state::<Agents>().any_running())
 }
 
 /// A quit request from the Quit menu item (Cmd+Q) or, on macOS, from the system.

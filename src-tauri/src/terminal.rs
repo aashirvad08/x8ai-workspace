@@ -14,7 +14,7 @@ use x8ai_core::error::{CommandError, ErrorCode};
 use x8ai_core::terminal::{
     SESSION_ID_HEADER, SessionId, TerminalEvent, TerminalExit, TerminalInfo, TerminalSize,
 };
-use x8ai_pty::{ACK_BYTES, Program, SessionEvents, Sessions};
+use x8ai_pty::{ACK_BYTES, Program, Session, SessionEvents, Sessions};
 
 use crate::workspace::Workspaces;
 
@@ -42,11 +42,17 @@ impl Terminals {
     pub fn any_busy(&self) -> bool {
         self.0.any_foreground_job()
     }
+
+    /// The session registry, shared with the agent runtime: an agent is a terminal
+    /// session like any other.
+    pub(crate) fn sessions(&self) -> &Sessions {
+        &self.0
+    }
 }
 
 /// Delivers a session's output as raw bytes and its lifecycle events as JSON, on one
 /// channel, so the webview receives them in order.
-struct ChannelEvents(Channel);
+pub(crate) struct ChannelEvents(pub(crate) Channel);
 
 impl ChannelEvents {
     fn send_event(&self, event: &TerminalEvent) {
@@ -94,12 +100,17 @@ pub async fn terminal_create(
         .0
         .spawn(&program, size, Arc::new(ChannelEvents(events)))
         .map_err(command_error)?;
-    Ok(TerminalInfo {
+    Ok(info(&session))
+}
+
+/// What the webview learns about a started session.
+pub(crate) fn info(session: &Session) -> TerminalInfo {
+    TerminalInfo {
         id: session.id(),
         program: session.program().to_owned(),
         cwd: session.cwd().to_owned(),
         ack_bytes: ACK_BYTES,
-    })
+    }
 }
 
 /// Input is the raw request body, so any bytes, including non-UTF-8 mouse reports,
@@ -173,7 +184,7 @@ pub fn terminal_close(id: SessionId, terminals: State<'_, Terminals>) -> Result<
     terminals.0.close(id).map_err(command_error)
 }
 
-fn command_error(error: x8ai_pty::Error) -> CommandError {
+pub(crate) fn command_error(error: x8ai_pty::Error) -> CommandError {
     use x8ai_pty::Error;
     let code = match &error {
         Error::InvalidSize(_) | Error::Exited => ErrorCode::InvalidInput,

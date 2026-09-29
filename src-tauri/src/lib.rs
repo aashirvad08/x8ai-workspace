@@ -2,9 +2,10 @@
 //!
 //! This crate is the only one that knows about Tauri. It owns the window and menu,
 //! registers the IPC commands the webview may call, and holds native state:
-//! terminal sessions, the open workspace, and the quit guard. Logic that does not
+//! terminal sessions, agents, the open workspace, and the quit guard. Logic that does not
 //! need Tauri belongs in `crates/`.
 
+mod agents;
 mod app;
 mod commands;
 #[cfg(target_os = "macos")]
@@ -16,6 +17,7 @@ mod workspace;
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent, WindowEvent};
 
+use agents::Agents;
 use app::AppState;
 use terminal::Terminals;
 use workspace::Workspaces;
@@ -28,6 +30,7 @@ pub fn run() {
         .manage(Terminals::default())
         .manage(Workspaces::default())
         .manage(AppState::default())
+        .manage(Agents::default())
         .setup(|app| {
             let workspaces = app.state::<Workspaces>();
             match app.path().app_data_dir() {
@@ -63,6 +66,7 @@ pub fn run() {
             // guard instead of leaking them.
             if payload.event() == PageLoadEvent::Started {
                 webview.state::<Terminals>().close_all();
+                webview.state::<Agents>().forget_all();
                 webview.state::<Workspaces>().close();
                 webview.state::<AppState>().reset();
             }
@@ -73,6 +77,10 @@ pub fn run() {
             app::app_set_unsaved_changes,
             app::app_quit,
             app::app_take_warnings,
+            agents::agent_list,
+            agents::agent_request_approval,
+            agents::agent_revoke,
+            agents::agent_start,
             terminal::terminal_create,
             terminal::terminal_write,
             terminal::terminal_resize,

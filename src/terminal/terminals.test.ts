@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { paneKeys } from "./panes";
-import { tabTitle, Terminals } from "./terminals";
+import { agentRunStatus, tabTitle, Terminals } from "./terminals";
 
 const info = (id: number) => ({ id, program: "/bin/zsh", cwd: "/Users/me/project", ackBytes: 65536 });
 
@@ -19,7 +19,7 @@ describe("terminals", () => {
     expect(terminals.liveSessions(tab)).toEqual([1, 2]);
     expect(tabTitle(terminals.activeTab()!, terminals.get().panes)).toBe("zsh — project (2)");
 
-    terminals.ended(first);
+    terminals.ended(first, { type: "exited", exit: { code: 0, signal: null } });
     expect(terminals.liveSessions()).toEqual([2]);
   });
 
@@ -69,5 +69,36 @@ describe("terminals", () => {
     terminals.split("down");
     expect(terminals.get().tabs).toHaveLength(1);
     expect(terminals.activeTab()!.tree.kind).toBe("pane");
+  });
+});
+
+describe("agent panes", () => {
+  it("are titled by the agent and report its state", () => {
+    const terminals = new Terminals();
+    terminals.add({ type: "agent", agent: "claude-code", name: "Claude Code" });
+    const pane = terminals.agentPanes("claude-code")[0]!;
+    expect(agentRunStatus(pane)).toBe("starting");
+
+    terminals.started(pane.key, { id: 3, program: "/Users/me/.local/bin/claude", cwd: "/Users/me/project", ackBytes: 65536 });
+    expect(terminals.get().panes.get(pane.key)).toMatchObject({ title: "Claude Code — project", running: true, session: 3 });
+    expect(agentRunStatus(terminals.get().panes.get(pane.key)!)).toBe("running");
+
+    terminals.ended(pane.key, { type: "exited", exit: { code: 1, signal: null } });
+    expect(agentRunStatus(terminals.get().panes.get(pane.key)!)).toBe("failed");
+    terminals.ended(pane.key, { type: "exited", exit: { code: 0, signal: null } });
+    expect(agentRunStatus(terminals.get().panes.get(pane.key)!)).toBe("exited");
+  });
+
+  it("split into shells, and close together when their workspace goes", () => {
+    const terminals = new Terminals();
+    terminals.add();
+    terminals.add({ type: "agent", agent: "claude-code", name: "Claude Code" });
+    terminals.split("right");
+    const kinds = [...terminals.get().panes.values()].map((p) => p.kind.type);
+    expect(kinds).toEqual(["shell", "agent", "shell"]);
+
+    terminals.closeAgents();
+    expect(terminals.agentPanes()).toEqual([]);
+    expect(terminals.get().panes.size).toBe(2);
   });
 });
