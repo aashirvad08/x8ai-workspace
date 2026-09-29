@@ -16,6 +16,15 @@ fn home() -> (tempfile::TempDir, PathBuf) {
 
 #[test]
 fn reads_what_the_login_shell_sets_up_and_ignores_what_it_prints() {
+    // /bin/sh is bash on macOS and dash on Debian and Ubuntu; macOS ships dash too.
+    for shell in ["/bin/sh", "/bin/dash", "/bin/bash"] {
+        if Path::new(shell).exists() {
+            reads_the_login_environment_of(Path::new(shell));
+        }
+    }
+}
+
+fn reads_the_login_environment_of(shell: &Path) {
     let (_t, home) = home();
     fs::write(
         home.join(".profile"),
@@ -26,17 +35,23 @@ fn reads_what_the_login_shell_sets_up_and_ignores_what_it_prints() {
     )
     .unwrap();
 
-    let env = resolve(Path::new("/bin/sh"), &home, Duration::from_secs(10)).unwrap();
-    assert_eq!(var(&env, "AGENT_ENV_TEST"), Some("from profile"));
+    let env = resolve(shell, &home, Duration::from_secs(10)).unwrap();
+    let names: Vec<&str> = env.iter().map(|(n, _)| n.as_str()).collect();
+    let shell = shell.display();
+    assert_eq!(
+        var(&env, "AGENT_ENV_TEST"),
+        Some("from profile"),
+        "{shell}: {names:?}"
+    );
+    let path = var(&env, "PATH").unwrap_or_else(|| panic!("{shell}: no PATH in {names:?}"));
     assert!(
-        var(&env, "PATH")
-            .unwrap()
-            .starts_with(&format!("{}/tools:", home.display()))
+        path.starts_with(&format!("{}/tools:", home.display())),
+        "{shell}: {path}"
     );
     assert_eq!(var(&env, "HOME"), Some(home.to_str().unwrap()));
     // The resolving shell's own state is not part of the result.
     for name in ["PWD", "OLDPWD", "SHLVL", "_", "X8AI_ENV_MARKER"] {
-        assert!(var(&env, name).is_none(), "{name} leaked");
+        assert!(var(&env, name).is_none(), "{shell}: {name} leaked");
     }
     // It ran in the home directory, never in a workspace.
     let ran_in = fs::read_to_string(home.join("ran-in")).unwrap();

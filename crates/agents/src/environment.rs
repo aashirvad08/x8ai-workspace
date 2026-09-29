@@ -30,10 +30,12 @@ const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 /// Carries the marker into the shell, so the script itself is a constant.
 const MARKER_VAR: &str = "X8AI_ENV_MARKER";
 
-/// Prints the environment between two markers, so that anything the startup files
-/// print is ignored. The marker variable itself is left out of the listing, or its
-/// value would end it early. Valid in sh, bash, zsh and fish.
-const SCRIPT: &str = r#"printf '%s' "$X8AI_ENV_MARKER"; /usr/bin/env -0 -u X8AI_ENV_MARKER; printf '%s' "$X8AI_ENV_MARKER""#;
+/// Prints the environment between a start and an end marker, so that anything the
+/// startup files print is ignored. The two differ from the marker value itself,
+/// which can appear inside the listing: dash exports `$_`, the last argument of
+/// the previous command, which here is the marker. The marker variable is left
+/// out of the listing too. Valid in sh (bash, dash), zsh and fish.
+const SCRIPT: &str = r#"printf '%s-start' "$X8AI_ENV_MARKER"; /usr/bin/env -0 -u X8AI_ENV_MARKER; printf '%s-end' "$X8AI_ENV_MARKER""#;
 
 /// Variables that describe the resolving shell itself, not the user's setup.
 const SHELL_STATE: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_", MARKER_VAR];
@@ -138,9 +140,9 @@ pub fn resolve(
 
 /// The `env -0` output between the first two markers.
 fn parse(output: &[u8], marker: &str) -> Option<Vec<(String, String)>> {
-    let marker = marker.as_bytes();
-    let start = find(output, marker)? + marker.len();
-    let end = start + find(&output[start..], marker)?;
+    let (opening, closing) = (format!("{marker}-start"), format!("{marker}-end"));
+    let start = find(output, opening.as_bytes())? + opening.len();
+    let end = start + find(&output[start..], closing.as_bytes())?;
     let vars = output[start..end]
         .split(|&b| b == 0)
         .filter_map(|entry| {
@@ -179,7 +181,7 @@ mod tests {
 
     #[test]
     fn parses_only_what_is_between_the_markers() {
-        let output = b"Welcome to your shell!\nM1PATH=/usr/bin:/bin\0HOME=/Users/me\0PWD=/Users/me\0MULTI=a\nb\0M1 trailing noise";
+        let output = b"Welcome to your shell!\nM1-startPATH=/usr/bin:/bin\0HOME=/Users/me\0PWD=/Users/me\0MULTI=a\nb\0M1-end trailing noise";
         let vars = parse(output, "M1").unwrap();
         assert_eq!(
             vars,
@@ -187,6 +189,20 @@ mod tests {
                 ("PATH".into(), "/usr/bin:/bin".into()),
                 ("HOME".into(), "/Users/me".into()),
                 ("MULTI".into(), "a\nb".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_marker_value_inside_the_listing_does_not_end_it() {
+        // dash exports `_=<marker>` (the previous command's last argument).
+        let output = b"M1-startUSER=me\0_=M1\0PATH=/usr/bin\0M1-end";
+        let vars = parse(output, "M1").unwrap();
+        assert_eq!(
+            vars,
+            vec![
+                ("USER".into(), "me".into()),
+                ("PATH".into(), "/usr/bin".into())
             ]
         );
     }
@@ -201,6 +217,6 @@ mod tests {
     #[test]
     fn output_without_markers_is_not_an_environment() {
         assert!(parse(b"PATH=/usr/bin\0", "M1").is_none());
-        assert!(parse(b"M1PATH=/usr/bin\0", "M1").is_none());
+        assert!(parse(b"M1-startPATH=/usr/bin\0M1", "M1").is_none());
     }
 }
