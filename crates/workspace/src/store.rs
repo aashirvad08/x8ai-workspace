@@ -56,14 +56,26 @@ pub struct ApprovalStore {
 }
 
 /// What an approval covers: one agent, launched as exactly this program with
-/// these arguments, in one folder. A different program found on `PATH` later, or
-/// changed arguments, is not covered and must be approved again.
+/// these arguments, in one folder, using its own model configuration or exactly
+/// this provider at this endpoint. A different program found on `PATH` later,
+/// changed arguments, another provider or another endpoint is not covered and
+/// must be approved again (ADR 0015, "Material changes").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Approval<'a> {
     pub root: &'a Path,
     pub agent: &'a str,
     pub program: &'a Path,
     pub args: &'a [String],
+    /// `None`: the agent's own configuration.
+    pub provider: Option<ApprovedProvider<'a>>,
+}
+
+/// A provider the app configures for an agent, and where the agent's requests,
+/// and its credential, go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApprovedProvider<'a> {
+    pub id: &'a str,
+    pub endpoint: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,8 +91,36 @@ struct ApprovedAgent {
     id: String,
     program: PathBuf,
     args: Vec<String>,
+    /// Absent in approvals of the agent's own configuration, and in every
+    /// approval made before providers existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider: Option<ProviderEntry>,
     /// Milliseconds since the Unix epoch.
     at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderEntry {
+    id: String,
+    endpoint: String,
+}
+
+impl ApprovedAgent {
+    /// Whether this approval and `approval` are for the same agent and provider:
+    /// approving one replaces the other.
+    fn same_route(&self, approval: &Approval<'_>) -> bool {
+        self.id == approval.agent
+            && self.provider.as_ref().map(|p| p.id.as_str()) == approval.provider.map(|p| p.id)
+    }
+
+    fn covers(&self, approval: &Approval<'_>) -> bool {
+        self.same_route(approval)
+            && self.program == approval.program
+            && self.args == approval.args
+            && self.provider.as_ref().map(|p| p.endpoint.as_str())
+                == approval.provider.map(|p| p.endpoint)
+    }
 }
 
 /// Every store file: a version and one entry per workspace.
@@ -203,6 +243,14 @@ impl ApprovalStore {
 
     /// Whether exactly this launch was approved in exactly this folder.
     pub fn is_approved(&self, approval: &Approval<'_>) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.root == approval.root && e.agents.iter().any(|a| a.covers(approval)))
+    }
+
+    /// Whether the agent is approved in this folder with this executable and
+    /// these arguments, for its own configuration or for any provider.
+    pub fn is_approved_for_any_provider(&self, approval: &Approval<'_>) -> bool {
         self.entries.iter().any(|e| {
             e.root == approval.root
                 && e.agents.iter().any(|a| {
@@ -213,18 +261,23 @@ impl ApprovalStore {
         })
     }
 
-    /// Records the approval, replacing an earlier one for the same agent in the
-    /// same folder.
+    /// Records the approval, replacing an earlier one for the same agent and
+    /// provider in the same folder. An agent can be approved with its own
+    /// configuration and with several providers at once.
     pub fn approve(&mut self, approval: &Approval<'_>) -> Result<(), Error> {
         let approved = ApprovedAgent {
             id: approval.agent.to_owned(),
             program: approval.program.to_owned(),
             args: approval.args.to_vec(),
+            provider: approval.provider.map(|p| ProviderEntry {
+                id: p.id.to_owned(),
+                endpoint: p.endpoint.to_owned(),
+            }),
             at: now(),
         };
         match self.entries.iter_mut().find(|e| e.root == approval.root) {
             Some(entry) => {
-                entry.agents.retain(|a| a.id != approval.agent);
+                entry.agents.retain(|a| !a.same_route(approval));
                 entry.agents.push(approved);
             }
             None => self.entries.push(ApprovalEntry {
@@ -235,7 +288,7 @@ impl ApprovalStore {
         save(&self.file, &self.entries)
     }
 
-    /// Forgets the agent's approval in this folder.
+    /// Forgets the agent's approvals in this folder, for every provider.
     pub fn revoke(&mut self, root: &Path, agent: &str) -> Result<(), Error> {
         let before = self.count();
         for entry in &mut self.entries {

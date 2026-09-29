@@ -26,13 +26,31 @@ pub enum Program {
 
 /// The environment a program starts with, before the terminal variables every
 /// session gets (`TERM`, `COLORTERM`, `TERM_PROGRAM`, and `LANG` if unset).
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub enum Environment {
     /// The app's own environment.
     #[default]
     Inherit,
     /// Exactly these variables, and nothing from the app's environment.
     Exactly(Vec<(String, String)>),
+}
+
+/// Names only: values can be credentials (an agent's API key).
+impl std::fmt::Debug for Environment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Inherit => f.write_str("Inherit"),
+            Self::Exactly(vars) => f
+                .debug_tuple("Exactly")
+                .field(
+                    &vars
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>(),
+                )
+                .finish(),
+        }
+    }
 }
 
 /// The user's default shell: `$SHELL` if it is executable, otherwise the shell in
@@ -94,4 +112,25 @@ impl Program {
 
 fn home() -> PathBuf {
     std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_environment_prints_names_but_never_values() {
+        let env = Environment::Exactly(vec![("API_KEY".into(), "sk-test-invalid".into())]);
+        let program = Program::Exec {
+            program: "/bin/true".into(),
+            args: Vec::new(),
+            cwd: None,
+            env,
+        };
+        let printed = format!("{program:?}");
+        assert!(
+            printed.contains("API_KEY") && !printed.contains("sk-test"),
+            "{printed}"
+        );
+    }
 }

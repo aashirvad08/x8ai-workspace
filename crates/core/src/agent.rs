@@ -104,8 +104,54 @@ pub struct AgentStatus {
     pub description: String,
     pub availability: AgentAvailability,
     /// Approved to run in the open workspace, with the executable it would run
-    /// now. `false` when no workspace is open.
+    /// now, for its own model configuration or for some provider (each needs
+    /// its own approval). `false` when no workspace is open.
     pub approved: bool,
+    /// Every provider, and whether the app can point this agent at it, as the
+    /// agent's adapter says. An agent without an adapter supports none: it uses
+    /// only its own configuration.
+    pub providers: Vec<ProviderSupport>,
+}
+
+/// Whether an agent's adapter can point it at a provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProviderSupport {
+    pub provider: IntegrationId,
+    pub supported: bool,
+    /// Why not, when not.
+    pub reason: Option<String>,
+}
+
+/// Where an agent session's model configuration comes from (docs/models.md,
+/// ADR 0015). Names variables, never their values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "source",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export)]
+pub enum SessionConfiguration {
+    /// No provider chosen in the app: the agent uses its own configuration and
+    /// whatever the user's shell environment provides.
+    Agent {
+        /// Provider variables the agent would read that the shell sets.
+        shell_variables: Vec<String>,
+    },
+    /// A provider and model chosen in the app. The app's configuration is the
+    /// only provider configuration the agent sees.
+    App {
+        provider: IntegrationId,
+        provider_name: String,
+        model: String,
+        /// Where the agent's model requests go.
+        endpoint: String,
+        credential: crate::model::CredentialState,
+        /// Provider variables set in the shell that this session replaces.
+        overridden_shell_variables: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -175,6 +221,7 @@ pub struct AgentSessionInfo {
     pub state: AgentSessionState,
     /// The terminal session while the agent runs.
     pub terminal: Option<crate::terminal::SessionId>,
+    pub configuration: SessionConfiguration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

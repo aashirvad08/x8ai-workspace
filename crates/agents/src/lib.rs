@@ -8,10 +8,13 @@
 //! workspace is trusted and the user approved the agent there ([`runtime`]). In a
 //! Git repository each agent session gets a worktree of its own ([`isolation`]),
 //! so several agents can work at once without touching the user's working tree.
-//! Nothing here is specific to one agent. No Tauri dependency.
+//! An agent can be pointed at a provider and a model the user chose in the app
+//! ([`adapter`]); that is the only place that knows how a particular agent is
+//! configured. No Tauri dependency.
 
 #![forbid(unsafe_code)]
 
+pub mod adapter;
 mod builtin;
 pub mod discovery;
 pub mod environment;
@@ -21,6 +24,6 @@ pub mod runtime;
 pub use builtin::builtin;
 pub use isolation::{Isolation, Removal, Worktree};
 pub use runtime::{
-    AgentRuntime, AgentSession, Authorized, Denied, LaunchPlan, RunError, SessionState, authorize,
-    plan,
+    AgentRuntime, AgentSession, Authorized, Denied, LaunchPlan, ProviderRoute, RunError,
+    SessionState, authorize, plan,
 };

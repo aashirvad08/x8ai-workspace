@@ -11,6 +11,7 @@ x8ai-core.workspace = true
 x8ai-pty.workspace = true
 x8ai-workspace.workspace = true
 x8ai-git.workspace = true
+x8ai-secrets.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -18,3 +19,4 @@ nix.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+x8ai-providers.workspace = true

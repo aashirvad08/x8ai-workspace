@@ -1,0 +1,57 @@
+[
+  {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "description": "Claude models, through Anthropic's API.",
+    "hosting": "hosted",
+    "endpoints": [{ "api": "anthropicMessages", "baseUrl": "https://api.anthropic.com" }],
+    "auth": { "kind": "apiKey", "secret": "anthropic" },
+    "models": [
+      { "id": "claude-opus-5-5", "name": "Claude Opus 5.5" },
+      { "id": "claude-fable-5-1", "name": "Claude Fable 5.1" },
+      { "id": "claude-sonnet-5", "name": "Claude Sonnet 5" },
+      { "id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5" }
+    ]
+  },
+  {
+    "id": "openai",
+    "name": "OpenAI",
+    "description": "OpenAI's models, through its API.",
+    "hosting": "hosted",
+    "endpoints": [
+      { "api": "openAiResponses", "baseUrl": "https://api.openai.com/v1" },
+      { "api": "openAiChatCompletions", "baseUrl": "https://api.openai.com/v1" }
+    ],
+    "auth": { "kind": "apiKey", "secret": "openai" }
+  },
+  {
+    "id": "google",
+    "name": "Google",
+    "description": "Gemini models, through the Gemini API (Google AI Studio).",
+    "hosting": "hosted",
+    "endpoints": [{ "api": "gemini", "baseUrl": "https://generativelanguage.googleapis.com/v1beta" }],
+    "auth": { "kind": "apiKey", "secret": "google" }
+  },
+  {
+    "id": "openrouter",
+    "name": "OpenRouter",
+    "description": "A gateway to many providers' models, through one API key.",
+    "hosting": "gateway",
+    "endpoints": [
+      { "api": "anthropicMessages", "baseUrl": "https://openrouter.ai/api" },
+      { "api": "openAiChatCompletions", "baseUrl": "https://openrouter.ai/api/v1" }
+    ],
+    "auth": { "kind": "apiKey", "secret": "openrouter" }
+  },
+  {
+    "id": "ollama",
+    "name": "Ollama",
+    "description": "Open models running on this machine. Nothing leaves it.",
+    "hosting": "local",
+    "endpoints": [
+      { "api": "anthropicMessages", "baseUrl": "http://localhost:11434" },
+      { "api": "openAiChatCompletions", "baseUrl": "http://localhost:11434/v1" }
+    ],
+    "auth": { "kind": "none" }
+  }
+]

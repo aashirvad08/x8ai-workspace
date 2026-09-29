@@ -5,7 +5,9 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use x8ai_workspace::{Approval, ApprovalStore, MAX_RECENT, RecentWorkspaces, TrustStore};
+use x8ai_workspace::{
+    Approval, ApprovalStore, ApprovedProvider, MAX_RECENT, RecentWorkspaces, TrustStore,
+};
 
 fn dirs(n: usize) -> (tempfile::TempDir, Vec<PathBuf>) {
     let temp = tempfile::tempdir().unwrap();
@@ -152,6 +154,7 @@ fn approval<'a>(root: &'a Path, program: &'a Path, args: &'a [String]) -> Approv
         agent: "claude-code",
         program,
         args,
+        provider: None,
     }
 }
 
@@ -209,6 +212,95 @@ fn an_approval_covers_one_program_and_its_arguments() {
         .approve(&approval(&roots[0], impostor, &[]))
         .unwrap();
     assert!(!approvals.is_approved(&approval(&roots[0], program, &[])));
+}
+
+#[test]
+fn a_provider_or_endpoint_change_needs_a_new_approval_and_a_model_cannot_matter() {
+    let (temp, roots) = dirs(1);
+    let file = temp.path().join("approvals.json");
+    let (mut approvals, _) = ApprovalStore::load(file.clone());
+    let program = Path::new("/Users/me/.local/bin/claude");
+    let own = approval(&roots[0], program, &[]);
+    let openrouter = Approval {
+        provider: Some(ApprovedProvider {
+            id: "openrouter",
+            endpoint: "https://openrouter.ai/api",
+        }),
+        ..own.clone()
+    };
+    approvals.approve(&own).unwrap();
+    // The agent's own configuration does not cover a provider the app configures.
+    assert!(!approvals.is_approved(&openrouter));
+    approvals.approve(&openrouter).unwrap();
+    // Both approvals stand side by side.
+    assert!(approvals.is_approved(&own) && approvals.is_approved(&openrouter));
+
+    // Another provider, or the same provider at another endpoint, is new.
+    let ollama = Approval {
+        provider: Some(ApprovedProvider {
+            id: "ollama",
+            endpoint: "http://localhost:11434",
+        }),
+        ..own.clone()
+    };
+    assert!(!approvals.is_approved(&ollama));
+    let elsewhere = Approval {
+        provider: Some(ApprovedProvider {
+            id: "openrouter",
+            endpoint: "https://evil.example/api",
+        }),
+        ..own.clone()
+    };
+    assert!(!approvals.is_approved(&elsewhere));
+    // Approving that replaces the earlier endpoint for the same provider.
+    approvals.approve(&elsewhere).unwrap();
+    assert!(!approvals.is_approved(&openrouter));
+    assert!(approvals.is_approved(&own));
+
+    // An approval stores no model and no credential: nothing about them can
+    // change what is approved.
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(!text.contains("model") && !text.contains("key") && !text.contains("token"));
+
+    // Any of them shows the agent as allowed here; a different program does not.
+    assert!(approvals.is_approved_for_any_provider(&own));
+    let impostor = Approval {
+        program: Path::new("/tmp/evil/claude"),
+        ..own.clone()
+    };
+    assert!(!approvals.is_approved_for_any_provider(&impostor));
+
+    // Revoking the agent revokes all of its approvals.
+    approvals.revoke(&roots[0], "claude-code").unwrap();
+    assert!(!approvals.is_approved(&own) && !approvals.is_approved(&elsewhere));
+    assert!(!approvals.is_approved_for_any_provider(&own));
+}
+
+#[test]
+fn approvals_from_before_providers_still_cover_the_agents_own_configuration() {
+    let (temp, roots) = dirs(1);
+    let file = temp.path().join("approvals.json");
+    let program = Path::new("/usr/local/bin/claude");
+    fs::write(
+        &file,
+        format!(
+            r#"{{"version":1,"workspaces":[{{"root":"{}","agents":[{{"id":"claude-code","program":"{}","args":[],"at":1}}]}}]}}"#,
+            roots[0].display(),
+            program.display()
+        ),
+    )
+    .unwrap();
+    let (approvals, warning) = ApprovalStore::load(file);
+    assert!(warning.is_none());
+    assert!(approvals.is_approved(&approval(&roots[0], program, &[])));
+    let configured = Approval {
+        provider: Some(ApprovedProvider {
+            id: "anthropic",
+            endpoint: "https://api.anthropic.com",
+        }),
+        ..approval(&roots[0], program, &[])
+    };
+    assert!(!approvals.is_approved(&configured));
 }
 
 #[test]

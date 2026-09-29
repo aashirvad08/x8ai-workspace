@@ -21,6 +21,8 @@ and its worktree.
 | `workspace` | The workspace root the session belongs to, and was approved for |
 | `cwd` | Where the agent runs: its worktree (the same subfolder as the workspace, if the workspace is a subfolder of the repository), or the workspace itself |
 | `worktree` | Branch, base commit and path; `None` when not isolated |
+| `model` | Provider and model chosen at launch; `None` for the agent's own configuration (Phase 6, docs/models.md) |
+| `configuration` | Where its model configuration comes from, with variable names only |
 | `startedAt` | When the session was created |
 | `state` | `notRunning`, `running`, `exited` (with exit code or signal), `failed` (with the reason) |
 | `terminal` | The PTY session while the agent runs |
@@ -31,7 +33,7 @@ Native: `crates/agents/src/runtime.rs` (`AgentRuntime`: `create`, `run`, `stop`,
 
 | Command | Does |
 | --- | --- |
-| `agent_create_session(agent)` | Checks trust and approval, then makes a worktree (or claims the folder) and a session. Runs nothing. |
+| `agent_create_session(agent, model)` | Checks trust and approval (for the provider, if a model is chosen), then makes a worktree (or claims the folder) and a session that keeps the model. Runs nothing. |
 | `agent_run(session, size, events)` | Checks trust and approval again, then runs the agent on a new PTY in the session's directory. Restart is the same call. |
 | `agent_sessions()` | The open workspace's sessions, including worktrees from earlier runs |
 | `agent_stop(session)` | Hangs up the agent; the session and worktree stay |
@@ -68,7 +70,8 @@ user's project (primary workspace)            app-controlled worktree root
   created. The user's uncommitted changes are not in the agent's worktree; the
   Agents view says so.
 - **Metadata:** `<name>.json` next to each worktree: agent, token, base commit,
-  creation time. It is how sessions are found again after the app restarts. Only
+  creation time, and the session's provider and model ids if one was chosen
+  (never a key). It is how sessions are found again after the app restarts. Only
   entries whose name, agent id, token and commit are exactly what the app makes,
   and that Git lists as worktrees of this repository, are used.
 - **What changes in the repository:** a branch per session and Git's worktree

@@ -3,6 +3,7 @@ import type { AgentSessionId } from "./AgentSessionId";
 import type { AgentSessionState } from "./AgentSessionState";
 import type { AgentWorktree } from "./AgentWorktree";
 import type { IntegrationId } from "./IntegrationId";
+import type { SessionConfiguration } from "./SessionConfiguration";
 import type { SessionId } from "./SessionId";
 
 /**
@@ -29,4 +30,4 @@ startedAt: number, state: AgentSessionState,
 /**
  * The terminal session while the agent runs.
  */
-terminal: SessionId | null, };
+terminal: SessionId | null, configuration: SessionConfiguration, };

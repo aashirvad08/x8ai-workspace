@@ -9,6 +9,9 @@ import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { FileContent } from "../contracts/generated/FileContent";
 import type { FileList } from "../contracts/generated/FileList";
 import type { FileVersion } from "../contracts/generated/FileVersion";
+import type { ModelSelection } from "../contracts/generated/ModelSelection";
+import type { ProviderList } from "../contracts/generated/ProviderList";
+import type { ProviderStatus } from "../contracts/generated/ProviderStatus";
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchEvent } from "../contracts/generated/SearchEvent";
 import type { SearchQuery } from "../contracts/generated/SearchQuery";
@@ -131,19 +134,21 @@ export interface AgentApi {
   /** Every built-in agent: installed or not, approved for the open workspace or not. */
   listAgents(refresh: boolean): Promise<AgentList>;
   /**
-   * Makes sure the agent may run in the open workspace, asking the user in a native
-   * dialog if it is not approved there yet. Fails with `permissionDenied` if the
+   * Makes sure the agent may run in the open workspace, with its own model
+   * configuration (`model` null) or pointed at `model`, asking the user in a native
+   * dialog if that is not approved there yet. Fails with `permissionDenied` if the
    * workspace is not trusted. Resolves to `false` if the user declined.
    */
-  requestAgentApproval(agent: string): Promise<boolean>;
+  requestAgentApproval(agent: string, model: ModelSelection | null): Promise<boolean>;
   /** Forgets the agent's approval in the open workspace. */
   revokeAgentApproval(agent: string): Promise<void>;
   /**
    * A new session for an approved agent in the open workspace (docs/multi-agent.md):
    * a worktree of its own in a Git repository, the folder itself otherwise. The
-   * native side decides where; nothing is started yet.
+   * native side decides where; nothing is started yet. The session keeps `model`
+   * (null: the agent's own configuration) for every run.
    */
-  createAgentSession(agent: string): Promise<AgentSessionInfo>;
+  createAgentSession(agent: string, model: ModelSelection | null): Promise<AgentSessionInfo>;
   /**
    * Runs the session's agent (again) on a new terminal session, driven afterwards
    * like any other with the `TerminalApi` methods.
@@ -161,10 +166,26 @@ export interface AgentApi {
 }
 
 /**
+ * Model providers and their models (docs/models.md). A key goes to the native side
+ * once, when the user saves it, and is never returned: the webview only learns
+ * whether one is saved.
+ */
+export interface ProviderApi {
+  /** Every provider; with `checkLocal`, looks for Ollama on this machine first. */
+  listProviders(checkLocal: boolean): Promise<ProviderList>;
+  /** Saves the provider's API key in the macOS Keychain. */
+  setProviderCredential(provider: string, key: string): Promise<ProviderStatus>;
+  removeProviderCredential(provider: string): Promise<ProviderStatus>;
+  /** Adds a model id the provider serves that the app does not list. */
+  addProviderModel(provider: string, model: string): Promise<ProviderStatus>;
+  removeProviderModel(provider: string, model: string): Promise<ProviderStatus>;
+}
+
+/**
  * Typed access to the native host. Each method maps to one command in
  * `src-tauri/src/`. UI code depends on these interfaces, never on Tauri.
  */
-export interface NativeClient extends AppApi, TerminalApi, WorkspaceApi, AgentApi {}
+export interface NativeClient extends AppApi, TerminalApi, WorkspaceApi, AgentApi, ProviderApi {}
 
 export function createNativeClient({ invoke, createChannel }: NativeBridge): NativeClient {
   // Return values come from the trusted side and are typed by the generated
@@ -225,9 +246,9 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     cancelSearch: () => call<void>("workspace_search_cancel"),
 
     listAgents: (refresh) => call<AgentList>("agent_list", { refresh }),
-    requestAgentApproval: (agent) => call<boolean>("agent_request_approval", { agent }),
+    requestAgentApproval: (agent, model) => call<boolean>("agent_request_approval", { agent, model }),
     revokeAgentApproval: (agent) => call<void>("agent_revoke", { agent }),
-    createAgentSession: (agent) => call<AgentSessionInfo>("agent_create_session", { agent }),
+    createAgentSession: (agent, model) => call<AgentSessionInfo>("agent_create_session", { agent, model }),
     runAgentSession: (session, size, listener) =>
       call<TerminalInfo>("agent_run", { session, size, events: sessionChannel(listener) }),
     agentSessions: () => call<AgentSessionInfo[]>("agent_sessions"),
@@ -235,6 +256,12 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     removeAgentSession: (session, discard) => call<AgentRemoval>("agent_remove", { session, discard }),
     agentChanges: (session) => call<AgentChanges>("agent_changes", { session }),
     readAgentFile: (session, path) => call<FileContent>("agent_read_file", { session, path }),
+
+    listProviders: (checkLocal) => call<ProviderList>("provider_list", { checkLocal }),
+    setProviderCredential: (provider, key) => call<ProviderStatus>("provider_set_credential", { provider, key }),
+    removeProviderCredential: (provider) => call<ProviderStatus>("provider_remove_credential", { provider }),
+    addProviderModel: (provider, model) => call<ProviderStatus>("provider_add_model", { provider, model }),
+    removeProviderModel: (provider, model) => call<ProviderStatus>("provider_remove_model", { provider, model }),
   };
 
   /**

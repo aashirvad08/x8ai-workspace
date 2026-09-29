@@ -1,6 +1,6 @@
 # 0012. Agent runtime: PTY sessions, the login environment, and per-workspace approval
 
-**Status:** Accepted (Phase 4)
+**Status:** Accepted (Phase 4). Amended by [0015](0015-environment-precedence.md): an approval also pins the provider and endpoint an app-configured session uses.
 
 ## Context
 

@@ -5,6 +5,7 @@ import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
 import type { AppEvent } from "../contracts/generated/AppEvent";
 import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { FileVersion } from "../contracts/generated/FileVersion";
+import type { ProviderStatus } from "../contracts/generated/ProviderStatus";
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchEvent } from "../contracts/generated/SearchEvent";
 import type { SessionId } from "../contracts/generated/SessionId";
@@ -45,6 +46,18 @@ function fakeNative() {
     agentSessions: [] as AgentSessionInfo[],
     agentChanges: null as AgentChanges | null,
     removed: [] as { session: number; discard: boolean }[],
+    providers: [
+      {
+        id: "anthropic",
+        name: "Anthropic",
+        description: "",
+        hosting: "hosted",
+        credential: "missing",
+        local: null,
+        models: [{ id: "claude-sonnet-5", provider: "anthropic", name: "Claude Sonnet 5", source: "builtIn", contextWindow: null }],
+      },
+      { id: "ollama", name: "Ollama", description: "", hosting: "local", credential: "notNeeded", local: null, models: [] },
+    ] as ProviderStatus[],
     appListener: null as ((event: AppEvent) => void) | null,
     diskListener: null as ((event: WorkspaceEvent) => void) | null,
     unsaved: false,
@@ -155,6 +168,10 @@ function fakeNative() {
           description: "",
           availability: { state: "installed", executable: "/Users/me/.local/bin/claude" },
           approved: state.approvals.has(`${state.open?.root}:claude-code`),
+          providers: [
+            { provider: "anthropic", supported: true, reason: null },
+            { provider: "ollama", supported: true, reason: null },
+          ],
         },
       ],
       environmentProblem: null,
@@ -162,17 +179,17 @@ function fakeNative() {
         ? { kind: "worktrees", branch: "main", head: "a".repeat(40) }
         : { kind: "unavailable", reason: "This folder is not a Git repository." },
     }),
-    requestAgentApproval: async (agent) => {
-      calls.push(`approve ${agent}`);
+    requestAgentApproval: async (agent, model) => {
+      calls.push(`approve ${agent}${model ? ` ${model.provider}/${model.model}` : ""}`);
       const open = state.open!;
       if (!state.trusted.has(open.root)) throw new NativeError("x", "permissionDenied", "not trusted");
-      const key = `${open.root}:${agent}`;
+      const key = `${open.root}:${agent}${model ? `@${model.provider}` : ""}`;
       if (!state.approvals.has(key) && state.allowAgent) state.approvals.add(key);
       return state.approvals.has(key);
     },
     revokeAgentApproval: async (agent) => void state.approvals.delete(`${state.open?.root}:${agent}`),
-    createAgentSession: async (agent) => {
-      calls.push(`createSession ${agent}`);
+    createAgentSession: async (agent, model) => {
+      calls.push(`createSession ${agent}${model ? ` ${model.provider}/${model.model}` : ""}`);
       const open = state.open!;
       if (!state.git && state.agentSessions.some((s) => !s.worktree && s.state.state === "running")) {
         throw new NativeError("x", "conflict", "this folder is not a Git repository, so agents cannot get workspaces of their own");
@@ -189,6 +206,17 @@ function fakeNative() {
         startedAt: 0,
         state: { state: "notRunning" },
         terminal: null,
+        configuration: model
+          ? {
+              source: "app",
+              provider: model.provider,
+              providerName: "Anthropic",
+              model: model.model,
+              endpoint: "https://api.anthropic.com",
+              credential: "inKeychain",
+              overriddenShellVariables: ["ANTHROPIC_API_KEY"],
+            }
+          : { source: "agent", shellVariables: [] },
       };
       state.agentSessions.push(session);
       return session;
@@ -210,7 +238,29 @@ function fakeNative() {
       calls.push(`readAgentFile ${session} ${path}`);
       return { text: `agent's ${path}\n`, version: "1" };
     },
+    listProviders: async (checkLocal) => {
+      calls.push(`listProviders ${checkLocal}`);
+      return { providers: state.providers.map((p) => ({ ...p })) };
+    },
+    setProviderCredential: async (provider, key) => {
+      if (key.includes("\n")) throw new NativeError("provider_set_credential", "invalidInput", "the key contains control characters");
+      return changeProvider(provider, (p) => ({ ...p, credential: "inKeychain" }));
+    },
+    removeProviderCredential: async (provider) => changeProvider(provider, (p) => ({ ...p, credential: "missing" })),
+    addProviderModel: async (provider, model) => {
+      if (model.startsWith("-")) throw new NativeError("provider_add_model", "invalidInput", "not a model id");
+      return changeProvider(provider, (p) => ({
+        ...p,
+        models: [...p.models, { id: model, provider, name: model, source: "custom", contextWindow: null }],
+      }));
+    },
+    removeProviderModel: async (provider, model) =>
+      changeProvider(provider, (p) => ({ ...p, models: p.models.filter((m) => m.id !== model) })),
   };
+  function changeProvider(id: string, change: (p: ProviderStatus) => ProviderStatus): ProviderStatus {
+    state.providers = state.providers.map((p) => (p.id === id ? change(p) : p));
+    return state.providers.find((p) => p.id === id)!;
+  }
   return { native, state };
 }
 
@@ -830,5 +880,79 @@ describe("Workbench agent sessions", () => {
     await answer(workbench, "remove");
     expect(state.removed).toEqual([{ session: 1, discard: true }]);
     expect(agentPanes(workbench)).toEqual([]);
+  });
+});
+
+describe("Workbench models", () => {
+  it("looks for local providers when Models opens, not when Agents opens", async () => {
+    const { workbench, state } = await opened();
+    workbench.showAgents();
+    await settle();
+    expect(state.calls).toContain("listProviders false");
+    expect(state.calls).not.toContain("listProviders true");
+    workbench.showModels();
+    await settle();
+    expect(state.calls).toContain("listProviders true");
+    expect(workbench.layout.get().sidebar).toBe("models");
+  });
+
+  it("saves a key without keeping it, and asks before removing it", async () => {
+    const { workbench } = await opened();
+    await workbench.providers.load();
+
+    await expect(workbench.saveProviderKey("anthropic", "sk-x8ai-test-invalid")).resolves.toBe(true);
+    expect(workbench.providers.find("anthropic")?.credential).toBe("inKeychain");
+    // Neither the store nor any message holds the key.
+    expect(JSON.stringify(workbench.providers.get())).not.toContain("sk-x8ai-test");
+    expect(JSON.stringify(workbench.notifications.get())).not.toContain("sk-x8ai-test");
+
+    workbench.removeProviderKey("anthropic");
+    await answer(workbench, "cancel");
+    expect(workbench.providers.find("anthropic")?.credential).toBe("inKeychain");
+    workbench.removeProviderKey("anthropic");
+    await answer(workbench, "remove");
+    expect(workbench.providers.find("anthropic")?.credential).toBe("missing");
+  });
+
+  it("reports a refused key without repeating it", async () => {
+    const { workbench } = await opened();
+    await workbench.providers.load();
+    await expect(workbench.saveProviderKey("anthropic", "sk-x8ai\nsecret")).resolves.toBe(false);
+    const messages = workbench.notifications.get().map((n) => n.message);
+    expect(messages).toEqual(["Could not save the Anthropic key: the key contains control characters"]);
+    expect(workbench.providers.find("anthropic")?.credential).toBe("missing");
+  });
+
+  it("adds and removes model ids the user knows", async () => {
+    const { workbench } = await opened();
+    await workbench.providers.load();
+    await expect(workbench.addProviderModel("ollama", "qwen3-coder:30b")).resolves.toBe(true);
+    await expect(workbench.addProviderModel("ollama", "--help")).resolves.toBe(false);
+    expect(workbench.providers.find("ollama")?.models.map((m) => m.id)).toEqual(["qwen3-coder:30b"]);
+    workbench.removeProviderModel("ollama", "qwen3-coder:30b");
+    await settle();
+    expect(workbench.providers.find("ollama")?.models).toEqual([]);
+  });
+
+  it("launches an agent with a chosen model: approved for it, and kept by the session", async () => {
+    const { workbench, state } = await opened();
+    await workbench.agents.load();
+    await workbench.setTrust(true);
+    const model = { provider: "anthropic", model: "claude-sonnet-5" };
+
+    workbench.launchAgent("claude-code", model);
+    await settle();
+    await settle();
+    expect(state.calls).toContain("approve claude-code anthropic/claude-sonnet-5");
+    expect(state.calls).toContain("createSession claude-code anthropic/claude-sonnet-5");
+    await workbench.agents.loadSessions();
+    expect(workbench.agents.session(1)?.configuration).toMatchObject({ source: "app", model: "claude-sonnet-5" });
+
+    // The agent's own configuration is a separate approval.
+    workbench.launchAgent("claude-code", null);
+    await settle();
+    await settle();
+    expect(state.calls).toContain("approve claude-code");
+    expect(state.approvals).toEqual(new Set(["/Users/me/project:claude-code@anthropic", "/Users/me/project:claude-code"]));
   });
 });

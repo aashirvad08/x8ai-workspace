@@ -24,19 +24,21 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use x8ai_core::agent::{AgentDefinition, AgentSessionId};
+use x8ai_core::agent::{AgentDefinition, AgentSessionId, SessionConfiguration};
 use x8ai_core::id::IntegrationId;
 use x8ai_core::launch::EnvValue;
+use x8ai_core::model::ModelSelection;
 use x8ai_core::terminal::{SessionId, TerminalExit, TerminalSize};
 use x8ai_pty::{Environment, Program, Session, SessionEvents, Sessions};
-use x8ai_workspace::{Approval, ApprovalStore, TrustStore};
+use x8ai_workspace::{Approval, ApprovalStore, ApprovedProvider, TrustStore};
 
+use crate::adapter::{names, shell_variables};
 use crate::discovery::find_executable;
 use crate::environment::var;
 use crate::isolation::Worktree;
 
 /// Exactly what would run: shown to the user for approval, and then executed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LaunchPlan {
     pub agent: IntegrationId,
     pub name: String,
@@ -45,7 +47,41 @@ pub struct LaunchPlan {
     /// Absolute path of the executable, as found on `PATH`.
     pub program: PathBuf,
     pub args: Vec<String>,
+    /// The whole environment. May hold a provider credential, so it is never
+    /// printed: `Debug` shows names only.
     pub env: Vec<(String, String)>,
+    /// Arguments the adapter adds after `args` (`--model <id>`). Not approved:
+    /// they only name a model, checked to be a model id and never an option.
+    pub extra_args: Vec<String>,
+    /// The provider the app configured and the endpoint the agent will use.
+    /// Approved. `None`: the agent's own configuration.
+    pub provider: Option<ProviderRoute>,
+    /// The model chosen for the session. `None`: the agent's own configuration.
+    pub model: Option<ModelSelection>,
+    /// Where the session's model configuration comes from, for the user.
+    pub configuration: SessionConfiguration,
+}
+
+/// A provider and the endpoint an agent is configured to send requests, and the
+/// provider's credential, to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRoute {
+    pub provider: IntegrationId,
+    pub endpoint: String,
+}
+
+impl std::fmt::Debug for LaunchPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LaunchPlan")
+            .field("agent", &self.agent)
+            .field("workspace", &self.workspace)
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("env", &names(&self.env))
+            .field("extra_args", &self.extra_args)
+            .field("provider", &self.provider)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LaunchPlan {
@@ -56,6 +92,10 @@ impl LaunchPlan {
             agent: self.agent.as_str(),
             program: &self.program,
             args: &self.args,
+            provider: self.provider.as_ref().map(|p| ApprovedProvider {
+                id: p.provider.as_str(),
+                endpoint: &p.endpoint,
+            }),
         }
     }
 }
@@ -77,7 +117,9 @@ pub enum Denied {
 
 /// Works out how `definition` would start in `workspace` with the user's login
 /// `environment`: the executable is looked up on that environment's `PATH`, and the
-/// definition's own variables are added to it.
+/// definition's own variables are added to it. The agent uses its own model
+/// configuration; [`configure`](crate::adapter::configure) points it at a
+/// provider instead.
 pub fn plan(
     definition: &AgentDefinition,
     environment: &[(String, String)],
@@ -114,7 +156,13 @@ pub fn plan(
         workspace: workspace.to_owned(),
         program,
         args: launch.args.clone(),
+        configuration: SessionConfiguration::Agent {
+            shell_variables: shell_variables(definition.id.as_str(), &env),
+        },
         env,
+        extra_args: Vec::new(),
+        provider: None,
+        model: None,
     })
 }
 
@@ -123,7 +171,8 @@ pub fn plan(
 pub struct Authorized<'a>(&'a LaunchPlan);
 
 /// Allows the launch only if its workspace is trusted and the user approved this
-/// agent, with this executable and these arguments, in this workspace.
+/// agent, with this executable, these arguments and this provider, in this
+/// workspace.
 pub fn authorize<'a>(
     plan: &'a LaunchPlan,
     trust: &TrustStore,
@@ -169,6 +218,10 @@ pub struct AgentSession {
     pub state: SessionState,
     /// The PTY session while it runs.
     pub terminal: Option<SessionId>,
+    /// The model chosen for the session; `None` for the agent's own configuration.
+    pub model: Option<ModelSelection>,
+    /// As of its last launch, or its creation.
+    pub configuration: SessionConfiguration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -186,6 +239,8 @@ pub enum RunError {
     SharedBusy,
     #[error("the launch does not belong to this agent session")]
     Mismatch,
+    #[error("a worktree's model does not match its session")]
+    ModelMismatch,
     #[error("the agent's directory is not inside its workspace")]
     OutsideWorkspace,
     #[error("{0}")]
@@ -200,6 +255,8 @@ struct Record {
     cwd: PathBuf,
     worktree: Option<Worktree>,
     started: u64,
+    model: Option<ModelSelection>,
+    configuration: SessionConfiguration,
     pty: Option<Arc<Session>>,
     failure: Option<String>,
 }
@@ -226,6 +283,8 @@ impl Record {
             cwd: self.cwd.clone(),
             worktree: self.worktree.clone(),
             started: self.started,
+            model: self.model.clone(),
+            configuration: self.configuration.clone(),
             terminal: self
                 .pty
                 .as_ref()
@@ -245,9 +304,9 @@ pub struct AgentRuntime {
 }
 
 impl AgentRuntime {
-    /// A new session for the planned agent: in `worktree` (running in `cwd`
-    /// inside it), or, without one, directly in the plan's workspace. A workspace
-    /// without isolation takes one running agent at a time.
+    /// A new session for the planned agent, with the plan's model: in `worktree`
+    /// (running in `cwd` inside it), or, without one, directly in the plan's
+    /// workspace. A workspace without isolation takes one running agent at a time.
     pub fn create(
         &self,
         plan: &LaunchPlan,
@@ -260,6 +319,9 @@ impl AgentRuntime {
         };
         if !inside {
             return Err(RunError::OutsideWorkspace);
+        }
+        if worktree.as_ref().is_some_and(|w| w.model != plan.model) {
+            return Err(RunError::ModelMismatch);
         }
         let mut records = self.lock();
         if worktree.is_none()
@@ -278,6 +340,8 @@ impl AgentRuntime {
             cwd,
             worktree,
             started: now_ms(),
+            model: plan.model.clone(),
+            configuration: plan.configuration.clone(),
             pty: None,
             failure: None,
         });
@@ -285,13 +349,15 @@ impl AgentRuntime {
     }
 
     /// Adds a session for a worktree found from an earlier run of the app, unless
-    /// one already exists for it. Returns the session.
+    /// one already exists for it. It keeps the worktree's model; `configuration`
+    /// describes it until the agent runs. Returns the session.
     pub fn adopt(
         &self,
         name: &str,
         workspace: &Path,
         cwd: PathBuf,
         worktree: Worktree,
+        configuration: SessionConfiguration,
     ) -> AgentSessionId {
         let mut records = self.lock();
         if let Some(known) = records
@@ -308,6 +374,8 @@ impl AgentRuntime {
             workspace: workspace.to_owned(),
             cwd,
             started: worktree.created,
+            model: worktree.model.clone(),
+            configuration,
             worktree: Some(worktree),
             pty: None,
             failure: None,
@@ -316,8 +384,8 @@ impl AgentRuntime {
     }
 
     /// Runs the agent of session `id`, in the session's directory, on a new PTY
-    /// session. `launch` must be an authorized plan for the same agent and
-    /// workspace. Output and exit are reported to `events`.
+    /// session. `launch` must be an authorized plan for the same agent, workspace
+    /// and model. Output and exit are reported to `events`.
     pub fn run(
         &self,
         sessions: &Sessions,
@@ -342,7 +410,10 @@ impl AgentRuntime {
             .position(|r| r.id == id)
             .ok_or(RunError::NotFound(id))?;
         let record = &records[index];
-        if record.agent != plan.agent || record.workspace != plan.workspace {
+        if record.agent != plan.agent
+            || record.workspace != plan.workspace
+            || record.model != plan.model
+        {
             return Err(RunError::Mismatch);
         }
         if record.running() {
@@ -353,11 +424,17 @@ impl AgentRuntime {
         }
         let program = Program::Exec {
             program: plan.program.clone(),
-            args: plan.args.iter().map(Into::into).collect(),
+            args: plan
+                .args
+                .iter()
+                .chain(&plan.extra_args)
+                .map(Into::into)
+                .collect(),
             cwd: Some(record.cwd.clone()),
             env: Environment::Exactly(plan.env.clone()),
         };
         let record = &mut records[index];
+        record.configuration = plan.configuration.clone();
         match sessions.spawn(&program, size, events) {
             Ok(session) => {
                 record.pty = Some(session.clone());

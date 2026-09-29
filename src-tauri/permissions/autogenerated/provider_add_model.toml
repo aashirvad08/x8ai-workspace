@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-add-model"
+description = "Enables the provider_add_model command without any pre-configured scope."
+commands.allow = ["provider_add_model"]
+
+[[permission]]
+identifier = "deny-provider-add-model"
+description = "Denies the provider_add_model command without any pre-configured scope."
+commands.deny = ["provider_add_model"]

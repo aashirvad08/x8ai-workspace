@@ -7,10 +7,13 @@ import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchMatch } from "../contracts/generated/SearchMatch";
 import type { WorkspaceEvent } from "../contracts/generated/WorkspaceEvent";
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
+import type { ModelSelection } from "../contracts/generated/ModelSelection";
 import type { EditorActions } from "../editor/actions";
 import { EditorStore } from "../editor/editor-store";
 import { basename, dirname, join } from "../lib/paths";
 import { Value } from "../lib/store";
+import type { ModelActions } from "../models/actions";
+import { Providers } from "../models/providers";
 import { type NativeClient, NativeError } from "../native";
 import type { TerminalActions } from "../terminal/actions";
 import type { SplitDirection } from "../terminal/panes";
@@ -30,7 +33,9 @@ import { Picker } from "./picker";
  * action lives here, so components stay presentational and the behaviour is
  * testable without React.
  */
-export class Workbench implements ExplorerActions, EditorActions, TerminalActions, SearchActions, AgentActions {
+export class Workbench
+  implements ExplorerActions, EditorActions, TerminalActions, SearchActions, AgentActions, ModelActions
+{
   readonly workspace = new Value<WorkspaceInfo | null>(null);
   /** Recently opened folders, most recent first. */
   readonly recent = new Value<readonly RecentWorkspace[]>([]);
@@ -38,6 +43,7 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
   readonly editor: EditorStore;
   readonly search: Search;
   readonly agents: Agents;
+  readonly providers: Providers;
   readonly terminals = new Terminals();
   readonly notifications = new Notifications();
   readonly dialogs = new Dialogs();
@@ -58,6 +64,7 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     this.editor = new EditorStore(native);
     this.search = new Search(native);
     this.agents = new Agents(native);
+    this.providers = new Providers(native);
     this.editor.subscribe(() => this.#reportUnsaved());
     this.terminals.subscribe(() => this.#agentPanesChanged());
   }
@@ -412,6 +419,7 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
       { id: "view.files", title: "Show File Explorer", shortcut: { key: "e", meta: true, shift: true }, run: () => this.layout.showSidebar("files") },
       { id: "search.show", title: "Search in Folder", shortcut: { key: "f", meta: true, shift: true }, run: () => this.showSearch() },
       { id: "view.agents", title: "Show Agents", shortcut: { key: "a", meta: true, shift: true }, run: () => this.showAgents() },
+      { id: "view.models", title: "Show Models", shortcut: { key: "m", meta: true, shift: true }, run: () => this.showModels() },
       { id: "terminal.toggle", title: "Toggle Terminal", shortcut: { key: "`", ctrl: true }, run: () => this.toggleTerminal() },
       { id: "terminal.new", title: "New Terminal", shortcut: { key: "`", ctrl: true, shift: true }, run: () => this.newTerminal() },
       { id: "terminal.splitRight", title: "Split Terminal Right", shortcut: { key: "d", meta: true }, when: "terminalFocused", run: () => this.splitTerminal("right") },
@@ -503,12 +511,78 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     return { agents, programs: busy.filter(Boolean).length };
   }
 
+  // Models
+
+  /** ⇧⌘M: model providers in the sidebar. */
+  showModels(): void {
+    this.layout.showSidebar("models");
+    void this.providers.load(true);
+  }
+
+  refreshProviders(): void {
+    void this.providers.load(true);
+  }
+
+  async saveProviderKey(provider: string, key: string): Promise<boolean> {
+    const name = this.providers.find(provider)?.name ?? provider;
+    try {
+      this.providers.replace(await this.#native.setProviderCredential(provider, key));
+    } catch (error) {
+      this.notifications.error(`Could not save the ${name} key: ${messageOf(error)}`);
+      return false;
+    }
+    this.notifications.info(`${name} key saved in your Keychain.`);
+    return true;
+  }
+
+  removeProviderKey(provider: string): void {
+    void this.#removeProviderKey(provider);
+  }
+
+  async #removeProviderKey(provider: string): Promise<void> {
+    const name = this.providers.find(provider)?.name ?? provider;
+    const choice = await this.dialogs.ask({
+      title: `Remove the ${name} key?`,
+      message:
+        "It is deleted from your Keychain. Agents already running keep working; starting one with this provider needs a key again.",
+      buttons: [
+        { label: "Remove", value: "remove", role: "destructive" },
+        { label: "Cancel", value: "cancel" },
+      ],
+      cancel: "cancel",
+    });
+    if (choice !== "remove") return;
+    try {
+      this.providers.replace(await this.#native.removeProviderCredential(provider));
+    } catch (error) {
+      this.notifications.error(`Could not remove the ${name} key: ${messageOf(error)}`);
+    }
+  }
+
+  async addProviderModel(provider: string, model: string): Promise<boolean> {
+    try {
+      this.providers.replace(await this.#native.addProviderModel(provider, model));
+      return true;
+    } catch (error) {
+      this.notifications.error(`Could not add the model: ${messageOf(error)}`);
+      return false;
+    }
+  }
+
+  removeProviderModel(provider: string, model: string): void {
+    this.#native
+      .removeProviderModel(provider, model)
+      .then((status) => this.providers.replace(status))
+      .catch((error: unknown) => this.notifications.error(`Could not remove the model: ${messageOf(error)}`));
+  }
+
   // Agents
 
   /** ⇧⌘A: the agents in the sidebar. */
   showAgents(): void {
     this.layout.showSidebar("agents");
     void this.agents.load();
+    void this.providers.load();
   }
 
   refreshAgents(): void {
@@ -519,18 +593,19 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     void this.setTrust(true);
   }
 
-  launchAgent(id: string): void {
-    void this.#launchAgent(id);
+  launchAgent(id: string, model: ModelSelection | null = null): void {
+    void this.#launchAgent(id, model);
   }
 
   /**
    * An agent starts only in a trusted folder, and only once the user allowed it
    * there. Both are enforced natively; this walks the user through them: trust
    * first (asked here, granted in a native dialog), then approval (a native
-   * dialog). Then the native side makes the agent a session (a worktree of its
-   * own in a Git repository), and a terminal pane starts the agent in it.
+   * dialog, which names the provider and endpoint when a model is chosen). Then
+   * the native side makes the agent a session (a worktree of its own in a Git
+   * repository) that keeps the model, and a terminal pane starts the agent in it.
    */
-  async #launchAgent(id: string): Promise<void> {
+  async #launchAgent(id: string, model: ModelSelection | null): Promise<void> {
     const workspace = this.workspace.get();
     if (!workspace) {
       this.notifications.info("Open a folder first (⌘O). Agents run in the open folder.");
@@ -553,7 +628,7 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     }
     let approved: boolean;
     try {
-      approved = await this.#native.requestAgentApproval(id);
+      approved = await this.#native.requestAgentApproval(id, model);
     } catch (error) {
       this.notifications.error(`Could not start ${name}: ${messageOf(error)}`);
       return;
@@ -562,7 +637,7 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     if (!approved) return;
     let session: AgentSessionInfo;
     try {
-      session = await this.#native.createAgentSession(id);
+      session = await this.#native.createAgentSession(id, model);
     } catch (error) {
       this.notifications.error(`Could not start ${name}: ${messageOf(error)}`);
       return;

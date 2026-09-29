@@ -3,8 +3,14 @@ import type { IntegrationId } from "./IntegrationId";
 import type { ModelInfo } from "./ModelInfo";
 import type { ProviderAuth } from "./ProviderAuth";
 import type { ProviderEndpoint } from "./ProviderEndpoint";
+import type { ProviderKind } from "./ProviderKind";
 
 export type ModelProviderDefinition = { id: IntegrationId, name: string, description: string, 
+/**
+ * Who runs it: a hosted service, a gateway to other providers, or a server on
+ * this machine. (Not `kind`, which tags the definition type.)
+ */
+hosting: ProviderKind, 
 /**
  * The APIs this provider serves. At least one.
  */

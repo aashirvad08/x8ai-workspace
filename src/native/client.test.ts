@@ -189,14 +189,14 @@ describe("native client agent commands", () => {
 
   it("passes only ids for sessions, never paths for worktrees", async () => {
     const { calls, client } = bridge();
-    await client.createAgentSession("claude-code");
+    await client.createAgentSession("claude-code", null);
     await client.agentSessions();
     await client.stopAgentSession(3);
     await client.removeAgentSession(3, false);
     await client.agentChanges(3);
     await client.readAgentFile(3, "src/main.rs");
     expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
-      { command: "agent_create_session", args: { agent: "claude-code" } },
+      { command: "agent_create_session", args: { agent: "claude-code", model: null } },
       { command: "agent_sessions", args: undefined },
       { command: "agent_stop", args: { session: 3 } },
       { command: "agent_remove", args: { session: 3, discard: false } },
@@ -208,12 +208,35 @@ describe("native client agent commands", () => {
   it("lists, approves and revokes with named arguments", async () => {
     const { calls, client } = bridge();
     await client.listAgents(true);
-    await client.requestAgentApproval("claude-code");
+    await client.requestAgentApproval("claude-code", { provider: "openrouter", model: "anthropic/claude-sonnet-5" });
     await client.revokeAgentApproval("claude-code");
     expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
       { command: "agent_list", args: { refresh: true } },
-      { command: "agent_request_approval", args: { agent: "claude-code" } },
+      {
+        command: "agent_request_approval",
+        args: { agent: "claude-code", model: { provider: "openrouter", model: "anthropic/claude-sonnet-5" } },
+      },
       { command: "agent_revoke", args: { agent: "claude-code" } },
     ]);
+  });
+});
+
+describe("native client provider commands", () => {
+  it("sends a key once, to save it, and has no way to read one back", async () => {
+    const { calls, client } = bridge();
+    await client.listProviders(true);
+    await client.setProviderCredential("anthropic", "sk-x8ai-test-invalid");
+    await client.removeProviderCredential("anthropic");
+    await client.addProviderModel("ollama", "qwen3-coder:30b");
+    await client.removeProviderModel("ollama", "qwen3-coder:30b");
+    expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
+      { command: "provider_list", args: { checkLocal: true } },
+      { command: "provider_set_credential", args: { provider: "anthropic", key: "sk-x8ai-test-invalid" } },
+      { command: "provider_remove_credential", args: { provider: "anthropic" } },
+      { command: "provider_add_model", args: { provider: "ollama", model: "qwen3-coder:30b" } },
+      { command: "provider_remove_model", args: { provider: "ollama", model: "qwen3-coder:30b" } },
+    ]);
+    const methods = Object.keys(client).filter((name) => /credential|key|secret/i.test(name));
+    expect(methods.sort()).toEqual(["removeProviderCredential", "setProviderCredential"]);
   });
 });

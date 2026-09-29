@@ -19,5 +19,8 @@ NNNN), **Context**, **Decision**, **Consequences**, and **Alternatives considere
 | [0009](0009-workspace-filesystem-boundary.md) | Workspace filesystem boundary | Accepted |
 | [0010](0010-workspace-trust-and-recent-workspaces.md) | Workspace trust and remembered workspaces | Accepted |
 | [0011](0011-intercepting-system-quit-on-macos.md) | Intercepting Quit from the Dock, logout and shutdown on macOS | Accepted |
-| [0012](0012-agent-runtime.md) | Agent runtime: PTY sessions, the login environment, and per-workspace approval | Accepted |
+| [0012](0012-agent-runtime.md) | Agent runtime: PTY sessions, the login environment, and per-workspace approval | Accepted, amended by 0015 |
 | [0013](0013-agent-worktree-isolation.md) | Agent isolation with Git worktrees, through the user's git | Accepted |
+| [0014](0014-secret-storage.md) | Provider credentials in the macOS Keychain, native only | Accepted |
+| [0015](0015-environment-precedence.md) | Environment precedence, and what an approval covers | Accepted |
+| [0016](0016-provider-and-model-configuration.md) | Providers as data, agents configured by adapters | Accepted |

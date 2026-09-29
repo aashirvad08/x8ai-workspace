@@ -12,14 +12,14 @@ protection. Do not rely on it.
 
 ---
 
-## 1. What is enforced today (Phases 0–5)
+## 1. What is enforced today (Phases 0–6)
 
 These protections exist and are verified:
 
 | Control | Where | Verified by |
 | --- | --- | --- |
 | Every native command needs an explicit grant to a window. Tauri rejects ungranted calls before the command's code runs. | `src-tauri/build.rs`, `src-tauri/capabilities/` | Manual: revoking the grant yields `Command get_app_info not allowed by ACL` in the UI |
-| The webview's commands are `get_app_info`, `app_*` (quit guard, startup warnings), `terminal_*` and `workspace_*` (files, recent folders, trust, search), each granted explicitly. No shell, fs, HTTP or opener plugins are installed. `tauri-plugin-dialog` is used only from Rust, and none of its webview commands are granted. | `src-tauri/Cargo.toml`, `capabilities/main-window.json` | Code review, `tauri-build` ACL output; `src/architecture.test.ts` checks that the grants are exactly the commands the client calls |
+| The webview's commands are `get_app_info`, `app_*` (quit guard, startup warnings), `terminal_*`, `workspace_*` (files, recent folders, trust, search), `agent_*` and `provider_*` (keys, model ids), each granted explicitly. No shell, fs, HTTP or opener plugins are installed. `tauri-plugin-dialog` is used only from Rust, and none of its webview commands are granted. | `src-tauri/Cargo.toml`, `capabilities/main-window.json` | Code review, `tauri-build` ACL output; `src/architecture.test.ts` checks that the grants are exactly the commands the client calls |
 | **The webview cannot choose what a terminal runs, or where.** `terminal_create` always starts the user's login shell, in the open workspace's root or the home directory, and accepts only a size. | `src-tauri/src/terminal.rs` | Code review; manual `pwd` |
 | **The webview cannot name a new folder to open.** A workspace is whatever the user picks in the native folder picker, or a folder from the recent list, which only ever holds folders picked that way. Reopening also requires the path to still lead to the same folder, so replacing it with a symlink does not redirect it. | `src-tauri/src/workspace.rs`, `crates/workspace` | Code review; test `reopening_refuses_a_path_that_now_leads_elsewhere` |
 | **Only the user can trust a folder.** Trust is granted only in a native confirmation dialog the webview cannot answer, applies to exactly one folder (not its parent or subfolders), and is stored outside the folder, so a repository cannot declare itself trusted (ADR 0010). | `src-tauri/src/workspace.rs`, `crates/workspace/src/store.rs` | Store tests (`trust_is_explicit_exact_and_persistent`); code review |
@@ -35,6 +35,12 @@ These protections exist and are verified:
 | **Agents work in worktrees of their own, and the user's working tree is not touched.** In a Git repository each agent session gets a linked worktree on a new branch under the app-controlled `~/.x8ai/worktrees` (0700, no symlinks), named natively from the agent id and a generated token. The webview passes only ids; branch names and revisions are validated. Removal needs the user's confirmation and never deletes committed work. Non-Git folders take one agent at a time, stated as not isolated. | `crates/agents/src/isolation.rs`, `crates/git` | Tests (`multi_agent.rs`: separate worktrees, primary tree unchanged, paths in scope, symlinked directory refused, crafted metadata ignored, removal rules; `git.rs`: hooks do not run, `GIT_*` ignored, foreign revisions refused) |
 | **The app's own Git calls run no repository code.** Hooks and fsmonitor are disabled, inherited `GIT_*` variables removed, no prompts, a timeout. | `crates/git` | Test (`the_apps_git_runs_no_repository_hooks_and_ignores_inherited_git_variables`) |
 | **Built-in agents never launch with approval-bypass flags or secrets.** | `crates/agents/src/builtin.json` | Test (`no_builtin_agent_bypasses_its_own_approvals_or_needs_a_secret`) |
+| **Provider keys live only in the macOS Keychain, and the webview can never read one.** The webview sends a key once, to save it; no command returns one; it learns only whether one is saved. No file the app writes holds a key (ADR 0014). | `crates/secrets`, `src-tauri/src/providers.rs` | Tests (`what_the_webview_receives_never_holds_a_key`, `the_key_reaches_the_agent_and_is_written_nowhere` scans every file, client test: no read method); live test with the real Keychain |
+| **A key reaches only the agent session it was chosen for.** It is read natively when that session is created or run and placed only in that process's environment; never in the app's own, so shells cannot inherit it. A removed key stops the next run. | `crates/agents/src/adapter/`, `src-tauri/src/agents.rs` | Tests (a shell's environment inspected; `a_provider_that_needs_a_key_refuses_to_start_without_one`); live test |
+| **Nothing prints a key.** `SecretValue` has no `Display` or `Serialize` and a redacted `Debug`; `LaunchPlan`, adapter `Configuration` and the PTY `Environment` print variable names only; errors never echo input. | `crates/secrets`, `crates/agents`, `crates/pty` | Tests (`a_secret_is_never_printed`, `a_credential_never_appears_in_debug_output_or_errors`, `an_environment_prints_names_but_never_values`); review of every log line |
+| **The shell cannot redirect an app-configured session, and the two are never mixed.** Every variable the agent's adapter controls is removed before the adapter's are set; Claude Code is told its provider is host-managed, so its settings files cannot change it; OpenCode's endpoint is pinned inline (ADR 0015). | `crates/agents/src/adapter/` | Tests (`claude_code_with_anthropic_uses_the_apps_key_and_nothing_from_the_shell`, …); live test with the real Claude Code |
+| **The destination is approved.** An approval pins the provider and endpoint too; another provider or endpoint asks again; a model or key change does not. Endpoints come only from built-in definitions. Model ids are checked and can never become options. | `crates/workspace/src/store.rs`, `crates/core/src/model.rs` | Tests (`a_new_provider_or_endpoint_needs_approval_and_a_new_model_does_not`, `a_model_id_can_never_become_a_command_line_option`, …) |
+| **No network access at startup, none to hosted providers.** Ollama is probed on the loopback address only when the user opens Models or refreshes. | `crates/providers/src/ollama.rs`, `src/models/` | Workbench test (`looks for local providers when Models opens, not when Agents opens`); review |
 | **A running program is not ended by accident.** Closing a terminal pane or tab, or quitting, asks first when a program other than the shell is in the terminal's foreground (read from the PTY with `tcgetpgrp`). | `crates/pty`, `src/workbench/workbench.ts` | Tests (`knows_when_a_job_is_in_the_foreground`, workbench tests) |
 | Terminal command arguments are validated in Rust: sizes (1–4096 × 1–2048), session ids (`notFound` otherwise), and raw input only to an existing session | `crates/core/src/terminal.rs`, `crates/pty` | Unit and integration tests |
 | No terminal content is persisted. Scrollback (10,000 lines) exists only in webview memory. Native output buffering is bounded by flow control (512 KiB per session). | `src/terminal/TerminalView.tsx`, `crates/pty/src/session.rs` | Tests (`output_pauses_until_acknowledged`) |
@@ -151,21 +157,29 @@ weaken it.
 ### 3.4 Secrets and API keys
 
 - **Storage:** macOS Keychain via the native secret store. No plaintext config
-  files, and not `localStorage`. **Phase 6.**
+  files, and not `localStorage`. **Enforced (Phase 6, ADR 0014).**
 - **Reference, don't embed.** Definitions use `SecretName`, and the type system
   makes embedding a value impossible (built). Validation rejects URLs with
   embedded credentials (built).
 - **Delivery:** secrets are resolved at launch and placed only in the environment
   of the specific child that needs them. They are never set on the app process,
-  so shells and other children cannot inherit them. **Phase 6.**
+  so shells and other children cannot inherit them. **Enforced (Phase 6).**
 - **Never in the webview.** No command returns a secret value. The UI can only set,
-  replace or delete a secret and see whether one exists. **Phase 6.**
+  replace or delete a secret and see whether one exists. The key the user types is
+  sent once, to be saved, and the field is cleared. **Enforced (Phase 6).**
 - **Never in logs, errors or crash reports.** `CommandError.message` must not include
-  secret values or environment dumps (documented on the type). Redaction is added
-  when logging lands.
+  secret values or environment dumps (documented on the type). Every type that can
+  hold a key or an environment prints redacted or names-only `Debug`. **Enforced
+  (Phase 6).**
+- **Precedence:** a session the app configures replaces the provider variables the
+  shell sets, rather than mixing with them; one using the agent's own
+  configuration gets no app-held key. **Enforced (Phase 6, ADR 0015).**
 - **Residual risk:** once a secret is in an agent's environment, the agent (and
-  anything it runs) can read and exfiltrate it. Prefer agents' native login flows,
-  where tokens stay in the agent's own store, over API keys the app injects.
+  anything it runs, which inherits its environment) can read and exfiltrate it,
+  and other processes running as the user can read a process's environment
+  (`ps -E`). Prefer agents' native login flows, where tokens stay in the agent's
+  own store, over API keys the app injects; the agent's own configuration stays
+  the default.
 - **Vite:** only `VITE_*` variables are exposed to the frontend bundle. Never put
   secrets in them.
 
@@ -211,9 +225,9 @@ weaken it.
   user detached on purpose (`nohup`, `disown`) survive, as in any terminal.
   **Enforced (Phase 1).**
 - **Environment leakage.** Terminal sessions inherit the app's environment plus
-  `TERM`, `COLORTERM`, `TERM_PROGRAM` and, when no locale is set, `LANG`. The app
-  holds no secrets yet, so none can leak. When secrets arrive (Phase 6) they are
-  never placed in the app's own environment. Under `pnpm tauri dev`, sessions also
+  `TERM`, `COLORTERM`, `TERM_PROGRAM` and, when no locale is set, `LANG`. Provider
+  keys are never placed in the app's own environment, so shells cannot inherit
+  them (tested, Phase 6). Under `pnpm tauri dev`, sessions also
   inherit the dev server's environment. **Phase 1 (terminal), Phase 4 (agents).**
 - **Resource exhaustion.** Output is batched with bounded buffers and backpressure:
   a flood blocks the producer rather than growing memory. **Enforced (Phase 1).**
@@ -297,8 +311,9 @@ and content.
 1. Every new native command must be granted explicitly and validate its arguments.
    Review capability diffs as security diffs.
 2. Never spawn through a shell string. Use `program + args`.
-3. Never pass a secret value through IPC, a log line, an error message or a file
-   the app writes.
+3. Never return a secret value through IPC, and never put one in a log line, an
+   error message or a file the app writes. The only secret that crosses IPC is the
+   key the user types, sent once to the native side to be saved.
 4. Never render untrusted content as HTML in the main webview.
 5. Never auto-execute anything from a workspace the user has not trusted.
 6. Never add approval-bypass flags to an agent launch by default.

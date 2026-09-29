@@ -12,8 +12,8 @@ are part of every phase, not a final pass (`docs/security.md`).
 | 3 | Workspace sessions: persistence, trust and layout | **Complete** |
 | 4 | Agent runtime | **Complete** |
 | 5 | Multi-agent workspaces | **Complete** |
-| 6 | Model providers, secrets and local models | Next |
-| 7 | MCP layer | Planned |
+| 6 | Model providers, secrets and local models | **Complete** |
+| 7 | MCP layer | Next |
 | 8 | Catalog | Planned |
 | 9 | Review and merge | Planned |
 | 10 | Editor intelligence | Planned |
@@ -182,34 +182,39 @@ Safe removal. Explicit non-Git behavior.
 **Objective.** Configure model providers once and use them from any compatible
 agent.
 
-**Major components.** A `secrets` crate (macOS Keychain). A `providers` crate with
-definitions for Anthropic, OpenAI, Google and OpenRouter. Connection tests and
-model listing. Agent↔provider compatibility by `ProviderApi`. Per-agent config
-adapters that inject provider, model and credentials at launch.
+**Delivered** (docs/models.md; ADRs 0014, 0015, 0016). An `x8ai-secrets` crate
+(macOS Keychain, a value type that cannot be printed). An `x8ai-providers` crate:
+Anthropic, OpenAI, Google, OpenRouter (a gateway) and Ollama (local), model ids from
+the definition, from Ollama or from the user, non-secret `providers.json`, Ollama
+detection on request. Agent adapters in `x8ai-agents` for Claude Code and OpenCode,
+behind one trait; none for Codex. Model selection per session, kept with its
+worktree. An explicit environment precedence rule. Approvals that pin the provider
+and endpoint. A Models view and a model choice at launch.
 
 **Acceptance criteria.**
 - Keys are stored only in the Keychain, never cross IPC to the webview, and never
-  appear in logs (tests plus review).
+  appear in logs (tests plus review). **Met**; the only key crossing IPC is the one
+  the user types, sent once to be saved.
 - A key is present only in the environment of the agent that needs it. Shells do
-  not inherit it (tested by inspecting a child's environment).
+  not inherit it (tested by inspecting a child's environment). **Met.**
 - The UI offers only compatible providers for each agent, and the result is
-  correct for all built-in agents.
-- Revoking a key takes effect for new sessions immediately.
+  correct for all built-in agents. **Met** (Claude Code: Anthropic, OpenRouter,
+  Ollama; OpenCode: all five; Codex: none).
+- Revoking a key takes effect for new sessions immediately. **Met**: every run
+  reads the Keychain again.
+- An agent can run against a local model with no API key. **Met** for configuration
+  (verified with the real Claude Code); running a model offline was not verified,
+  because no model is pulled on the development machine and the app pulls none.
 
-### Local models (part of Phase 6)
-
-**Objective.** Make local and open-weight models a first-class choice.
-
-**Major components.** Ollama detection and definitions. Listing installed models.
-Pulling models with progress. Hardware-aware suggestions (RAM or VRAM vs model
-size). Support for other OpenAI-compatible local servers (LM Studio, llama.cpp
-server, vLLM).
-
-**Acceptance criteria.**
-- An agent can run against a local model with no API key and no network egress for
-  model traffic. This is verified by running offline.
-- Model pulls can be cancelled and resumed, and progress is shown.
-- The UI clearly distinguishes local providers from remote ones.
+**Deferred from Phase 6**, deliberately:
+- Connection tests and model listing for hosted providers: both are network
+  requests on the user's behalf and need an HTTPS client the app does not have.
+  Planned with an ADR on outbound requests, before Phase 8.
+- Pulling models with progress, and hardware-aware suggestions: catalog territory
+  (Phase 8).
+- Other local servers (LM Studio, llama.cpp server, vLLM) and an `OLLAMA_HOST`
+  other than the default.
+- Verifying the OpenCode adapter against a running OpenCode.
 
 ## Phase 7 — MCP layer
 

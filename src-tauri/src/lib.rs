@@ -2,7 +2,8 @@
 //!
 //! This crate is the only one that knows about Tauri. It owns the window and menu,
 //! registers the IPC commands the webview may call, and holds native state:
-//! terminal sessions, agents, the open workspace, and the quit guard. Logic that does not
+//! terminal sessions, agents, model providers, the open workspace, and the quit
+//! guard. Logic that does not
 //! need Tauri belongs in `crates/`.
 
 mod agents;
@@ -11,6 +12,7 @@ mod commands;
 #[cfg(target_os = "macos")]
 mod macos;
 mod menu;
+mod providers;
 mod terminal;
 mod workspace;
 
@@ -19,6 +21,7 @@ use tauri::{Manager, RunEvent, WindowEvent};
 
 use agents::Agents;
 use app::AppState;
+use providers::Providers;
 use terminal::Terminals;
 use workspace::Workspaces;
 
@@ -31,10 +34,15 @@ pub fn run() {
         .manage(Workspaces::default())
         .manage(AppState::default())
         .manage(Agents::default())
+        .manage(Providers::default())
         .setup(|app| {
             let workspaces = app.state::<Workspaces>();
             match app.path().app_data_dir() {
-                Ok(data_dir) => workspaces.load_stores(&data_dir),
+                Ok(data_dir) => {
+                    workspaces.load_stores(&data_dir);
+                    app.state::<Providers>()
+                        .load_settings(&data_dir, &workspaces);
+                }
                 // The app still works; it just cannot remember folders or trust.
                 Err(e) => workspaces.warn(format!("Recent folders and trust are unavailable: {e}")),
             }
@@ -87,6 +95,11 @@ pub fn run() {
             agents::agent_remove,
             agents::agent_changes,
             agents::agent_read_file,
+            providers::provider_list,
+            providers::provider_set_credential,
+            providers::provider_remove_credential,
+            providers::provider_add_model,
+            providers::provider_remove_model,
             terminal::terminal_create,
             terminal::terminal_write,
             terminal::terminal_resize,

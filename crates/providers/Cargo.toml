@@ -1,0 +1,16 @@
+[package]
+name = "x8ai-providers"
+description = "Model providers and models: built-in definitions, non-secret settings, and local availability (Ollama). No Tauri, no network access beyond localhost."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+x8ai-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

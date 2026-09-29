@@ -1,6 +1,6 @@
 import { Store } from "../lib/store";
 
-export type SidebarView = "files" | "search" | "agents";
+export type SidebarView = "files" | "search" | "agents" | "models";
 
 export interface LayoutState {
   readonly explorerWidth: number;
@@ -71,7 +71,7 @@ function load(): LayoutState {
       terminalHeight: clamp(Number(stored.terminalHeight ?? DEFAULTS.terminalHeight), TERMINAL_HEIGHT),
       explorerVisible: stored.explorerVisible ?? DEFAULTS.explorerVisible,
       terminalVisible: stored.terminalVisible ?? DEFAULTS.terminalVisible,
-      sidebar: stored.sidebar === "search" || stored.sidebar === "agents" ? stored.sidebar : "files",
+      sidebar: stored.sidebar === "search" || stored.sidebar === "agents" || stored.sidebar === "models" ? stored.sidebar : "files",
     };
   } catch {
     return DEFAULTS;

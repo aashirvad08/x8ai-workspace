@@ -119,6 +119,14 @@ impl Workspaces {
             .is_some_and(|s| s.approvals.is_approved(&plan.approval()))
     }
 
+    /// Whether the agent of this launch is approved in its workspace for any
+    /// model configuration, as the Agents view shows it.
+    pub(crate) fn is_approved_for_any_provider(&self, plan: &LaunchPlan) -> bool {
+        lock(&self.stores)
+            .as_ref()
+            .is_some_and(|s| s.approvals.is_approved_for_any_provider(&plan.approval()))
+    }
+
     /// Allows the launch only if its workspace is trusted and it is approved there
     /// (`x8ai_agents::authorize`).
     pub(crate) fn authorize<'a>(&self, plan: &'a LaunchPlan) -> Result<Authorized<'a>, Denied> {

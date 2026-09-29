@@ -2991,6 +2991,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "security-framework"
+version = "3.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
+dependencies = [
+ "bitflags 2.13.2",
+ "core-foundation",
+ "core-foundation-sys",
+ "libc",
+ "security-framework-sys",
+]
+
+[[package]]
+name = "security-framework-sys"
+version = "2.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
+]
+
+[[package]]
 name = "selectors"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4971,7 +4994,9 @@ dependencies = [
  "thiserror 2.0.21",
  "x8ai-core",
  "x8ai-git",
+ "x8ai-providers",
  "x8ai-pty",
+ "x8ai-secrets",
  "x8ai-workspace",
 ]
 
@@ -4998,7 +5023,9 @@ dependencies = [
  "x8ai-agents",
  "x8ai-core",
  "x8ai-git",
+ "x8ai-providers",
  "x8ai-pty",
+ "x8ai-secrets",
  "x8ai-workspace",
 ]
 
@@ -5012,6 +5039,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "x8ai-providers"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "x8ai-core",
+]
+
+[[package]]
 name = "x8ai-pty"
 version = "0.1.0"
 dependencies = [
@@ -5021,6 +5059,14 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "x8ai-core",
+]
+
+[[package]]
+name = "x8ai-secrets"
+version = "0.1.0"
+dependencies = [
+ "security-framework",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

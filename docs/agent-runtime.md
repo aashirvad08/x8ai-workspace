@@ -162,7 +162,10 @@ Refresh):
   environment and the Agents view says why.
 
 This is what the user's own terminal would give the agent, including variables
-their startup files export. The app itself adds no secrets; it holds none.
+their startup files export. Unless the user chose a provider and model for the
+session (docs/models.md): then the agent's adapter replaces the variables it
+controls with the app's configuration, including the provider's key from the
+Keychain (ADR 0015). Otherwise the app adds no secrets.
 
 ### Discovery
 
@@ -199,11 +202,11 @@ that prints while exiting cannot hang (see architecture §6).
 
 | Boundary | Enforced by |
 | --- | --- |
-| The webview cannot choose what runs, where, or with what environment | Agent commands take an agent or session id and a size only |
+| The webview cannot choose what runs, where, or with what environment | Agent commands take an agent or session id, a size, and a provider id and model id (checked; the adapter decides what they mean) |
 | No agent in an untrusted workspace | Native check on every start (`authorize`) |
-| No agent without the user's approval for this folder and executable | Native dialog to grant; native check on every start |
+| No agent without the user's approval for this folder, executable and provider | Native dialog to grant; native check on every start |
 | A project cannot approve agents for itself | Approvals live in the app data directory; nothing reads approval state from a workspace |
-| No hidden elevation, credentials or directories | The agent runs as the user, with the environment described above; no secret store exists yet |
+| No hidden elevation, credentials or directories | The agent runs as the user, with the environment described above; a Keychain key only in a session whose provider the user chose |
 | No orphaned agents | PTY session leaders, process-group teardown, quit and crash paths (tests) |
 
 Not enforced, and not claimed: what an agent does once running. It has the user's
@@ -234,9 +237,10 @@ built-in definitions).
 
 ## Future extension points
 
-- **Models (Phase 6):** per-agent config adapters that turn "provider P, model M"
-  into flags or environment variables, and inject secrets from the Keychain into
-  that one agent's environment (`EnvValue::Secret`, refused today).
+- **Models** [built: Phase 6, docs/models.md]: per-agent adapters turn "provider
+  P, model M" into documented variables and flags, with the key from the Keychain
+  in that one agent's environment. `EnvValue::Secret` in a definition is still
+  refused.
 - **MCP (Phase 7):** `capabilities.mcpTransports` already says which transports an
   agent supports; an adapter will write the workspace's enabled MCP servers into
   the agent's own configuration before `start`.

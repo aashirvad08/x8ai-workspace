@@ -1,5 +1,6 @@
 import { AgentsView } from "../agents/AgentsView";
 import { useStore } from "../lib/useStore";
+import { ModelsView } from "../models/ModelsView";
 import type { SidebarView } from "../workbench/layout";
 import type { Workbench } from "../workbench/workbench";
 import { FileExplorer } from "../workspace/FileExplorer";
@@ -9,9 +10,10 @@ const VIEWS: readonly { view: SidebarView; label: string; shortcut: string }[] =
   { view: "files", label: "Files", shortcut: "⇧⌘E" },
   { view: "search", label: "Search", shortcut: "⇧⌘F" },
   { view: "agents", label: "Agents", shortcut: "⇧⌘A" },
+  { view: "models", label: "Models", shortcut: "⇧⌘M" },
 ];
 
-/** The left column: the file explorer, search or agents, switched by tabs at the top. */
+/** The left column: the file explorer, search, agents or models, switched by tabs at the top. */
 export function Sidebar({ workbench }: { workbench: Workbench }) {
   const { sidebar } = useStore(workbench.layout);
   return (
@@ -28,6 +30,7 @@ export function Sidebar({ workbench }: { workbench: Workbench }) {
             onClick={() => {
               if (view === "search") workbench.showSearch();
               else if (view === "agents") workbench.showAgents();
+              else if (view === "models") workbench.showModels();
               else workbench.layout.showSidebar(view);
             }}
           >
@@ -45,7 +48,18 @@ export function Sidebar({ workbench }: { workbench: Workbench }) {
       )}
       {sidebar === "agents" && (
         <aside className="explorer" aria-label="Agents">
-          <AgentsView agents={workbench.agents} terminals={workbench.terminals} workspace={workbench.workspace} actions={workbench} />
+          <AgentsView
+            agents={workbench.agents}
+            providers={workbench.providers}
+            terminals={workbench.terminals}
+            workspace={workbench.workspace}
+            actions={workbench}
+          />
+        </aside>
+      )}
+      {sidebar === "models" && (
+        <aside className="explorer" aria-label="Models">
+          <ModelsView providers={workbench.providers} actions={workbench} />
         </aside>
       )}
     </div>

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-remove-model"
+description = "Enables the provider_remove_model command without any pre-configured scope."
+commands.allow = ["provider_remove_model"]
+
+[[permission]]
+identifier = "deny-provider-remove-model"
+description = "Denies the provider_remove_model command without any pre-configured scope."
+commands.deny = ["provider_remove_model"]

@@ -18,6 +18,8 @@ mod workspace;
 
 pub use error::{ConflictReason, Error};
 pub use search::SearchLimits;
-pub use store::{Approval, ApprovalStore, MAX_RECENT, RecentWorkspaces, TrustStore};
+pub use store::{
+    Approval, ApprovalStore, ApprovedProvider, MAX_RECENT, RecentWorkspaces, TrustStore,
+};
 pub use watch::Watcher;
 pub use workspace::{MAX_TEXT_FILE_BYTES, Removal, Workspace};

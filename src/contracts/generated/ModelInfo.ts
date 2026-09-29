@@ -4,4 +4,9 @@ export type ModelInfo = {
 /**
  * The provider's own model id, e.g. `qwen3-coder:30b`.
  */
-id: string, name: string, };
+id: string, name: string, 
+/**
+ * Tokens, only when verified against the provider's documentation. Left out
+ * rather than guessed.
+ */
+contextWindow?: number | null, };

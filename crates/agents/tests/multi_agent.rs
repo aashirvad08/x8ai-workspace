@@ -13,7 +13,7 @@ use nix::sys::signal::kill;
 use nix::unistd::Pid;
 use x8ai_agents::isolation::Error as IsolationError;
 use x8ai_agents::{AgentRuntime, Isolation, LaunchPlan, SessionState, Worktree, authorize, plan};
-use x8ai_core::agent::{AgentDefinition, AgentSessionId};
+use x8ai_core::agent::{AgentDefinition, AgentSessionId, SessionConfiguration};
 use x8ai_core::id::IntegrationId;
 use x8ai_core::terminal::{TerminalExit, TerminalSize};
 use x8ai_git::{FileStatus, Git, Repository};
@@ -188,7 +188,7 @@ impl Fixture {
         let repo = self.repo();
         let worktree = self
             .isolation
-            .create(&self.git, &repo, &IntegrationId::new(agent).unwrap())
+            .create(&self.git, &repo, &IntegrationId::new(agent).unwrap(), None)
             .unwrap();
         let id = self
             .runtime
@@ -206,6 +206,12 @@ impl Fixture {
             .unwrap();
         recorder.wait_for("ready");
         (session, recorder)
+    }
+}
+
+fn own_configuration() -> SessionConfiguration {
+    SessionConfiguration::Agent {
+        shell_variables: Vec::new(),
     }
 }
 
@@ -348,9 +354,12 @@ fn a_symlinked_worktree_directory_is_refused() {
     std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
     let _ = f.plan("agent-one");
 
-    let result = f
-        .isolation
-        .create(&f.git, &repo, &IntegrationId::new("agent-one").unwrap());
+    let result = f.isolation.create(
+        &f.git,
+        &repo,
+        &IntegrationId::new("agent-one").unwrap(),
+        None,
+    );
     assert!(
         matches!(result, Err(IsolationError::Unsafe(_))),
         "{result:?}"
@@ -427,6 +436,7 @@ fn quitting_the_app_ends_every_agent_and_keeps_their_worktrees() {
         &f.root,
         found[0].path.clone(),
         found[0].clone(),
+        own_configuration(),
     );
     assert_eq!(
         runtime.get(adopted).unwrap().state,
@@ -437,7 +447,8 @@ fn quitting_the_app_ends_every_agent_and_keeps_their_worktrees() {
             "agent-one",
             &f.root,
             found[0].path.clone(),
-            found[0].clone()
+            found[0].clone(),
+            own_configuration()
         ),
         adopted
     );
@@ -513,9 +524,12 @@ fn a_repository_without_commits_cannot_be_isolated() {
     fs::create_dir(&fresh).unwrap();
     sh_git(&fresh, &["init", "-q"]);
     let repo = f.git.repository(&fresh).unwrap().unwrap();
-    let result = f
-        .isolation
-        .create(&f.git, &repo, &IntegrationId::new("agent-one").unwrap());
+    let result = f.isolation.create(
+        &f.git,
+        &repo,
+        &IntegrationId::new("agent-one").unwrap(),
+        None,
+    );
     assert!(
         matches!(result, Err(IsolationError::NoCommits)),
         "{result:?}"
@@ -550,9 +564,12 @@ fn a_worktree_that_cannot_be_made_leaves_nothing_behind() {
         head: Some("0".repeat(40)),
         ..f.repo()
     };
-    let result = f
-        .isolation
-        .create(&f.git, &repo, &IntegrationId::new("agent-one").unwrap());
+    let result = f.isolation.create(
+        &f.git,
+        &repo,
+        &IntegrationId::new("agent-one").unwrap(),
+        None,
+    );
     assert!(result.is_err());
     let dir = f.isolation.repository_dir(&repo);
     let leftovers: Vec<_> = fs::read_dir(&dir)

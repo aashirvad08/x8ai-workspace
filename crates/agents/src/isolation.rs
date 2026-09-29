@@ -24,6 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use x8ai_core::id::IntegrationId;
+use x8ai_core::model::{ModelSelection, is_model_id};
 use x8ai_git::{Git, Repository, check_branch, check_commit};
 
 /// Where every agent worktree lives. Deliberately free of spaces: tools break on
@@ -61,6 +62,9 @@ pub struct Worktree {
     pub base: String,
     /// When it was made, in milliseconds since the Unix epoch.
     pub created: u64,
+    /// The model chosen for the session it was made for; `None` for the agent's
+    /// own configuration. Kept so the session keeps it across restarts.
+    pub model: Option<ModelSelection>,
 }
 
 /// What removing a worktree kept.
@@ -80,6 +84,9 @@ struct Metadata {
     token: String,
     base: String,
     created: u64,
+    /// A provider id and a model id: never a credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<ModelSelection>,
 }
 
 const METADATA_VERSION: u32 = 1;
@@ -129,14 +136,19 @@ impl Isolation {
     }
 
     /// Makes a new worktree for `agent` on a new branch, starting from the commit
-    /// the user has checked out. The user's working tree is not touched; changes
-    /// they have not committed are not in the worktree.
+    /// the user has checked out, for a session using `model`. The user's working
+    /// tree is not touched; changes they have not committed are not in the
+    /// worktree.
     pub fn create(
         &self,
         git: &Git,
         repo: &Repository,
         agent: &IntegrationId,
+        model: Option<&ModelSelection>,
     ) -> Result<Worktree, Error> {
+        if model.is_some_and(|m| !is_model_id(&m.model)) {
+            return Err(Error::Unsafe("not a model id".into()));
+        }
         let base = repo.head.clone().ok_or(Error::NoCommits)?;
         let dir = self.repository_dir(repo);
         ensure_private_dir(&self.root)?;
@@ -150,6 +162,7 @@ impl Isolation {
                 branch: format!("agent/{agent}/{token}"),
                 base: base.clone(),
                 created: now_ms(),
+                model: model.cloned(),
             };
             check_branch(&worktree.branch)?;
             if worktree.path.exists() || git.branch_exists(repo, &worktree.branch)? {
@@ -182,6 +195,7 @@ impl Isolation {
                     token,
                     base,
                     created: worktree.created,
+                    model: worktree.model.clone(),
                 },
             )?;
             return Ok(Worktree {
@@ -217,7 +231,8 @@ impl Isolation {
                 let valid = meta.version == METADATA_VERSION
                     && is_token(&meta.token)
                     && name == format!("{agent}-{}", meta.token)
-                    && check_commit(&meta.base).is_ok();
+                    && check_commit(&meta.base).is_ok()
+                    && meta.model.as_ref().is_none_or(|m| is_model_id(&m.model));
                 if !valid {
                     return None;
                 }
@@ -233,6 +248,7 @@ impl Isolation {
                         path,
                         base: meta.base,
                         created: meta.created,
+                        model: meta.model,
                     })
             })
             .collect();
