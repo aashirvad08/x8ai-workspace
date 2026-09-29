@@ -2,7 +2,7 @@
 //!
 //! An [`IntegrationDefinition`] is pure data. Loading definitions from disk or a
 //! remote catalog, recording where they came from, pinning versions and tracking
-//! trust are catalog concerns (Phase 10). Skills and templates become variants here
+//! trust are catalog concerns (Phase 8). Skills and templates become variants here
 //! once their schemas are designed (Phase 11).
 
 use std::net::IpAddr;

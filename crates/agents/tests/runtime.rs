@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
-use x8ai_agents::{AgentRuntime, Denied, LaunchPlan, RunState, authorize, plan};
+use x8ai_agents::{AgentRuntime, Denied, LaunchPlan, RunError, SessionState, authorize, plan};
 use x8ai_core::agent::AgentDefinition;
+use x8ai_core::agent::AgentSessionId;
 use x8ai_core::terminal::{TerminalExit, TerminalSize};
 use x8ai_pty::{SessionEvents, Sessions};
 use x8ai_workspace::{ApprovalStore, TrustStore};
@@ -160,12 +161,35 @@ impl Fixture {
         self.approvals.approve(&plan.approval()).unwrap();
     }
 
+    /// A session directly in the plan's workspace (these are not Git
+    /// repositories), and the agent running in it.
     fn start(&self, plan: &LaunchPlan) -> (Arc<x8ai_pty::Session>, Arc<Recorder>) {
+        let (session, recorder, _) = self.start_session(plan);
+        (session, recorder)
+    }
+
+    fn start_session(
+        &self,
+        plan: &LaunchPlan,
+    ) -> (Arc<x8ai_pty::Session>, Arc<Recorder>, AgentSessionId) {
+        let id = self
+            .runtime
+            .create(plan, plan.workspace.clone(), None)
+            .unwrap();
+        let (session, recorder) = self.run(id, plan);
+        (session, recorder, id)
+    }
+
+    fn run(
+        &self,
+        id: AgentSessionId,
+        plan: &LaunchPlan,
+    ) -> (Arc<x8ai_pty::Session>, Arc<Recorder>) {
         let recorder = Arc::new(Recorder::default());
         let authorized = authorize(plan, &self.trust, &self.approvals).expect("authorized");
         let session = self
             .runtime
-            .start(&self.sessions, authorized, SIZE, recorder.clone())
+            .run(&self.sessions, id, authorized, SIZE, recorder.clone())
             .unwrap();
         recorder.wait_for("ready");
         (session, recorder)
@@ -279,9 +303,12 @@ fn an_approved_agent_runs_in_its_workspace_with_the_login_environment_on_a_pty()
     assert!(output.contains("tty=yes"), "{output}");
     assert!(output.contains("size=30 100"), "{output}");
 
-    let status = f.runtime.status(session.id()).unwrap();
-    assert_eq!(status.state, RunState::Running);
+    let status = f.runtime.session_of(session.id()).unwrap();
+    assert_eq!(status.state, SessionState::Running);
     assert_eq!(status.workspace, f.workspace);
+    assert_eq!(status.cwd, f.workspace);
+    assert!(status.worktree.is_none());
+    assert_eq!(status.terminal, Some(session.id()));
     assert_eq!(status.agent.as_str(), "fake-agent");
 }
 
@@ -297,10 +324,10 @@ fn input_reaches_the_agent_and_its_exit_is_detected() {
     session.write(b"quit\n".to_vec()).unwrap();
     let exit = recorder.wait_for_exit();
     assert_eq!(exit.code, 3);
-    assert_eq!(
-        f.runtime.status(session.id()).unwrap().state,
-        RunState::Exited
-    );
+    assert!(matches!(
+        f.runtime.sessions()[0].state,
+        SessionState::Exited(_)
+    ));
     assert!(!f.runtime.any_running());
 }
 
@@ -321,16 +348,19 @@ fn closing_the_agents_terminal_ends_the_agent_and_its_children() {
     let mut f = fixture();
     let plan = f.plan(&f.workspace);
     f.trust_and_approve(&plan);
-    let (session, _recorder) = f.start(&plan);
+    let (session, _recorder, id) = f.start_session(&plan);
     let pid = session.pid().unwrap();
     // The agent is busy with a child process when the terminal closes.
     session.write(b"wait\n".to_vec()).unwrap();
     std::thread::sleep(Duration::from_millis(200));
 
-    f.runtime.stop(&f.sessions, session.id()).unwrap();
+    f.runtime.stop(&f.sessions, id).unwrap();
     assert!(wait_until_gone(pid), "the agent outlived its terminal");
     assert!(f.sessions.get(session.id()).is_err());
-    assert!(f.runtime.status(session.id()).is_none());
+    // The session stays, no longer running, so the agent can be restarted.
+    assert!(session.wait_for_exit(TIMEOUT));
+    assert_ne!(f.runtime.get(id).unwrap().state, SessionState::Running);
+    assert!(!f.runtime.any_running());
 }
 
 #[test]
@@ -346,10 +376,10 @@ fn closing_the_terminal_directly_ends_the_agent_too() {
     f.sessions.close(session.id()).unwrap();
     assert!(wait_until_gone(pid), "the agent outlived its terminal");
     assert!(session.wait_for_exit(TIMEOUT));
-    assert_eq!(
-        f.runtime.status(session.id()).unwrap().state,
-        RunState::Exited
-    );
+    assert!(matches!(
+        f.runtime.sessions()[0].state,
+        SessionState::Exited(_)
+    ));
     assert!(!f.runtime.any_running());
 }
 
@@ -358,8 +388,10 @@ fn quitting_the_app_ends_every_agent() {
     let mut f = fixture();
     let plan = f.plan(&f.workspace);
     f.trust_and_approve(&plan);
+    let elsewhere = f.plan(&f.other);
+    f.trust_and_approve(&elsewhere);
     let (first, _) = f.start(&plan);
-    let (second, _) = f.start(&plan);
+    let (second, _) = f.start(&elsewhere);
     let pids = [first.pid().unwrap(), second.pid().unwrap()];
     assert!(f.runtime.any_running());
 
@@ -384,10 +416,10 @@ fn an_agent_killed_from_outside_is_reported_as_exited() {
     .unwrap();
     let exit = recorder.wait_for_exit();
     assert!(exit.signal.is_some(), "{exit:?}");
-    assert_eq!(
-        f.runtime.status(session.id()).unwrap().state,
-        RunState::Exited
-    );
+    assert!(matches!(
+        f.runtime.sessions()[0].state,
+        SessionState::Exited(_)
+    ));
 }
 
 #[test]
@@ -421,4 +453,75 @@ fn removing_trust_can_stop_the_folders_agents() {
     assert!(wait_until_gone(stopped.pid().unwrap()));
     assert!(alive(kept.pid().unwrap()));
     f.sessions.shutdown(Duration::from_millis(500));
+}
+
+#[test]
+fn a_folder_without_git_takes_one_agent_at_a_time() {
+    let mut f = fixture();
+    let plan = f.plan(&f.workspace);
+    f.trust_and_approve(&plan);
+    let (first, _, first_id) = f.start_session(&plan);
+
+    // No isolation: a second agent would share the folder with the first.
+    assert_eq!(
+        f.runtime.create(&plan, f.workspace.clone(), None),
+        Err(RunError::SharedBusy)
+    );
+
+    // Once the first has stopped, the folder is free again.
+    f.runtime.stop(&f.sessions, first_id).unwrap();
+    assert!(first.wait_for_exit(TIMEOUT));
+    let (second, _) = f.start(&plan);
+    assert!(second.pid().is_some());
+    f.sessions.shutdown(Duration::from_millis(500));
+}
+
+#[test]
+fn restarting_runs_the_agent_again_in_the_same_session() {
+    let mut f = fixture();
+    let plan = f.plan(&f.workspace);
+    f.trust_and_approve(&plan);
+    let (first, recorder, id) = f.start_session(&plan);
+    first.write(b"quit\n".to_vec()).unwrap();
+    recorder.wait_for_exit();
+
+    let (second, recorder) = f.run(id, &plan);
+    assert_ne!(first.id(), second.id());
+    assert!(
+        recorder
+            .output()
+            .contains(&format!("cwd={}", f.workspace.display()))
+    );
+    assert_eq!(f.runtime.get(id).unwrap().terminal, Some(second.id()));
+    // Not twice at once.
+    let again = authorize(&plan, &f.trust, &f.approvals).unwrap();
+    assert!(matches!(
+        f.runtime
+            .run(&f.sessions, id, again, SIZE, Arc::new(Recorder::default())),
+        Err(RunError::AlreadyRunning)
+    ));
+    f.sessions.shutdown(Duration::from_millis(500));
+}
+
+#[test]
+fn a_session_runs_only_the_agent_and_workspace_it_was_made_for() {
+    let mut f = fixture();
+    let here = f.plan(&f.workspace);
+    let there = f.plan(&f.other);
+    f.trust_and_approve(&here);
+    f.trust_and_approve(&there);
+    let id = f.runtime.create(&here, f.workspace.clone(), None).unwrap();
+
+    let other = authorize(&there, &f.trust, &f.approvals).unwrap();
+    assert_eq!(
+        f.runtime
+            .run(&f.sessions, id, other, SIZE, Arc::new(Recorder::default()))
+            .err(),
+        Some(RunError::Mismatch)
+    );
+    // And a session's directory must be its workspace.
+    assert_eq!(
+        f.runtime.create(&here, f.other.clone(), None),
+        Err(RunError::OutsideWorkspace)
+    );
 }

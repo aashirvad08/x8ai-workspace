@@ -42,7 +42,7 @@ pub struct ModelProviderDefinition {
     pub endpoints: Vec<ProviderEndpoint>,
     pub auth: ProviderAuth,
     /// Models known in advance. Providers with dynamic model lists (Ollama,
-    /// OpenRouter) are queried at runtime from Phase 5, so this may be empty.
+    /// OpenRouter) are queried at runtime from Phase 6, so this may be empty.
     #[serde(default)]
     pub models: Vec<ModelInfo>,
 }

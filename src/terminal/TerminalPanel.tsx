@@ -8,7 +8,7 @@ import type { SessionNative } from "./session";
 import { type PaneKind, type TerminalPane, type Terminals, tabTitle } from "./terminals";
 import { TerminalView } from "./TerminalView";
 
-type PanelNative = TerminalApi & Pick<AgentApi, "startAgent">;
+type PanelNative = TerminalApi & Pick<AgentApi, "runAgentSession">;
 
 interface Props {
   native: PanelNative;
@@ -152,8 +152,9 @@ export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Pr
 }
 
 /**
- * A pane's terminal. For an agent pane, the session is started with `agent_start`
- * for that agent instead of `terminal_create`; everything after that is the same.
+ * A pane's terminal. For an agent pane, the session is started with `agent_run`
+ * for that agent session instead of `terminal_create`; everything after that is
+ * the same.
  */
 function PaneTerminal({
   native,
@@ -171,11 +172,14 @@ function PaneTerminal({
   terminals: Terminals;
 }) {
   const kind: PaneKind = pane?.kind ?? { type: "shell" };
-  const agent = kind.type === "agent" ? kind.agent : null;
+  const session = kind.type === "agent" ? kind.session : null;
   // Stable per pane: a new object would restart the session.
   const sessionNative = useMemo<SessionNative>(
-    () => (agent === null ? native : { ...native, createTerminal: (size, listener) => native.startAgent(agent, size, listener) }),
-    [native, agent],
+    () =>
+      session === null
+        ? native
+        : { ...native, createTerminal: (size, listener) => native.runAgentSession(session, size, listener) },
+    [native, session],
   );
   if (!pane) return null;
   return (

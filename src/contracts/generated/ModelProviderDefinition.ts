@@ -11,6 +11,6 @@ export type ModelProviderDefinition = { id: IntegrationId, name: string, descrip
 endpoints: Array<ProviderEndpoint>, auth: ProviderAuth, 
 /**
  * Models known in advance. Providers with dynamic model lists (Ollama,
- * OpenRouter) are queried at runtime from Phase 5, so this may be empty.
+ * OpenRouter) are queried at runtime from Phase 6, so this may be empty.
  */
 models: Array<ModelInfo>, };

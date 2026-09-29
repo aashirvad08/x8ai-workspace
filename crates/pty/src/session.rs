@@ -324,6 +324,11 @@ impl Session {
         self.shared.lock().exit.is_some()
     }
 
+    /// How the process exited, once it has.
+    pub fn exit_status(&self) -> Option<TerminalExit> {
+        self.shared.lock().exit.clone()
+    }
+
     /// Waits up to `timeout` for the process to exit. Returns whether it did.
     pub fn wait_for_exit(&self, timeout: Duration) -> bool {
         self.shared.wait_for_exit(timeout)

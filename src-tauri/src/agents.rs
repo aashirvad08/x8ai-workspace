@@ -1,13 +1,15 @@
 //! Agent commands: the IPC face of `x8ai-agents` (docs/agent-runtime.md).
 //!
 //! The webview can ask which agents exist, ask for an agent to be approved in the
-//! open workspace, and start an approved agent there. It cannot choose the
-//! program, its arguments, its environment or its directory: the program comes
-//! from a built-in definition and the user's `PATH`, the directory is the open
-//! workspace. Starting requires the workspace to be trusted and the agent to be
-//! approved for it; both are checked here, natively, on every start. Approval is
-//! granted only in a native dialog the webview cannot answer. Once started, an
-//! agent is a terminal session, driven with the `terminal_*` commands.
+//! open workspace, create an agent session there, and run the agent in it. It
+//! names agents and sessions by id only. It cannot choose the program, its
+//! arguments, its environment or its directory: the program comes from a built-in
+//! definition and the user's `PATH`; the directory is a worktree this module makes
+//! (docs/multi-agent.md), or the open workspace itself when it is not a Git
+//! repository. Creating a session and every run require the workspace to be
+//! trusted and the agent to be approved for it, checked here, natively. Approval is
+//! granted only in a native dialog the webview cannot answer. A running agent is a
+//! terminal session, driven with the `terminal_*` commands.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -15,21 +17,31 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use x8ai_agents::environment::{RESOLVE_TIMEOUT, resolve};
-use x8ai_agents::{AgentRuntime, Denied, LaunchPlan, plan};
-use x8ai_core::agent::{AgentAvailability, AgentDefinition, AgentList, AgentStatus};
+use x8ai_agents::discovery::find_executable;
+use x8ai_agents::environment::{RESOLVE_TIMEOUT, resolve, var};
+use x8ai_agents::isolation::{self, Isolation};
+use x8ai_agents::{AgentRuntime, AgentSession, Denied, LaunchPlan, RunError, SessionState, plan};
+use x8ai_core::agent::{
+    AgentAvailability, AgentChangedFile, AgentChanges, AgentDefinition, AgentList, AgentRemoval,
+    AgentSessionId, AgentSessionInfo, AgentSessionState, AgentStatus, AgentWorktree, ChangeKind,
+    WorkspaceIsolation,
+};
 use x8ai_core::error::{CommandError, ErrorCode};
 use x8ai_core::terminal::{TerminalInfo, TerminalSize};
+use x8ai_core::workspace::FileContent;
+use x8ai_git::{FileStatus, Git, Repository};
+use x8ai_workspace::Workspace;
 
 use crate::terminal::{ChannelEvents, Terminals, info};
 use crate::workspace::Workspaces;
 
-/// Built-in agents, the user's login environment once read, and the agent
-/// sessions started. Managed Tauri state.
+/// Built-in agents, the user's login environment once read, where agent
+/// worktrees go, and the agent sessions. Managed Tauri state.
 pub struct Agents {
     definitions: Vec<AgentDefinition>,
     runtime: AgentRuntime,
     environment: Mutex<Option<Arc<Resolved>>>,
+    isolation: Isolation,
 }
 
 /// The environment agents are found and started with.
@@ -45,6 +57,7 @@ impl Default for Agents {
             definitions: x8ai_agents::builtin(),
             runtime: AgentRuntime::default(),
             environment: Mutex::new(None),
+            isolation: Isolation::new(isolation::default_root(&home())),
         }
     }
 }
@@ -85,8 +98,7 @@ impl Agents {
             return resolved.clone();
         }
         let shell = PathBuf::from(x8ai_pty::user_shell());
-        let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-        let resolved = Arc::new(match resolve(&shell, &home, RESOLVE_TIMEOUT) {
+        let resolved = Arc::new(match resolve(&shell, &home(), RESOLVE_TIMEOUT) {
             Ok(vars) => Resolved {
                 vars,
                 problem: None,
@@ -99,6 +111,51 @@ impl Agents {
         *lock(&self.environment) = Some(resolved.clone());
         resolved
     }
+
+    fn name_of(&self, agent: &str) -> String {
+        self.definitions
+            .iter()
+            .find(|d| d.id.as_str() == agent)
+            .map_or_else(|| agent.to_owned(), |d| d.name.clone())
+    }
+
+    /// The agent sessions of workspace `root`, including worktrees left from
+    /// earlier runs of the app, which are found again here.
+    fn sessions_of(&self, git: Option<&Git>, root: &Path) -> Vec<AgentSession> {
+        if let Some(git) = git
+            && let Ok(Some(repo)) = git.repository(root)
+            && let Ok(found) = self.isolation.find(git, &repo)
+        {
+            for worktree in found {
+                let cwd = cwd_in(&worktree.path, &repo);
+                let name = self.name_of(worktree.agent.as_str());
+                self.runtime.adopt(&name, root, cwd, worktree);
+            }
+        }
+        self.runtime.sessions_in(root)
+    }
+}
+
+/// The user's `git`: the one on their login `PATH`, or the system's.
+fn git_in(environment: &Resolved) -> Option<Git> {
+    let program = find_executable("git", var(&environment.vars, "PATH"))
+        .or_else(|| Some(PathBuf::from("/usr/bin/git")).filter(|p| p.is_file()))?;
+    Some(Git::new(program, &environment.vars))
+}
+
+/// Where the agent runs in a worktree: the same folder inside it as the workspace
+/// is inside its repository, if the worktree has it.
+fn cwd_in(worktree: &Path, repo: &Repository) -> PathBuf {
+    let inside = worktree.join(repo.prefix.trim_end_matches('/'));
+    if repo.prefix.is_empty() || !inside.is_dir() {
+        worktree.to_owned()
+    } else {
+        inside
+    }
+}
+
+fn home() -> PathBuf {
+    std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"))
 }
 
 /// Reads (or returns the kept) login environment on a blocking thread.
@@ -147,10 +204,36 @@ pub async fn agent_list(refresh: bool, app: AppHandle) -> Result<AgentList, Comm
             }
         })
         .collect();
+    let isolation = root
+        .as_ref()
+        .map(|root| isolation_of(git_in(&environment).as_ref(), root));
     Ok(AgentList {
         agents: statuses,
         environment_problem: environment.problem.clone(),
+        isolation,
     })
+}
+
+/// How agents would run in `root`.
+fn isolation_of(git: Option<&Git>, root: &Path) -> WorkspaceIsolation {
+    let unavailable = |reason: &str| WorkspaceIsolation::Unavailable {
+        reason: reason.to_owned(),
+    };
+    let Some(git) = git else {
+        return unavailable("Git was not found, so agents cannot get workspaces of their own.");
+    };
+    match git.repository(root) {
+        Ok(Some(Repository {
+            head: Some(head),
+            branch,
+            ..
+        })) => WorkspaceIsolation::Worktrees { branch, head },
+        Ok(Some(_)) => {
+            unavailable("This repository has no commits yet; agent workspaces start from a commit.")
+        }
+        Ok(None) => unavailable("This folder is not a Git repository."),
+        Err(error) => unavailable(&format!("Git could not read this folder: {error}")),
+    }
 }
 
 /// Makes sure `agent` may run in the open workspace: the workspace must be
@@ -187,9 +270,10 @@ pub async fn agent_request_approval(
     let confirmed = window
         .dialog()
         .message(format!(
-            "{name} will start in:\n{root}\n\nProgram: {command}\n\n{name} runs as you, with \
-             access to your files, network and credentials, as if you started it in a \
-             terminal yourself. This allows it in this folder only. You can revoke it in the \
+            "{name} will work in:\n{root}\n(in a Git worktree of its own for each session, \
+             when the folder is a Git repository)\n\nProgram: {command}\n\n{name} runs as \
+             you, with access to your files, network and credentials, as if you started it in \
+             a terminal yourself. This allows it in this folder only. You can revoke it in the \
              Agents panel.",
             name = plan.name,
             root = root.display(),
@@ -229,12 +313,58 @@ pub fn agent_revoke(
     workspaces.revoke(&root, definition.id.as_str())
 }
 
-/// Starts `agent` in the open workspace, on a new terminal session. Refused unless
-/// the workspace is trusted and the agent is approved for it with the executable
-/// it would run now. Output and exit arrive on `events` as for `terminal_create`.
+/// Creates a session for `agent` in the open workspace: in a Git repository, a
+/// new worktree on a new branch from the checked-out commit; otherwise the folder
+/// itself, for one agent at a time. Refused unless the workspace is trusted and
+/// the agent approved there. The user's working tree is not touched.
 #[tauri::command]
-pub async fn agent_start(
+pub async fn agent_create_session(
     agent: String,
+    app: AppHandle,
+) -> Result<AgentSessionInfo, CommandError> {
+    let environment = resolved(&app, false).await?;
+    let task_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let agents = task_app.state::<Agents>();
+        let workspaces = task_app.state::<Workspaces>();
+        let definition = agents.definition(&agent)?;
+        let root = open_root(&workspaces)?;
+        let plan = plan(definition, &environment.vars, &root).map_err(denied)?;
+        // 1. trust, 2. approval.
+        workspaces.authorize(&plan).map_err(denied)?;
+        // 3. Git, 4. a worktree of its own.
+        let git = git_in(&environment);
+        let repo = match &git {
+            Some(git) => git.repository(&root).map_err(git_error)?,
+            None => None,
+        };
+        let (cwd, worktree) = match (&git, repo) {
+            (Some(git), Some(repo)) => {
+                let worktree = agents
+                    .isolation
+                    .create(git, &repo, &definition.id)
+                    .map_err(isolation_error)?;
+                (cwd_in(&worktree.path, &repo), Some(worktree))
+            }
+            _ => (root.clone(), None),
+        };
+        let id = agents
+            .runtime
+            .create(&plan, cwd, worktree)
+            .map_err(run_error)?;
+        session_info(&agents.runtime.get(id).expect("just created"))
+    })
+    .await
+    .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
+}
+
+/// Runs the agent of `session` (again, after it stopped) on a new terminal
+/// session, in the session's own directory. Refused unless the session belongs to
+/// the open workspace, the workspace is trusted, and the agent approved there.
+/// Output and exit arrive on `events` as for `terminal_create`.
+#[tauri::command]
+pub async fn agent_run(
+    session: AgentSessionId,
     size: TerminalSize,
     events: Channel,
     app: AppHandle,
@@ -243,20 +373,256 @@ pub async fn agent_start(
     let agents = app.state::<Agents>();
     let workspaces = app.state::<Workspaces>();
     let terminals = app.state::<Terminals>();
-    let definition = agents.definition(&agent)?;
-    let root = open_root(&workspaces)?;
-    let plan: LaunchPlan = plan(definition, &environment.vars, &root).map_err(denied)?;
-    let authorized = workspaces.authorize(&plan).map_err(denied)?;
-    let session = agents
+    let record = agents
         .runtime
-        .start(
+        .get(session)
+        .ok_or_else(|| run_error(RunError::NotFound(session)))?;
+    let root = open_root(&workspaces)?;
+    if record.workspace != root {
+        return Err(CommandError::new(
+            ErrorCode::PermissionDenied,
+            "this agent session belongs to another workspace",
+        ));
+    }
+    let definition = agents.definition(record.agent.as_str())?;
+    let plan: LaunchPlan = plan(definition, &environment.vars, &root).map_err(denied)?;
+    let authorized = match workspaces.authorize(&plan) {
+        Ok(authorized) => authorized,
+        Err(reason) => {
+            agents.runtime.fail(session, reason.to_string());
+            return Err(denied(reason));
+        }
+    };
+    let pty = agents
+        .runtime
+        .run(
             terminals.sessions(),
+            session,
             authorized,
             size,
             Arc::new(ChannelEvents(events)),
         )
-        .map_err(crate::terminal::command_error)?;
-    Ok(info(&session))
+        .map_err(run_error)?;
+    Ok(info(&pty))
+}
+
+/// The agent sessions of the open workspace, oldest first, including worktrees
+/// left from earlier runs of the app.
+#[tauri::command]
+pub async fn agent_sessions(app: AppHandle) -> Result<Vec<AgentSessionInfo>, CommandError> {
+    let environment = resolved(&app, false).await?;
+    let task_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let agents = task_app.state::<Agents>();
+        let Some(root) = task_app.state::<Workspaces>().root() else {
+            return Ok(Vec::new());
+        };
+        agents
+            .sessions_of(git_in(&environment).as_ref(), &root)
+            .iter()
+            .map(session_info)
+            .collect()
+    })
+    .await
+    .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
+}
+
+/// Stops the agent of `session`. Its worktree stays.
+#[tauri::command]
+pub fn agent_stop(
+    session: AgentSessionId,
+    agents: State<'_, Agents>,
+    terminals: State<'_, Terminals>,
+) -> Result<(), CommandError> {
+    agents
+        .runtime
+        .stop(terminals.sessions(), session)
+        .map_err(run_error)
+}
+
+/// Removes a stopped agent's session and its worktree. A worktree with
+/// uncommitted changes is removed only with `discard`. The agent's branch is kept
+/// if it has commits, so nothing committed is ever deleted here.
+#[tauri::command]
+pub async fn agent_remove(
+    session: AgentSessionId,
+    discard: bool,
+    app: AppHandle,
+) -> Result<AgentRemoval, CommandError> {
+    let environment = resolved(&app, false).await?;
+    let task_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let agents = task_app.state::<Agents>();
+        let record = agents
+            .runtime
+            .get(session)
+            .ok_or_else(|| run_error(RunError::NotFound(session)))?;
+        if record.state == SessionState::Running {
+            return Err(run_error(RunError::StillRunning));
+        }
+        let removal = match &record.worktree {
+            None => AgentRemoval {
+                kept_branch: None,
+                commits: 0,
+            },
+            Some(worktree) => {
+                let git = git_in(&environment)
+                    .ok_or_else(|| CommandError::new(ErrorCode::Internal, "Git was not found"))?;
+                let repo = git
+                    .repository(&record.workspace)
+                    .map_err(git_error)?
+                    .ok_or_else(|| {
+                        CommandError::new(ErrorCode::NotFound, "the repository is gone")
+                    })?;
+                let removal = agents
+                    .isolation
+                    .remove(&git, &repo, worktree, discard)
+                    .map_err(isolation_error)?;
+                AgentRemoval {
+                    kept_branch: removal.kept_branch,
+                    commits: removal.commits,
+                }
+            }
+        };
+        agents.runtime.forget(session).map_err(run_error)?;
+        Ok(removal)
+    })
+    .await
+    .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
+}
+
+/// What the agent of `session` changed in its worktree since it started.
+#[tauri::command]
+pub async fn agent_changes(
+    session: AgentSessionId,
+    app: AppHandle,
+) -> Result<AgentChanges, CommandError> {
+    let environment = resolved(&app, false).await?;
+    let task_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let agents = task_app.state::<Agents>();
+        let worktree = worktree_of(&agents, session)?;
+        let git = git_in(&environment)
+            .ok_or_else(|| CommandError::new(ErrorCode::Internal, "Git was not found"))?;
+        let changes = git
+            .changes(&worktree.path, &worktree.base)
+            .map_err(git_error)?;
+        Ok(AgentChanges {
+            branch: changes.branch,
+            base: changes.base,
+            head: changes.head,
+            commits: changes.commits,
+            uncommitted: changes.uncommitted,
+            files: changes
+                .files
+                .into_iter()
+                .map(|f| AgentChangedFile {
+                    path: f.path,
+                    change: match f.status {
+                        FileStatus::Added => ChangeKind::Added,
+                        FileStatus::Modified => ChangeKind::Modified,
+                        FileStatus::Deleted => ChangeKind::Deleted,
+                        FileStatus::Renamed => ChangeKind::Renamed,
+                        FileStatus::Untracked => ChangeKind::Untracked,
+                        FileStatus::Other => ChangeKind::Other,
+                    },
+                    from: f.from,
+                })
+                .collect(),
+            diff: changes.diff,
+            truncated: changes.truncated,
+        })
+    })
+    .await
+    .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
+}
+
+/// Reads a file in the agent's worktree, for inspection. `path` is relative to
+/// the worktree root and cannot leave it (the same checks as workspace files).
+#[tauri::command]
+pub async fn agent_read_file(
+    session: AgentSessionId,
+    path: String,
+    app: AppHandle,
+) -> Result<FileContent, CommandError> {
+    let task_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let agents = task_app.state::<Agents>();
+        let worktree = worktree_of(&agents, session)?;
+        let scoped = Workspace::open(&worktree.path).map_err(crate::workspace::command_error)?;
+        scoped
+            .read_text(&path)
+            .map_err(crate::workspace::command_error)
+    })
+    .await
+    .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
+}
+
+fn worktree_of(
+    agents: &Agents,
+    session: AgentSessionId,
+) -> Result<x8ai_agents::Worktree, CommandError> {
+    let record = agents
+        .runtime
+        .get(session)
+        .ok_or_else(|| run_error(RunError::NotFound(session)))?;
+    record.worktree.ok_or_else(|| {
+        CommandError::new(
+            ErrorCode::InvalidInput,
+            "this agent runs directly in your folder, so it has no separate workspace to inspect",
+        )
+    })
+}
+
+fn session_info(session: &AgentSession) -> Result<AgentSessionInfo, CommandError> {
+    Ok(AgentSessionInfo {
+        id: session.id,
+        agent: session.agent.clone(),
+        name: session.name.clone(),
+        workspace: session.workspace.display().to_string(),
+        cwd: session.cwd.display().to_string(),
+        worktree: session.worktree.as_ref().map(|w| AgentWorktree {
+            branch: w.branch.clone(),
+            base: w.base.clone(),
+            path: w.path.display().to_string(),
+        }),
+        started_at: session.started,
+        state: match &session.state {
+            SessionState::NotRunning => AgentSessionState::NotRunning,
+            SessionState::Running => AgentSessionState::Running,
+            SessionState::Exited(exit) => AgentSessionState::Exited { exit: exit.clone() },
+            SessionState::Failed(message) => AgentSessionState::Failed {
+                message: message.clone(),
+            },
+        },
+        terminal: session.terminal,
+    })
+}
+
+fn run_error(error: RunError) -> CommandError {
+    let code = match &error {
+        RunError::NotFound(_) => ErrorCode::NotFound,
+        RunError::AlreadyRunning | RunError::StillRunning | RunError::SharedBusy => {
+            ErrorCode::Conflict
+        }
+        RunError::Mismatch | RunError::OutsideWorkspace => ErrorCode::PermissionDenied,
+        RunError::Pty(_) => ErrorCode::Internal,
+    };
+    CommandError::new(code, error.to_string())
+}
+
+fn isolation_error(error: isolation::Error) -> CommandError {
+    let code = match &error {
+        isolation::Error::NoCommits => ErrorCode::InvalidInput,
+        isolation::Error::HasChanges => ErrorCode::Conflict,
+        isolation::Error::Unsafe(_) => ErrorCode::PermissionDenied,
+        isolation::Error::Git(_) | isolation::Error::Io { .. } => ErrorCode::Internal,
+    };
+    CommandError::new(code, error.to_string())
+}
+
+fn git_error(error: x8ai_git::Error) -> CommandError {
+    CommandError::new(ErrorCode::Internal, error.to_string())
 }
 
 fn open_root(workspaces: &Workspaces) -> Result<PathBuf, CommandError> {

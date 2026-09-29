@@ -75,7 +75,7 @@ describe("terminals", () => {
 describe("agent panes", () => {
   it("are titled by the agent and report its state", () => {
     const terminals = new Terminals();
-    terminals.add({ type: "agent", agent: "claude-code", name: "Claude Code" });
+    terminals.add({ type: "agent", agent: "claude-code", name: "Claude Code", session: 1 });
     const pane = terminals.agentPanes("claude-code")[0]!;
     expect(agentRunStatus(pane)).toBe("starting");
 
@@ -92,7 +92,7 @@ describe("agent panes", () => {
   it("split into shells, and close together when their workspace goes", () => {
     const terminals = new Terminals();
     terminals.add();
-    terminals.add({ type: "agent", agent: "claude-code", name: "Claude Code" });
+    terminals.add({ type: "agent", agent: "claude-code", name: "Claude Code", session: 1 });
     terminals.split("right");
     const kinds = [...terminals.get().panes.values()].map((p) => p.kind.type);
     expect(kinds).toEqual(["shell", "agent", "shell"]);

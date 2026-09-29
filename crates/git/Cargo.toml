@@ -1,0 +1,14 @@
+[package]
+name = "x8ai-git"
+description = "Just enough Git for isolated agent workspaces: repository facts, worktrees and changes, through the user's git. No Tauri."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+nix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

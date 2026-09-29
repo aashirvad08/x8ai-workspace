@@ -1,4 +1,8 @@
+import type { AgentChanges } from "../contracts/generated/AgentChanges";
 import type { AgentList } from "../contracts/generated/AgentList";
+import type { AgentRemoval } from "../contracts/generated/AgentRemoval";
+import type { AgentSessionId } from "../contracts/generated/AgentSessionId";
+import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
 import type { AppEvent } from "../contracts/generated/AppEvent";
 import type { AppInfo } from "../contracts/generated/AppInfo";
 import type { DirEntry } from "../contracts/generated/DirEntry";
@@ -135,10 +139,25 @@ export interface AgentApi {
   /** Forgets the agent's approval in the open workspace. */
   revokeAgentApproval(agent: string): Promise<void>;
   /**
-   * Starts an approved agent in the open workspace on a new terminal session,
-   * driven afterwards like any other with the `TerminalApi` methods.
+   * A new session for an approved agent in the open workspace (docs/multi-agent.md):
+   * a worktree of its own in a Git repository, the folder itself otherwise. The
+   * native side decides where; nothing is started yet.
    */
-  startAgent(agent: string, size: TerminalSize, listener: TerminalListener): Promise<TerminalInfo>;
+  createAgentSession(agent: string): Promise<AgentSessionInfo>;
+  /**
+   * Runs the session's agent (again) on a new terminal session, driven afterwards
+   * like any other with the `TerminalApi` methods.
+   */
+  runAgentSession(session: AgentSessionId, size: TerminalSize, listener: TerminalListener): Promise<TerminalInfo>;
+  /** The open workspace's agent sessions, including worktrees from earlier runs. */
+  agentSessions(): Promise<AgentSessionInfo[]>;
+  stopAgentSession(session: AgentSessionId): Promise<void>;
+  /** Removes a stopped session and its worktree; `discard` allows losing uncommitted changes. */
+  removeAgentSession(session: AgentSessionId, discard: boolean): Promise<AgentRemoval>;
+  /** What the agent changed in its worktree. */
+  agentChanges(session: AgentSessionId): Promise<AgentChanges>;
+  /** A file in the agent's worktree, for inspection. */
+  readAgentFile(session: AgentSessionId, path: string): Promise<FileContent>;
 }
 
 /**
@@ -208,8 +227,14 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     listAgents: (refresh) => call<AgentList>("agent_list", { refresh }),
     requestAgentApproval: (agent) => call<boolean>("agent_request_approval", { agent }),
     revokeAgentApproval: (agent) => call<void>("agent_revoke", { agent }),
-    startAgent: (agent, size, listener) =>
-      call<TerminalInfo>("agent_start", { agent, size, events: sessionChannel(listener) }),
+    createAgentSession: (agent) => call<AgentSessionInfo>("agent_create_session", { agent }),
+    runAgentSession: (session, size, listener) =>
+      call<TerminalInfo>("agent_run", { session, size, events: sessionChannel(listener) }),
+    agentSessions: () => call<AgentSessionInfo[]>("agent_sessions"),
+    stopAgentSession: (session) => call<void>("agent_stop", { session }),
+    removeAgentSession: (session, discard) => call<AgentRemoval>("agent_remove", { session, discard }),
+    agentChanges: (session) => call<AgentChanges>("agent_changes", { session }),
+    readAgentFile: (session, path) => call<FileContent>("agent_read_file", { session, path }),
   };
 
   /**

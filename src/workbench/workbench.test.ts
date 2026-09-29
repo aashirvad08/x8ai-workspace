@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { AgentChanges } from "../contracts/generated/AgentChanges";
+import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
 import type { AppEvent } from "../contracts/generated/AppEvent";
 import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { FileVersion } from "../contracts/generated/FileVersion";
@@ -38,6 +40,11 @@ function fakeNative() {
     approvals: new Set<string>(),
     /** What the native approval dialog answers. */
     allowAgent: true,
+    /** Whether the open folder is a Git repository (agents get worktrees). */
+    git: true,
+    agentSessions: [] as AgentSessionInfo[],
+    agentChanges: null as AgentChanges | null,
+    removed: [] as { session: number; discard: boolean }[],
     appListener: null as ((event: AppEvent) => void) | null,
     diskListener: null as ((event: WorkspaceEvent) => void) | null,
     unsaved: false,
@@ -151,6 +158,9 @@ function fakeNative() {
         },
       ],
       environmentProblem: null,
+      isolation: state.git
+        ? { kind: "worktrees", branch: "main", head: "a".repeat(40) }
+        : { kind: "unavailable", reason: "This folder is not a Git repository." },
     }),
     requestAgentApproval: async (agent) => {
       calls.push(`approve ${agent}`);
@@ -161,7 +171,45 @@ function fakeNative() {
       return state.approvals.has(key);
     },
     revokeAgentApproval: async (agent) => void state.approvals.delete(`${state.open?.root}:${agent}`),
-    startAgent: () => new Promise(() => {}),
+    createAgentSession: async (agent) => {
+      calls.push(`createSession ${agent}`);
+      const open = state.open!;
+      if (!state.git && state.agentSessions.some((s) => !s.worktree && s.state.state === "running")) {
+        throw new NativeError("x", "conflict", "this folder is not a Git repository, so agents cannot get workspaces of their own");
+      }
+      const id = state.agentSessions.length + 1;
+      const branch = `agent/${agent}/2026092${id}-101500-abcdef`;
+      const session: AgentSessionInfo = {
+        id,
+        agent,
+        name: "Claude Code",
+        workspace: open.root,
+        cwd: state.git ? `/Users/me/.x8ai/worktrees/project-1/${agent}-${id}` : open.root,
+        worktree: state.git ? { branch, base: "a".repeat(40), path: `/Users/me/.x8ai/worktrees/project-1/${agent}-${id}` } : null,
+        startedAt: 0,
+        state: { state: "notRunning" },
+        terminal: null,
+      };
+      state.agentSessions.push(session);
+      return session;
+    },
+    runAgentSession: () => new Promise(() => {}),
+    agentSessions: async () => state.agentSessions.map((s) => ({ ...s })),
+    stopAgentSession: async (session) => {
+      calls.push(`stop ${session}`);
+      const found = state.agentSessions.find((s) => s.id === session);
+      if (found) found.state = { state: "notRunning" };
+    },
+    removeAgentSession: async (session, discard) => {
+      state.removed.push({ session, discard });
+      state.agentSessions = state.agentSessions.filter((s) => s.id !== session);
+      return { keptBranch: null, commits: 0 };
+    },
+    agentChanges: async () => state.agentChanges!,
+    readAgentFile: async (session, path) => {
+      calls.push(`readAgentFile ${session} ${path}`);
+      return { text: `agent's ${path}\n`, version: "1" };
+    },
   };
   return { native, state };
 }
@@ -579,7 +627,7 @@ describe("Workbench agents", () => {
     await settle();
     await settle();
     const [pane] = agentPanes(workbench);
-    expect(pane?.kind).toEqual({ type: "agent", agent: "claude-code", name: "Claude Code" });
+    expect(pane?.kind).toEqual({ type: "agent", agent: "claude-code", name: "Claude Code", session: 1 });
     expect(workbench.terminals.activeTab()?.focused).toBe(pane?.key);
     expect(workbench.agents.find("claude-code")?.approved).toBe(true);
   });
@@ -653,5 +701,134 @@ describe("Workbench agents", () => {
     expect(workbench.dialogs.get()?.title).toBe("Quit and stop Claude Code?");
     await answer(workbench, "cancel");
     expect(state.quit).toBe(false);
+  });
+});
+
+describe("Workbench agent sessions", () => {
+  const agentPanes = (workbench: Workbench) => workbench.terminals.agentPanes("claude-code");
+
+  async function trustedWithAgents() {
+    const opened_ = await opened();
+    await opened_.workbench.agents.load();
+    await opened_.workbench.setTrust(true);
+    return opened_;
+  }
+
+  async function launch(workbench: Workbench) {
+    workbench.launchAgent("claude-code");
+    for (let i = 0; i < 4; i++) await settle();
+  }
+
+  /** Marks a session running, as the native side reports once its agent started. */
+  function running(state: ReturnType<typeof fakeNative>["state"], workbench: Workbench, id: number) {
+    const session = state.agentSessions.find((s) => s.id === id)!;
+    session.state = { state: "running" };
+    const pane = workbench.terminals.paneOfSession(id)!;
+    started(workbench, pane.key, 20 + id);
+  }
+
+  it("gives each launch a session of its own, in a Git repository at once", async () => {
+    const { workbench, state } = await trustedWithAgents();
+    await launch(workbench);
+    running(state, workbench, 1);
+    await launch(workbench);
+
+    const panes = agentPanes(workbench);
+    expect(panes.map((p) => (p.kind.type === "agent" ? p.kind.session : 0))).toEqual([1, 2]);
+    expect(state.calls.filter((c) => c === "createSession claude-code")).toHaveLength(2);
+    await workbench.agents.loadSessions();
+    const [first, second] = workbench.agents.get().sessions;
+    expect(first!.worktree!.path).not.toBe(second!.worktree!.path);
+  });
+
+  it("runs one agent at a time in a folder without Git, and says why", async () => {
+    const { workbench, state } = await trustedWithAgents();
+    state.git = false;
+    await workbench.agents.load();
+    expect(workbench.agents.get().isolation).toEqual({ kind: "unavailable", reason: "This folder is not a Git repository." });
+    await launch(workbench);
+    running(state, workbench, 1);
+
+    await launch(workbench);
+    expect(agentPanes(workbench)).toHaveLength(1);
+    expect(workbench.notifications.get().at(-1)!.message).toContain("not a Git repository");
+  });
+
+  it("shows an agent's changes read-only, without touching the open folder", async () => {
+    const { workbench, state } = await trustedWithAgents();
+    await launch(workbench);
+    await workbench.agents.loadSessions();
+    state.agentChanges = {
+      branch: "agent/claude-code/20260921-101500-abcdef",
+      base: "a".repeat(40),
+      head: "b".repeat(40),
+      commits: 1,
+      uncommitted: true,
+      files: [{ path: "src/main.py", change: "modified", from: null }],
+      diff: "--- a/src/main.py\n+++ b/src/main.py\n+print('agent')\n",
+      truncated: false,
+    };
+
+    workbench.showAgentChanges(1);
+    await settle();
+    const diff = workbench.editor.get().tabs.find((t) => t.path === "/agent/1/changes.diff");
+    expect(diff).toMatchObject({ readOnly: true, name: "Claude Code changes" });
+    expect(workbench.editor.stateOf("/agent/1/changes.diff")!.doc.toString()).toContain("+print('agent')");
+    expect(workbench.agents.get().changes.get(1)?.files).toHaveLength(1);
+
+    workbench.openAgentFile(1, "src/main.py");
+    await settle();
+    const file = workbench.editor.get().tabs.find((t) => t.path === "/agent/1/src/main.py");
+    expect(file).toMatchObject({ readOnly: true });
+    expect(workbench.editor.stateOf("/agent/1/src/main.py")!.doc.toString()).toBe("agent's src/main.py\n");
+    // Saving a read-only document writes nothing, and the workspace is the same.
+    await workbench.editor.save("/agent/1/src/main.py");
+    expect(state.calls.some((c) => c.startsWith("write "))).toBe(false);
+    expect(workbench.workspace.get()?.root).toBe("/Users/me/project");
+  });
+
+  it("asks before stopping an agent, and keeps its session", async () => {
+    const { workbench, state } = await trustedWithAgents();
+    await launch(workbench);
+    running(state, workbench, 1);
+    await workbench.agents.loadSessions();
+
+    workbench.stopAgent(1);
+    await answer(workbench, "cancel");
+    expect(state.calls).not.toContain("stop 1");
+
+    workbench.stopAgent(1);
+    await answer(workbench, "stop");
+    workbench.terminals.ended(workbench.terminals.paneOfSession(1)!.key, { type: "exited", exit: { code: 0, signal: null } });
+    for (let i = 0; i < 3; i++) await settle();
+    expect(state.calls).toContain("stop 1");
+    expect(workbench.agents.session(1)?.state).toEqual({ state: "notRunning" });
+  });
+
+  it("removes a workspace only after saying what goes, and discards uncommitted work only then", async () => {
+    const { workbench, state } = await trustedWithAgents();
+    await launch(workbench);
+    await workbench.agents.loadSessions();
+    state.agentChanges = {
+      branch: "agent/claude-code/20260921-101500-abcdef",
+      base: "a".repeat(40),
+      head: "a".repeat(40),
+      commits: 0,
+      uncommitted: true,
+      files: [{ path: "notes.txt", change: "untracked", from: null }],
+      diff: "",
+      truncated: false,
+    };
+
+    workbench.removeAgentSession(1);
+    await answer(workbench, "cancel");
+    expect(state.removed).toEqual([]);
+
+    workbench.removeAgentSession(1);
+    await settle();
+    expect(workbench.dialogs.get()?.message).toContain("not committed are lost");
+    await answer(workbench, "remove");
+    expect(state.removed).toEqual([{ session: 1, discard: true }]);
+    expect(agentPanes(workbench)).toEqual([]);
   });
 });

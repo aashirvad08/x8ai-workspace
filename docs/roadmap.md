@@ -11,12 +11,12 @@ are part of every phase, not a final pass (`docs/security.md`).
 | 2 | Workspace, files and editor | **Complete** |
 | 3 | Workspace sessions: persistence, trust and layout | **Complete** |
 | 4 | Agent runtime | **Complete** |
-| 5 | Secrets and model providers | Next |
-| 6 | Local models | Planned |
+| 5 | Multi-agent workspaces | **Complete** |
+| 6 | Model providers, secrets and local models | Next |
 | 7 | MCP layer | Planned |
-| 8 | Git and worktrees | Planned |
-| 9 | Editor intelligence and change review | Planned |
-| 10 | Catalog | Planned |
+| 8 | Catalog | Planned |
+| 9 | Review and merge | Planned |
+| 10 | Editor intelligence | Planned |
 | 11 | Skills, templates and presets | Planned |
 | 12 | Hardening, distribution and Linux | Planned |
 
@@ -153,9 +153,31 @@ running, exited, failed). Agent terminal panes.
 - No approval-bypass flags are added by default (test).
 
 **Deferred.** Codex and Aider definitions (adding them is data). Pinning approvals
-to a definition hash (catalog, Phase 10).
+to a definition hash (catalog, Phase 8).
 
-## Phase 5 — Secrets and model providers
+## Phase 5 — Multi-agent workspaces
+
+**Objective.** Several agents at once in one project, without corrupting the
+user's working tree or each other's work (docs/multi-agent.md, ADR 0013).
+
+**Major components.** `crates/git` (the user's `git`: repository facts,
+worktrees, changes). Agent sessions in the runtime: agent, workspace, working
+directory, worktree, start time, state, PTY session. A linked worktree per session
+under `~/.x8ai/worktrees`, on branch `agent/<agent>/<token>`. Rediscovery after a
+restart. Review: changed files, commits and the diff, read-only in the editor.
+Safe removal. Explicit non-Git behavior.
+
+**Acceptance criteria.**
+- Two agents run at once in different worktrees; stopping one leaves the other.
+- The user's working tree, index and branch are unchanged by agent work (tests).
+- Worktree paths and branch names are made and checked natively; the webview
+  passes ids only (tests).
+- Non-Git folders run one agent at a time and say they are not isolated.
+- Trust and approval still gate every run (tests).
+- Agent changes are shown as a diff and file list; nothing is merged
+  automatically; removal never deletes commits.
+
+## Phase 6 — Model providers, secrets and local models
 
 **Objective.** Configure model providers once and use them from any compatible
 agent.
@@ -174,7 +196,7 @@ adapters that inject provider, model and credentials at launch.
   correct for all built-in agents.
 - Revoking a key takes effect for new sessions immediately.
 
-## Phase 6 — Local models
+### Local models (part of Phase 6)
 
 **Objective.** Make local and open-weight models a first-class choice.
 
@@ -207,39 +229,7 @@ Remote MCP with OAuth. The approval flow.
 - Repository-provided MCP configuration never starts in an untrusted workspace.
 - An ADR decides whether an MCP gateway is needed.
 
-## Phase 8 — Git and worktrees
-
-**Objective.** Git awareness, and isolated worktrees for parallel agent work.
-
-**Major components.** A `git` crate (ADR: `git` CLI vs `gix`). Status, branches, diff
-and commit basics. Worktree creation per agent session. Cleanup.
-
-**Acceptance criteria.**
-- Status and diff match `git` exactly on real repositories, including submodules
-  and large repositories.
-- An agent session can run in a fresh worktree on a new branch, and several can
-  run in parallel without interfering.
-- Worktree removal never deletes uncommitted work without an explicit
-  confirmation.
-
-## Phase 9 — Editor intelligence and change review
-
-**Objective.** Review and steer what agents change. Add language intelligence.
-
-**Major components.** Diff views (side-by-side and inline). Reviewing agent changes
-per worktree or branch, accepting or rejecting hunks. An LSP client with language
-servers managed as native child processes. Diagnostics, completion and
-go-to-definition.
-
-**Acceptance criteria.**
-- Every change an agent made in a session can be reviewed as a diff before it is
-  merged into the main checkout.
-- TypeScript and Rust language servers provide diagnostics and completion. Crashed
-  servers restart without losing editor state.
-- Language servers run with the workspace as cwd and follow the same process
-  lifecycle rules as sessions.
-
-## Phase 10 — Catalog
+## Phase 8 — Catalog
 
 **Objective.** Discover, install and connect agents, providers and MCP servers from
 one place.
@@ -256,6 +246,37 @@ Connect flows. Update notifications.
 - Approved definitions are pinned by hash. A changed definition requires
   re-approval.
 - User-defined entries are labelled untrusted.
+
+## Phase 9 — Review and merge
+
+**Objective.** Turn Phase 5's review into a decision: bring an agent's work into
+the user's branch, or discard it, always by explicit user action.
+
+**Major components.** Side-by-side and inline diff views of an agent session's
+changes. Accepting or rejecting hunks or files. Merge, rebase or cherry-pick of an
+agent branch into the user's branch, with conflicts shown, never automatic. Git
+status and basics in the primary workspace.
+
+**Acceptance criteria.**
+- Every change an agent made can be reviewed as a diff before anything reaches the
+  user's branch, and nothing reaches it without the user's action.
+- Status and diff match `git` exactly on real repositories, including submodules
+  and large repositories.
+- Discarding an agent's work never deletes commits without an explicit
+  confirmation.
+
+## Phase 10 — Editor intelligence
+
+**Objective.** Add language intelligence to the editor.
+
+**Major components.** An LSP client with language servers managed as native child
+processes. Diagnostics, completion and go-to-definition.
+
+**Acceptance criteria.**
+- TypeScript and Rust language servers provide diagnostics and completion. Crashed
+  servers restart without losing editor state.
+- Language servers run with the workspace as cwd and follow the same process
+  lifecycle rules as sessions.
 
 ## Phase 11 — Skills, templates and presets
 

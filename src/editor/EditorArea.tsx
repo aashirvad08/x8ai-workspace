@@ -66,7 +66,7 @@ function Tab({
     <div
       role="presentation"
       className={classes.filter(Boolean).join(" ")}
-      title={tab.path + (tab.dirty ? " (unsaved)" : "")}
+      title={tab.title + (tab.dirty ? " (unsaved)" : tab.readOnly ? " (read-only)" : "")}
       onAuxClick={(event) => event.button === 1 && actions.close(tab.path)}
     >
       <button type="button" role="tab" aria-selected={active} className="tab-name" onClick={() => editor.activate(tab.path)}>

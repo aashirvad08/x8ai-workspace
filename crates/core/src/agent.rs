@@ -9,7 +9,7 @@
 //!
 //! How configuration is injected into each agent (flags, environment variables,
 //! config files) differs per agent and is implemented by per-agent adapters in
-//! Phase 5 and Phase 7. It is deliberately not modelled here yet.
+//! Phase 6 and Phase 7. It is deliberately not modelled here yet.
 //!
 //! The second half of this module is the IPC contract of the agent runtime
 //! (`crates/agents`, `docs/agent-runtime.md`): what the webview learns about each
@@ -128,6 +128,129 @@ pub struct AgentList {
     /// Set when the user's login-shell environment could not be read, so agents
     /// were looked up with the app's own `PATH` instead. Says why.
     pub environment_problem: Option<String>,
+    /// How agents would run in the open workspace; `None` when none is open.
+    pub isolation: Option<WorkspaceIsolation>,
+}
+
+/// Whether agents in the open workspace get worktrees of their own
+/// (docs/multi-agent.md).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(export)]
+pub enum WorkspaceIsolation {
+    /// A Git repository: each agent session gets a worktree on a new branch,
+    /// starting from this commit.
+    Worktrees {
+        branch: Option<String>,
+        head: String,
+    },
+    /// No isolation: one agent at a time runs directly in the folder. Says why.
+    Unavailable { reason: String },
+}
+
+/// Identifies an agent session (a worktree or a slot in the folder, and the
+/// agent runs in it) for the lifetime of the app process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentSessionId(pub u32);
+
+/// One agent session: where it works and what it is doing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentSessionInfo {
+    pub id: AgentSessionId,
+    pub agent: IntegrationId,
+    pub name: String,
+    /// The workspace root it belongs to.
+    pub workspace: String,
+    /// Where the agent runs: in its worktree, or the workspace itself.
+    pub cwd: String,
+    /// `None` when it runs directly in the workspace, without isolation.
+    pub worktree: Option<AgentWorktree>,
+    /// When the session was created, in milliseconds since the Unix epoch.
+    /// A JSON number, which holds milliseconds exactly for any real date.
+    #[ts(type = "number")]
+    pub started_at: u64,
+    pub state: AgentSessionState,
+    /// The terminal session while the agent runs.
+    pub terminal: Option<crate::terminal::SessionId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentWorktree {
+    pub branch: String,
+    /// The commit it started from.
+    pub base: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "state", rename_all = "camelCase")]
+#[ts(export)]
+pub enum AgentSessionState {
+    /// Created, stopped, or left from an earlier run of the app.
+    NotRunning,
+    Running,
+    Exited {
+        exit: crate::terminal::TerminalExit,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+/// What an agent changed in its worktree since it started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentChanges {
+    pub branch: Option<String>,
+    pub base: String,
+    pub head: String,
+    /// Commits the agent made.
+    pub commits: u32,
+    /// Some changes are not committed; removing the worktree would lose them.
+    pub uncommitted: bool,
+    pub files: Vec<AgentChangedFile>,
+    /// A unified diff of everything, committed or not, new files included.
+    pub diff: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentChangedFile {
+    /// Relative to the worktree root, `/`-separated.
+    pub path: String,
+    pub change: ChangeKind,
+    /// The old path of a rename.
+    pub from: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Untracked,
+    Other,
+}
+
+/// What removing an agent's workspace kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AgentRemoval {
+    /// The agent's branch, kept because it has commits. `None` if it was deleted.
+    pub kept_branch: Option<String>,
+    pub commits: u32,
 }
 
 #[cfg(test)]

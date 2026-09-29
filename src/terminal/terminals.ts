@@ -4,8 +4,13 @@ import { Store } from "../lib/store";
 import { type PaneTree, pane, paneKeys, removePane, resizeSplit, type SplitDirection, splitPane } from "./panes";
 import type { SessionEnding } from "./session";
 
-/** What runs in a pane: the user's login shell, or an agent started by the native runtime. */
-export type PaneKind = { readonly type: "shell" } | { readonly type: "agent"; readonly agent: string; readonly name: string };
+/**
+ * What runs in a pane: the user's login shell, or the agent of an agent session
+ * (which knows its own worktree; docs/multi-agent.md).
+ */
+export type PaneKind =
+  | { readonly type: "shell" }
+  | { readonly type: "agent"; readonly agent: string; readonly name: string; readonly session: number };
 
 export const SHELL: PaneKind = { type: "shell" };
 
@@ -164,6 +169,11 @@ export class Terminals extends Store<TerminalsSnapshot> {
   /** Panes running an agent, optionally only one agent. */
   agentPanes(agent?: string): TerminalPane[] {
     return [...this.get().panes.values()].filter((p) => p.kind.type === "agent" && (agent === undefined || p.kind.agent === agent));
+  }
+
+  /** The pane of an agent session, if it has one. */
+  paneOfSession(session: number): TerminalPane | undefined {
+    return [...this.get().panes.values()].find((p) => p.kind.type === "agent" && p.kind.session === session);
   }
 
   /** Closes every agent pane, e.g. when the workspace they belong to is gone. */

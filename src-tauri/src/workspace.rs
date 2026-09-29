@@ -483,7 +483,7 @@ async fn blocking<T: Send + 'static>(
         .map_err(command_error)
 }
 
-fn command_error(error: x8ai_workspace::Error) -> CommandError {
+pub(crate) fn command_error(error: x8ai_workspace::Error) -> CommandError {
     use x8ai_workspace::Error;
     let code = match &error {
         Error::InvalidPath { .. }

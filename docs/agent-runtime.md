@@ -34,9 +34,10 @@ React (src/agents, src/terminal)          IPC                 Rust
 | Built-in definitions | `crates/agents/src/builtin.json` | Claude Code and OpenCode. Adding an agent that needs no special handling is adding an entry. |
 | Login environment | `crates/agents/src/environment.rs` | The environment an agent would have if typed in the user's terminal |
 | Discovery | `crates/agents/src/discovery.rs` | The program, found on that environment's `PATH` |
-| Runtime | `crates/agents/src/runtime.rs` | `plan` → `authorize` → `AgentRuntime::start`; status, stop, cleanup |
+| Runtime | `crates/agents/src/runtime.rs` | `plan` → `authorize` → `AgentRuntime::run` for an agent session; status, stop, cleanup |
+| Isolation | `crates/agents/src/isolation.rs`, `crates/git` | A Git worktree per agent session (docs/multi-agent.md) |
 | Approvals | `crates/workspace/src/store.rs` (`ApprovalStore`) | Which agent may run in which folder |
-| Commands | `src-tauri/src/agents.rs` | `agent_list`, `agent_request_approval`, `agent_revoke`, `agent_start` |
+| Commands | `src-tauri/src/agents.rs` | `agent_list`, `agent_request_approval`, `agent_revoke`, and the session commands in docs/multi-agent.md |
 | UI | `src/agents/` (view, store), `src/terminal/` (agent panes), `src/workbench/` (flow) | |
 
 Nothing in the runtime is specific to one agent. Claude Code is the concrete
@@ -44,16 +45,18 @@ agent that validates it.
 
 ## The runtime API
 
-The conceptual API maps onto existing pieces rather than a parallel stack:
+The conceptual API maps onto existing pieces rather than a parallel stack. Since
+Phase 5 an agent runs in an *agent session* (docs/multi-agent.md): a worktree of
+its own in a Git repository, or the workspace itself otherwise.
 
 | Operation | Implementation |
 | --- | --- |
-| `start(agent, workspace)` | `agent_start(agent, size, events)`: plan, authorize, spawn on a PTY session. The workspace is always the open one; the webview cannot name another. |
-| `stop(agent)` | Closing the agent's terminal (`terminal_close`), or `AgentRuntime::stop`: SIGHUP, then SIGKILL after 2 s |
-| `restart(agent)` | Enter in an agent pane whose agent exited: `agent_start` again, with every check again |
-| `getStatus(agent)` | `agent_list` (installed, approved) and the pane's session state (starting, running, exited, failed); natively `AgentRuntime::status` |
-| `sendInput(agent, input)` | `terminal_write` on the agent's session |
-| `resize(agent, cols, rows)` | `terminal_resize` on the agent's session |
+| `start(agent, workspace)` | `agent_create_session(agent)` then `agent_run(session, size, events)`: plan, authorize, spawn on a PTY session in the session's directory. The workspace is always the open one; the webview cannot name another. |
+| `stop(agent)` | `agent_stop(session)`, or closing the agent's terminal: SIGHUP, then SIGKILL after 2 s |
+| `restart(agent)` | `agent_run` again for the same session (Enter in its terminal, or Restart), with every check again |
+| `getStatus(agent)` | `agent_list` (installed, approved) and `agent_sessions` (running, exited, failed, not running); natively `AgentRuntime::get` |
+| `sendInput(agent, input)` | `terminal_write` on the agent's PTY session |
+| `resize(agent, cols, rows)` | `terminal_resize` on the agent's PTY session |
 
 ## Lifecycle
 
@@ -71,10 +74,11 @@ installed ──Launch──▶ [trusted?] ──no──▶ blocked: "not trust
 ```
 
 The frontend walks the user through the steps; the native side enforces them.
-`agent_start` refuses unless the open workspace is trusted and the agent is
-approved there for the executable it would run now, whatever the webview does.
+`agent_create_session` and every `agent_run` refuse unless the open workspace is
+trusted and the agent is approved there for the executable it would run now,
+whatever the webview does.
 `authorize` is the only way to obtain the `Authorized` value that
-`AgentRuntime::start` takes, so a start without the checks does not compile.
+`AgentRuntime::run` takes, so a start without the checks does not compile.
 
 ## Trust requirements
 
@@ -124,7 +128,8 @@ Workspace (canonical root)
 
 - The agent is started natively by the runtime, directly, never through a shell:
   the resolved absolute executable, the definition's arguments, working directory
-  = the workspace root, and an explicit environment. The webview cannot choose any
+  = the session's worktree (or the workspace root without Git), and an explicit
+  environment. The webview cannot choose any
   of these.
 - It runs on a PTY session from the same `Sessions` registry as the user's shells,
   as a session leader in its own process group, so signals reach its children.
@@ -181,7 +186,7 @@ says how and offers Enter to restart it, which goes through every check again.
 | --- | --- |
 | It exits (or crashes, or is killed from outside) | The exit is detected and reported with its code or signal; the pane shows it |
 | Its terminal closes | Asked first ("Stop Claude Code?"), then SIGHUP, SIGKILL after 2 s |
-| Another folder opens | Asked first; the native side stops agents of any other workspace, and their panes close |
+| Another folder opens | Asked first; the native side stops agents of any other workspace, and their panes close; their worktrees stay |
 | The folder's trust is removed | Its agents stop, and their approvals are removed |
 | The page reloads | Every session closes |
 | The app quits (⌘Q, window close, Dock, logout) | Asked first; every session is hung up and killed after 500 ms |
@@ -194,7 +199,7 @@ that prints while exiting cannot hang (see architecture §6).
 
 | Boundary | Enforced by |
 | --- | --- |
-| The webview cannot choose what runs, where, or with what environment | `agent_start` takes an agent id and a size only |
+| The webview cannot choose what runs, where, or with what environment | Agent commands take an agent or session id and a size only |
 | No agent in an untrusted workspace | Native check on every start (`authorize`) |
 | No agent without the user's approval for this folder and executable | Native dialog to grant; native check on every start |
 | A project cannot approve agents for itself | Approvals live in the app data directory; nothing reads approval state from a workspace |
@@ -229,13 +234,13 @@ built-in definitions).
 
 ## Future extension points
 
-- **Models (Phase 5):** per-agent config adapters that turn "provider P, model M"
+- **Models (Phase 6):** per-agent config adapters that turn "provider P, model M"
   into flags or environment variables, and inject secrets from the Keychain into
   that one agent's environment (`EnvValue::Secret`, refused today).
 - **MCP (Phase 7):** `capabilities.mcpTransports` already says which transports an
   agent supports; an adapter will write the workspace's enabled MCP servers into
   the agent's own configuration before `start`.
 - **More agents:** a definition in `builtin.json`, later from the catalog
-  (Phase 10), whose approvals pin the definition's hash.
+  (Phase 8), whose approvals pin the definition's hash.
 - **Structured agents:** a second runtime kind for agents with machine interfaces
   (ACP, headless JSON), reusing definitions, trust and approvals.

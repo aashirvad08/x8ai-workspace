@@ -12,7 +12,7 @@ protection. Do not rely on it.
 
 ---
 
-## 1. What is enforced today (Phases 0–4)
+## 1. What is enforced today (Phases 0–5)
 
 These protections exist and are verified:
 
@@ -32,6 +32,8 @@ These protections exist and are verified:
 | **No agent runs in an untrusted folder, or without the user's approval for that folder.** `agent_start` takes only an agent id and a size. The program comes from a built-in definition, resolved to an absolute path on the user's login `PATH`; it runs in the open workspace, never through a shell. Trust and the approval (exact agent, executable, arguments and folder) are checked natively on every start, and a start without them does not type-check (`Authorized`). | `crates/agents`, `src-tauri/src/agents.rs` | Tests (`an_untrusted_workspace_blocks_the_launch`, `a_trusted_workspace_without_approval_blocks_the_launch`, `an_approval_for_one_workspace_does_not_cover_another`, `a_different_executable_on_the_path_needs_a_new_approval`) |
 | **Only the user can approve an agent, and only per folder.** Approval is granted in a native dialog showing the folder and the exact command line; stored in the app data directory (0600), never in the project; revocable; removed with the folder's trust. | `crates/workspace/src/store.rs`, `src-tauri/src/agents.rs` | Store tests (`a_project_cannot_approve_agents_for_itself`, …) |
 | **Agents stop when their permission ends:** when their terminal closes, another folder opens, the folder loses trust, or the app quits, with a question first while they run. | `crates/agents/src/runtime.rs`, `src/workbench/workbench.ts` | Tests (`closing_the_agents_terminal_ends_the_agent_and_its_children`, `quitting_the_app_ends_every_agent`, `opening_another_workspace_stops_…`, `removing_trust_can_stop_…`) |
+| **Agents work in worktrees of their own, and the user's working tree is not touched.** In a Git repository each agent session gets a linked worktree on a new branch under the app-controlled `~/.x8ai/worktrees` (0700, no symlinks), named natively from the agent id and a generated token. The webview passes only ids; branch names and revisions are validated. Removal needs the user's confirmation and never deletes committed work. Non-Git folders take one agent at a time, stated as not isolated. | `crates/agents/src/isolation.rs`, `crates/git` | Tests (`multi_agent.rs`: separate worktrees, primary tree unchanged, paths in scope, symlinked directory refused, crafted metadata ignored, removal rules; `git.rs`: hooks do not run, `GIT_*` ignored, foreign revisions refused) |
+| **The app's own Git calls run no repository code.** Hooks and fsmonitor are disabled, inherited `GIT_*` variables removed, no prompts, a timeout. | `crates/git` | Test (`the_apps_git_runs_no_repository_hooks_and_ignores_inherited_git_variables`) |
 | **Built-in agents never launch with approval-bypass flags or secrets.** | `crates/agents/src/builtin.json` | Test (`no_builtin_agent_bypasses_its_own_approvals_or_needs_a_secret`) |
 | **A running program is not ended by accident.** Closing a terminal pane or tab, or quitting, asks first when a program other than the shell is in the terminal's foreground (read from the PTY with `tcgetpgrp`). | `crates/pty`, `src/workbench/workbench.ts` | Tests (`knows_when_a_job_is_in_the_foreground`, workbench tests) |
 | Terminal command arguments are validated in Rust: sizes (1–4096 × 1–2048), session ids (`notFound` otherwise), and raw input only to an existing session | `crates/core/src/terminal.rs`, `crates/pty` | Unit and integration tests |
@@ -117,7 +119,8 @@ weaken it.
 - **Prompt injection** from repository content, web pages or MCP tool results can
   steer an agent. The app cannot solve this. It reduces the impact by giving each
   agent session only the secrets it needs, not placing app-held secrets in the
-  environment by default, and supporting disposable git worktrees (Phase 8), so
+  environment by default, and giving each agent a Git worktree of its own (built,
+  Phase 5, docs/multi-agent.md), so
   changes can be reviewed before they touch the main checkout.
 - **OS-level sandboxing** of agent sessions (macOS Seatbelt profiles, containers or
   VMs) is an explicit research item for Phase 12. Some agents already ship their
@@ -136,7 +139,7 @@ weaken it.
 - **Tool poisoning.** Malicious tool descriptions can instruct the agent. **Phase 7:**
   show tool lists and descriptions at enable time, and re-prompt when they change.
 - **Rug pulls.** Record a content hash of each approved definition and require
-  re-approval when it changes. **Phase 10.**
+  re-approval when it changes. **Phase 8.**
 - **Remote MCP servers** receive workspace content through tool calls. HTTPS is
   required for non-loopback hosts (enforced in definition validation). Auth
   follows the MCP OAuth specification, and tokens are held natively and scoped to
@@ -148,15 +151,15 @@ weaken it.
 ### 3.4 Secrets and API keys
 
 - **Storage:** macOS Keychain via the native secret store. No plaintext config
-  files, and not `localStorage`. **Phase 5.**
+  files, and not `localStorage`. **Phase 6.**
 - **Reference, don't embed.** Definitions use `SecretName`, and the type system
   makes embedding a value impossible (built). Validation rejects URLs with
   embedded credentials (built).
 - **Delivery:** secrets are resolved at launch and placed only in the environment
   of the specific child that needs them. They are never set on the app process,
-  so shells and other children cannot inherit them. **Phase 4/5.**
+  so shells and other children cannot inherit them. **Phase 6.**
 - **Never in the webview.** No command returns a secret value. The UI can only set,
-  replace or delete a secret and see whether one exists. **Phase 5.**
+  replace or delete a secret and see whether one exists. **Phase 6.**
 - **Never in logs, errors or crash reports.** `CommandError.message` must not include
   secret values or environment dumps (documented on the type). Redaction is added
   when logging lands.
@@ -209,9 +212,9 @@ weaken it.
   **Enforced (Phase 1).**
 - **Environment leakage.** Terminal sessions inherit the app's environment plus
   `TERM`, `COLORTERM`, `TERM_PROGRAM` and, when no locale is set, `LANG`. The app
-  holds no secrets yet, so none can leak. When secrets arrive (Phase 5) they are
+  holds no secrets yet, so none can leak. When secrets arrive (Phase 6) they are
   never placed in the app's own environment. Under `pnpm tauri dev`, sessions also
-  inherit the dev server's environment. **Phase 1 (terminal), Phase 4/5 (agents).**
+  inherit the dev server's environment. **Phase 1 (terminal), Phase 4 (agents).**
 - **Resource exhaustion.** Output is batched with bounded buffers and backpressure:
   a flood blocks the producer rather than growing memory. **Enforced (Phase 1).**
   Showing the number of sessions arrives with tabs.
@@ -227,7 +230,7 @@ weaken it.
 ### 3.7 Malicious integrations and the catalog
 
 - **Supply chain:** typosquatted packages, compromised npm or PyPI releases with
-  install scripts, and a compromised catalog index. **Phase 10:** a signed catalog
+  install scripts, and a compromised catalog index. **Phase 8:** a signed catalog
   index, pinned versions and checksums, provenance display, reviewed built-ins,
   and user-defined entries labelled untrusted.
 - **Installation executes code.** "Install" shows the exact commands (for example
@@ -253,6 +256,9 @@ tasks or hooks.
   folder still only lists and reads files and, when the user opens a terminal,
   starts their own login shell there. Next enforcement point: MCP (Phase 7:
   repository-provided MCP configuration never starts in an untrusted workspace).
+- **Agent isolation (Phase 5)** is by working directory: each agent works in its
+  own worktree, which prevents accidental interference through normal work. It is
+  not a sandbox; an agent running as the user can still write elsewhere.
 - **Honest limit:** trust is a statement by the user, not an analysis of the
   folder. It does not make a folder's contents safe, and it does not constrain what
   the user's own shell does there.

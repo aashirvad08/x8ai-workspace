@@ -47,7 +47,7 @@ mod tests {
                     agent.id
                 );
             }
-            // Secrets arrive in Phase 5; until then no definition may need one.
+            // Secrets arrive in Phase 6; until then no definition may need one.
             assert!(
                 agent.launch.env.is_empty(),
                 "{} sets environment variables",

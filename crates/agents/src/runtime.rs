@@ -8,25 +8,32 @@
 //! 2. [`authorize`] checks that the workspace is trusted and that the user approved
 //!    exactly this launch in exactly this workspace. It is the only way to get an
 //!    [`Authorized`] launch.
-//! 3. [`AgentRuntime::start`] runs an [`Authorized`] launch on a new session in the
-//!    shared session registry, so an agent is a terminal session like any other:
-//!    the same PTY, input, resize, flow control, hangup and cleanup (`x8ai-pty`).
+//! 3. [`AgentRuntime::run`] runs an [`Authorized`] launch for an agent session on a
+//!    new PTY session in the shared session registry, so an agent is a terminal
+//!    session like any other: the same PTY, input, resize, flow control, hangup
+//!    and cleanup (`x8ai-pty`).
 //!
-//! The runtime keeps track of which sessions are agents and in which workspace, so
-//! it can report status and stop agents when their workspace closes.
+//! An *agent session* (docs/multi-agent.md) is where an agent works, a worktree of
+//! its own or the workspace itself, and the agent running there. It outlives the
+//! agent's process: stopping and restarting the agent keeps its worktree. The
+//! runtime keeps track of them, so it can report status, keep agents apart, and
+//! stop them when their workspace closes.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use x8ai_core::agent::AgentDefinition;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use x8ai_core::agent::{AgentDefinition, AgentSessionId};
 use x8ai_core::id::IntegrationId;
 use x8ai_core::launch::EnvValue;
-use x8ai_core::terminal::{SessionId, TerminalSize};
+use x8ai_core::terminal::{SessionId, TerminalExit, TerminalSize};
 use x8ai_pty::{Environment, Program, Session, SessionEvents, Sessions};
 use x8ai_workspace::{Approval, ApprovalStore, TrustStore};
 
 use crate::discovery::find_executable;
 use crate::environment::var;
+use crate::isolation::Worktree;
 
 /// Exactly what would run: shown to the user for approval, and then executed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,134 +141,364 @@ pub fn authorize<'a>(
     Ok(Authorized(plan))
 }
 
-/// Whether an agent session is still running.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunState {
+/// What an agent session is doing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionState {
+    /// Created, stopped, or found from an earlier run of the app.
+    NotRunning,
     Running,
-    Exited,
+    Exited(TerminalExit),
+    /// The agent could not be started; says why.
+    Failed(String),
 }
 
-/// A started agent.
+/// An agent session, as reported.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSession {
-    pub id: SessionId,
+    pub id: AgentSessionId,
     pub agent: IntegrationId,
+    pub name: String,
+    /// The workspace root it belongs to, and was approved for.
     pub workspace: PathBuf,
-    pub state: RunState,
+    /// Where the agent runs.
+    pub cwd: PathBuf,
+    /// Its worktree; `None` when it runs directly in the workspace.
+    pub worktree: Option<Worktree>,
+    /// Milliseconds since the Unix epoch.
+    pub started: u64,
+    pub state: SessionState,
+    /// The PTY session while it runs.
+    pub terminal: Option<SessionId>,
 }
 
-struct Running {
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RunError {
+    #[error("no agent session {}", .0.0)]
+    NotFound(AgentSessionId),
+    #[error("the agent is already running in this session")]
+    AlreadyRunning,
+    #[error("the agent is still running; stop it first")]
+    StillRunning,
+    #[error(
+        "this folder is not a Git repository, so agents cannot get workspaces of their own; \
+         one agent at a time runs directly in it, and one is running"
+    )]
+    SharedBusy,
+    #[error("the launch does not belong to this agent session")]
+    Mismatch,
+    #[error("the agent's directory is not inside its workspace")]
+    OutsideWorkspace,
+    #[error("{0}")]
+    Pty(String),
+}
+
+struct Record {
+    id: AgentSessionId,
     agent: IntegrationId,
+    name: String,
     workspace: PathBuf,
-    session: Arc<Session>,
+    cwd: PathBuf,
+    worktree: Option<Worktree>,
+    started: u64,
+    pty: Option<Arc<Session>>,
+    failure: Option<String>,
 }
 
-/// The agent sessions the app started. The sessions themselves live in the shared
-/// [`Sessions`] registry, next to the user's shells.
+impl Record {
+    fn running(&self) -> bool {
+        self.pty.as_ref().is_some_and(|s| !s.has_exited())
+    }
+
+    fn view(&self) -> AgentSession {
+        let state = match (&self.pty, &self.failure) {
+            (Some(pty), _) if !pty.has_exited() => SessionState::Running,
+            (Some(pty), _) => pty
+                .exit_status()
+                .map_or(SessionState::NotRunning, SessionState::Exited),
+            (None, Some(message)) => SessionState::Failed(message.clone()),
+            (None, None) => SessionState::NotRunning,
+        };
+        AgentSession {
+            id: self.id,
+            agent: self.agent.clone(),
+            name: self.name.clone(),
+            workspace: self.workspace.clone(),
+            cwd: self.cwd.clone(),
+            worktree: self.worktree.clone(),
+            started: self.started,
+            terminal: self
+                .pty
+                .as_ref()
+                .filter(|p| !p.has_exited())
+                .map(|p| p.id()),
+            state,
+        }
+    }
+}
+
+/// The agent sessions of this app run. The PTY sessions themselves live in the
+/// shared [`Sessions`] registry, next to the user's shells.
 #[derive(Default)]
 pub struct AgentRuntime {
-    running: Mutex<Vec<Running>>,
+    last_id: std::sync::atomic::AtomicU32,
+    records: Mutex<Vec<Record>>,
 }
 
 impl AgentRuntime {
-    /// Starts an authorized launch on a new PTY session, in its workspace, with
-    /// exactly its environment. Output and exit are reported to `events`.
-    pub fn start(
+    /// A new session for the planned agent: in `worktree` (running in `cwd`
+    /// inside it), or, without one, directly in the plan's workspace. A workspace
+    /// without isolation takes one running agent at a time.
+    pub fn create(
+        &self,
+        plan: &LaunchPlan,
+        cwd: PathBuf,
+        worktree: Option<Worktree>,
+    ) -> Result<AgentSessionId, RunError> {
+        let inside = match &worktree {
+            Some(worktree) => cwd.starts_with(&worktree.path),
+            None => cwd == plan.workspace,
+        };
+        if !inside {
+            return Err(RunError::OutsideWorkspace);
+        }
+        let mut records = self.lock();
+        if worktree.is_none()
+            && records
+                .iter()
+                .any(|r| r.workspace == plan.workspace && r.worktree.is_none() && r.running())
+        {
+            return Err(RunError::SharedBusy);
+        }
+        let id = self.next_id();
+        records.push(Record {
+            id,
+            agent: plan.agent.clone(),
+            name: plan.name.clone(),
+            workspace: plan.workspace.clone(),
+            cwd,
+            worktree,
+            started: now_ms(),
+            pty: None,
+            failure: None,
+        });
+        Ok(id)
+    }
+
+    /// Adds a session for a worktree found from an earlier run of the app, unless
+    /// one already exists for it. Returns the session.
+    pub fn adopt(
+        &self,
+        name: &str,
+        workspace: &Path,
+        cwd: PathBuf,
+        worktree: Worktree,
+    ) -> AgentSessionId {
+        let mut records = self.lock();
+        if let Some(known) = records
+            .iter()
+            .find(|r| r.worktree.as_ref().is_some_and(|w| w.path == worktree.path))
+        {
+            return known.id;
+        }
+        let id = self.next_id();
+        records.push(Record {
+            id,
+            agent: worktree.agent.clone(),
+            name: name.to_owned(),
+            workspace: workspace.to_owned(),
+            cwd,
+            started: worktree.created,
+            worktree: Some(worktree),
+            pty: None,
+            failure: None,
+        });
+        id
+    }
+
+    /// Runs the agent of session `id`, in the session's directory, on a new PTY
+    /// session. `launch` must be an authorized plan for the same agent and
+    /// workspace. Output and exit are reported to `events`.
+    pub fn run(
         &self,
         sessions: &Sessions,
+        id: AgentSessionId,
         launch: Authorized<'_>,
         size: TerminalSize,
         events: Arc<dyn SessionEvents>,
-    ) -> Result<Arc<Session>, x8ai_pty::Error> {
+    ) -> Result<Arc<Session>, RunError> {
         let plan = launch.0;
+        let mut records = self.lock();
+        let shared_busy = |records: &[Record], record: &Record| {
+            record.worktree.is_none()
+                && records.iter().any(|r| {
+                    r.id != record.id
+                        && r.workspace == record.workspace
+                        && r.worktree.is_none()
+                        && r.running()
+                })
+        };
+        let index = records
+            .iter()
+            .position(|r| r.id == id)
+            .ok_or(RunError::NotFound(id))?;
+        let record = &records[index];
+        if record.agent != plan.agent || record.workspace != plan.workspace {
+            return Err(RunError::Mismatch);
+        }
+        if record.running() {
+            return Err(RunError::AlreadyRunning);
+        }
+        if shared_busy(&records, record) {
+            return Err(RunError::SharedBusy);
+        }
         let program = Program::Exec {
             program: plan.program.clone(),
             args: plan.args.iter().map(Into::into).collect(),
-            cwd: Some(plan.workspace.clone()),
+            cwd: Some(record.cwd.clone()),
             env: Environment::Exactly(plan.env.clone()),
         };
-        let session = sessions.spawn(&program, size, events)?;
-        self.lock().push(Running {
-            agent: plan.agent.clone(),
-            workspace: plan.workspace.clone(),
-            session: session.clone(),
-        });
-        Ok(session)
+        let record = &mut records[index];
+        match sessions.spawn(&program, size, events) {
+            Ok(session) => {
+                record.pty = Some(session.clone());
+                record.failure = None;
+                Ok(session)
+            }
+            Err(error) => {
+                record.pty = None;
+                record.failure = Some(error.to_string());
+                Err(RunError::Pty(error.to_string()))
+            }
+        }
     }
 
-    /// Every agent session started and not yet forgotten.
+    /// Records why the agent could not be started (for example, it was denied).
+    pub fn fail(&self, id: AgentSessionId, message: String) {
+        if let Some(record) = self.lock().iter_mut().find(|r| r.id == id && !r.running()) {
+            record.pty = None;
+            record.failure = Some(message);
+        }
+    }
+
+    /// Hangs up the agent of session `id` (SIGHUP, then SIGKILL after the grace
+    /// period). The session and its worktree stay.
+    pub fn stop(&self, sessions: &Sessions, id: AgentSessionId) -> Result<(), RunError> {
+        let pty = {
+            let records = self.lock();
+            let record = records
+                .iter()
+                .find(|r| r.id == id)
+                .ok_or(RunError::NotFound(id))?;
+            record.pty.as_ref().map(|p| p.id())
+        };
+        if let Some(pty) = pty {
+            // Already closed if the user closed its terminal.
+            let _ = sessions.close(pty);
+        }
+        Ok(())
+    }
+
+    pub fn get(&self, id: AgentSessionId) -> Option<AgentSession> {
+        self.lock().iter().find(|r| r.id == id).map(Record::view)
+    }
+
+    /// Every session, oldest first.
     pub fn sessions(&self) -> Vec<AgentSession> {
+        self.lock().iter().map(Record::view).collect()
+    }
+
+    /// The sessions of one workspace, oldest first.
+    pub fn sessions_in(&self, workspace: &Path) -> Vec<AgentSession> {
         self.lock()
             .iter()
-            .map(|r| AgentSession {
-                id: r.session.id(),
-                agent: r.agent.clone(),
-                workspace: r.workspace.clone(),
-                state: if r.session.has_exited() {
-                    RunState::Exited
-                } else {
-                    RunState::Running
-                },
-            })
+            .filter(|r| r.workspace == workspace)
+            .map(Record::view)
             .collect()
     }
 
-    pub fn status(&self, id: SessionId) -> Option<AgentSession> {
-        self.sessions().into_iter().find(|s| s.id == id)
+    /// The session whose agent runs on PTY session `terminal`.
+    pub fn session_of(&self, terminal: SessionId) -> Option<AgentSession> {
+        self.lock()
+            .iter()
+            .find(|r| r.pty.as_ref().is_some_and(|p| p.id() == terminal))
+            .map(Record::view)
     }
 
     /// Whether any agent is still running, so quitting would end it.
     pub fn any_running(&self) -> bool {
-        self.prune();
-        !self.lock().is_empty()
+        self.lock().iter().any(Record::running)
     }
 
-    /// Hangs up an agent session (SIGHUP, then SIGKILL after the grace period).
-    pub fn stop(&self, sessions: &Sessions, id: SessionId) -> Result<(), x8ai_pty::Error> {
-        self.lock().retain(|r| r.session.id() != id);
-        sessions.close(id)
+    /// Forgets a session whose agent is not running, e.g. once its worktree has
+    /// been removed.
+    pub fn forget(&self, id: AgentSessionId) -> Result<AgentSession, RunError> {
+        let mut records = self.lock();
+        let index = records
+            .iter()
+            .position(|r| r.id == id)
+            .ok_or(RunError::NotFound(id))?;
+        if records[index].running() {
+            return Err(RunError::StillRunning);
+        }
+        Ok(records.remove(index).view())
     }
 
-    /// Stops every agent whose workspace is not `root`: an agent never outlives
-    /// the workspace it was approved for. Returns how many were stopped.
+    /// Stops the agents of every workspace other than `root`, and forgets their
+    /// sessions: an agent never outlives the workspace it was approved for. Their
+    /// worktrees stay on disk and are found again when that workspace reopens.
+    /// Returns how many agents were stopped.
     pub fn stop_outside(&self, sessions: &Sessions, root: &Path) -> usize {
-        self.stop_where(sessions, |workspace| workspace != root)
+        let leaving: Vec<Record> = {
+            let mut records = self.lock();
+            let (leaving, kept) = records
+                .drain(..)
+                .partition::<Vec<_>, _>(|r| r.workspace != root);
+            *records = kept;
+            leaving
+        };
+        close_running(sessions, leaving.iter())
     }
 
     /// Stops every agent running in `root`, e.g. when the folder stops being
-    /// trusted. Returns how many were stopped.
+    /// trusted. The sessions stay. Returns how many were stopped.
     pub fn stop_in(&self, sessions: &Sessions, root: &Path) -> usize {
-        self.stop_where(sessions, |workspace| workspace == root)
+        let records = self.lock();
+        close_running(sessions, records.iter().filter(|r| r.workspace == root))
     }
 
-    fn stop_where(&self, sessions: &Sessions, stop: impl Fn(&Path) -> bool) -> usize {
-        let stopped: Vec<SessionId> = {
-            let mut running = self.lock();
-            let (stopping, kept) = running
-                .drain(..)
-                .partition::<Vec<_>, _>(|r| stop(&r.workspace));
-            *running = kept;
-            stopping.iter().map(|r| r.session.id()).collect()
-        };
-        for id in &stopped {
-            // Already gone if the user closed it; nothing left to stop then.
-            let _ = sessions.close(*id);
-        }
-        stopped.len()
-    }
-
-    /// Forgets every agent, e.g. when the page that owned their sessions reloads
-    /// and the sessions are closed with it.
+    /// Forgets every session, e.g. when the page that owned their terminals
+    /// reloads and the terminals are closed with it.
     pub fn forget_all(&self) {
         self.lock().clear();
     }
 
-    /// Forgets agents that have exited.
-    fn prune(&self) {
-        self.lock().retain(|r| !r.session.has_exited());
+    fn next_id(&self) -> AgentSessionId {
+        AgentSessionId(
+            self.last_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1,
+        )
     }
 
-    fn lock(&self) -> MutexGuard<'_, Vec<Running>> {
-        self.running.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, Vec<Record>> {
+        self.records.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+fn close_running<'a>(sessions: &Sessions, records: impl Iterator<Item = &'a Record>) -> usize {
+    let mut stopped = 0;
+    for record in records.filter(|r| r.running()) {
+        if let Some(pty) = &record.pty {
+            // Already gone if the user closed it; nothing left to stop then.
+            let _ = sessions.close(pty.id());
+            stopped += 1;
+        }
+    }
+    stopped
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }

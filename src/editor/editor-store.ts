@@ -16,11 +16,19 @@ export type DiskStatus =
   | "deleted";
 
 export interface TabInfo {
+  /**
+   * A workspace path, or for a read-only document a key starting with `/`, which
+   * no workspace path can.
+   */
   readonly path: string;
   readonly name: string;
+  /** Shown on hover: the workspace path, or where a read-only document comes from. */
+  readonly title: string;
   readonly dirty: boolean;
   readonly disk: DiskStatus;
   readonly saving: boolean;
+  /** Text from elsewhere (an agent's worktree), shown for inspection only. */
+  readonly readOnly: boolean;
 }
 
 export interface EditorSnapshot {
@@ -96,8 +104,26 @@ export class EditorStore extends Store<EditorSnapshot> {
     }
     const state = createEditorState(content.text);
     this.#documents.set(path, { state, saved: state.doc, version: content.version });
-    const tab: TabInfo = { path, name: basename(path), dirty: false, disk: "synced", saving: false };
+    const tab: TabInfo = { path, name: basename(path), title: path, dirty: false, disk: "synced", saving: false, readOnly: false };
     this.update((s) => ({ ...s, tabs: [...s.tabs, tab], active: path, revision: s.revision + 1 }));
+  }
+
+  /**
+   * Shows text that is not a file of the open workspace, read-only, in a tab of its
+   * own: an agent's file or diff. `key` must start with `/`, so it never collides
+   * with a workspace path; opening it again replaces the text.
+   */
+  openReadOnly(key: string, name: string, title: string, text: string): void {
+    if (!key.startsWith("/")) throw new Error(`read-only documents need a key starting with "/", not ${key}`);
+    const state = createEditorState(text, { readOnly: true });
+    this.#documents.set(key, { state, saved: state.doc, version: "" });
+    const tab: TabInfo = { path: key, name, title, dirty: false, disk: "synced", saving: false, readOnly: true };
+    this.update((s) => ({
+      ...s,
+      tabs: s.tabs.some((t) => t.path === key) ? s.tabs.map((t) => (t.path === key ? tab : t)) : [...s.tabs, tab],
+      active: key,
+      revision: s.revision + 1,
+    }));
   }
 
   activate(path: string): void {
@@ -137,7 +163,7 @@ export class EditorStore extends Store<EditorSnapshot> {
    */
   async save(path: string, { overwrite = false } = {}): Promise<void> {
     const document = this.#documents.get(path);
-    if (!document) return;
+    if (!document || this.#tab(path)?.readOnly) return;
     const text = document.state.doc;
     const expected = overwrite ? null : document.version;
     this.#patch(path, { saving: true });
@@ -157,6 +183,7 @@ export class EditorStore extends Store<EditorSnapshot> {
 
   /** Replaces the tab's text with the file on disk, discarding unsaved edits. */
   async reload(path: string): Promise<void> {
+    if (this.#tab(path)?.readOnly) return;
     const content = await this.#native.readFile(path);
     const document = this.#documents.get(path);
     if (!document) return;
@@ -203,7 +230,7 @@ export class EditorStore extends Store<EditorSnapshot> {
       tabs: s.tabs.map((tab) => {
         if (!isWithin(tab.path, from)) return tab;
         const path = rebase(tab.path, from, to);
-        return { ...tab, path, name: basename(path) };
+        return { ...tab, path, name: basename(path), title: path };
       }),
       active: s.active !== null && isWithin(s.active, from) ? rebase(s.active, from, to) : s.active,
       revision: s.revision + 1,
@@ -217,7 +244,7 @@ export class EditorStore extends Store<EditorSnapshot> {
    */
   async diskChanged(paths: readonly string[] | "all"): Promise<void> {
     const affected = [...this.#documents.keys()].filter(
-      (open) => paths === "all" || paths.some((changed) => isWithin(open, changed)),
+      (open) => !open.startsWith("/") && (paths === "all" || paths.some((changed) => isWithin(open, changed))),
     );
     await Promise.all(affected.map((path) => this.#reconcile(path)));
   }

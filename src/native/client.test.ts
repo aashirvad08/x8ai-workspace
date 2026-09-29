@@ -170,21 +170,39 @@ describe("native client workspace commands", () => {
 });
 
 describe("native client agent commands", () => {
-  it("starts an agent with a session channel and names it by id only", async () => {
-    const created: TerminalInfo = { id: 9, program: "/Users/me/.local/bin/claude", cwd: "/Users/me/project", ackBytes: 65536 };
+  it("runs an agent session with a session channel and names it by id only", async () => {
+    const created: TerminalInfo = { id: 9, program: "/Users/me/.local/bin/claude", cwd: "/Users/me/.x8ai/worktrees/p/claude-code-1", ackBytes: 65536 };
     const { calls, channels, client } = bridge(() => created);
     const output: Uint8Array[] = [];
 
     await expect(
-      client.startAgent("claude-code", { cols: 80, rows: 24 }, { output: (d) => output.push(d), event: () => {} }),
+      client.runAgentSession(3, { cols: 80, rows: 24 }, { output: (d) => output.push(d), event: () => {} }),
     ).resolves.toEqual(created);
     channels[0]!(new Uint8Array([1, 2]).buffer);
 
     expect(calls[0]).toMatchObject({
-      command: "agent_start",
-      args: { agent: "claude-code", size: { cols: 80, rows: 24 }, events: { channel: 1 } },
+      command: "agent_run",
+      args: { session: 3, size: { cols: 80, rows: 24 }, events: { channel: 1 } },
     });
     expect(output).toEqual([new Uint8Array([1, 2])]);
+  });
+
+  it("passes only ids for sessions, never paths for worktrees", async () => {
+    const { calls, client } = bridge();
+    await client.createAgentSession("claude-code");
+    await client.agentSessions();
+    await client.stopAgentSession(3);
+    await client.removeAgentSession(3, false);
+    await client.agentChanges(3);
+    await client.readAgentFile(3, "src/main.rs");
+    expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
+      { command: "agent_create_session", args: { agent: "claude-code" } },
+      { command: "agent_sessions", args: undefined },
+      { command: "agent_stop", args: { session: 3 } },
+      { command: "agent_remove", args: { session: 3, discard: false } },
+      { command: "agent_changes", args: { session: 3 } },
+      { command: "agent_read_file", args: { session: 3, path: "src/main.rs" } },
+    ]);
   });
 
   it("lists, approves and revokes with named arguments", async () => {

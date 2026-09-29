@@ -54,16 +54,22 @@ const extensions: Extension = [
 ];
 
 /**
- * The editor state for a file's text. Each tab owns one, so undo history,
+ * The editor state for a file's text (read-only for text that is not a workspace
+ * file, such as an agent's). Each tab owns one, so undo history,
  * selection and folds survive switching tabs. Windows line endings are kept: a
  * file whose first line break is CRLF is edited and saved with CRLF.
  */
-export function createEditorState(text: string): EditorState {
+export function createEditorState(text: string, { readOnly = false } = {}): EditorState {
   const firstBreak = text.indexOf("\n");
   const crlf = firstBreak > 0 && text[firstBreak - 1] === "\r";
   return EditorState.create({
     doc: text,
-    extensions: [extensions, language.of([]), crlf ? EditorState.lineSeparator.of("\r\n") : []],
+    extensions: [
+      extensions,
+      language.of([]),
+      crlf ? EditorState.lineSeparator.of("\r\n") : [],
+      readOnly ? EditorState.readOnly.of(true) : [],
+    ],
   });
 }
 

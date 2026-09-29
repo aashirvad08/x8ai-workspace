@@ -1,5 +1,7 @@
 import type { AgentActions } from "../agents/actions";
 import { Agents } from "../agents/agents";
+import type { AgentChanges } from "../contracts/generated/AgentChanges";
+import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
 import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchMatch } from "../contracts/generated/SearchMatch";
@@ -45,6 +47,8 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
   readonly #native: NativeClient;
   /** Identifies the shown workspace's disk events (see `#open`). */
   #shown: symbol | null = null;
+  /** Which agent panes run, as last seen, to refresh sessions when that changes. */
+  #agentPanesSeen = "";
   #files: { paths: readonly string[]; truncated: boolean } | null = null;
   #reportedUnsaved = false;
 
@@ -55,6 +59,7 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     this.search = new Search(native);
     this.agents = new Agents(native);
     this.editor.subscribe(() => this.#reportUnsaved());
+    this.terminals.subscribe(() => this.#agentPanesChanged());
   }
 
   /**
@@ -522,7 +527,8 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
    * An agent starts only in a trusted folder, and only once the user allowed it
    * there. Both are enforced natively; this walks the user through them: trust
    * first (asked here, granted in a native dialog), then approval (a native
-   * dialog), then a terminal pane that starts the agent.
+   * dialog). Then the native side makes the agent a session (a worktree of its
+   * own in a Git repository), and a terminal pane starts the agent in it.
    */
   async #launchAgent(id: string): Promise<void> {
     const workspace = this.workspace.get();
@@ -554,8 +560,189 @@ export class Workbench implements ExplorerActions, EditorActions, TerminalAction
     }
     this.#reloadAgents();
     if (!approved) return;
+    let session: AgentSessionInfo;
+    try {
+      session = await this.#native.createAgentSession(id);
+    } catch (error) {
+      this.notifications.error(`Could not start ${name}: ${messageOf(error)}`);
+      return;
+    }
+    void this.agents.loadSessions();
     this.layout.setTerminalVisible(true);
-    this.terminals.add({ type: "agent", agent: id, name });
+    this.terminals.add({ type: "agent", agent: id, name, session: session.id });
+  }
+
+  /** Shows the session's terminal; a new one starts the agent again if it is not running. */
+  openAgentTerminal(id: number): void {
+    const session = this.agents.session(id);
+    const pane = this.terminals.paneOfSession(id);
+    this.layout.setTerminalVisible(true);
+    if (pane) {
+      this.terminals.focusPane(pane.key);
+      this.terminals.requestFocus();
+    } else if (session) {
+      this.terminals.add({ type: "agent", agent: session.agent, name: session.name, session: id });
+    }
+  }
+
+  stopAgent(id: number): void {
+    void this.#stopAgent(id);
+  }
+
+  /** Resolves to whether the agent was stopped (or was not running). */
+  async #stopAgent(id: number, ask = true): Promise<boolean> {
+    const session = this.agents.session(id);
+    if (!session || session.state.state !== "running") return true;
+    if (ask) {
+      const choice = await this.dialogs.ask({
+        title: `Stop ${session.name}?`,
+        message: "Its terminal session ends. Its workspace and changes stay.",
+        buttons: [
+          { label: "Stop", value: "stop", role: "destructive" },
+          { label: "Cancel", value: "cancel" },
+        ],
+        cancel: "cancel",
+      });
+      if (choice !== "stop") return false;
+    }
+    try {
+      await this.#native.stopAgentSession(id);
+    } catch (error) {
+      this.notifications.error(`Could not stop ${session.name}: ${messageOf(error)}`);
+      return false;
+    }
+    await this.#paneEnded(id);
+    await this.agents.loadSessions();
+    return true;
+  }
+
+  restartAgent(id: number): void {
+    void this.#restartAgent(id);
+  }
+
+  async #restartAgent(id: number): Promise<void> {
+    if (!(await this.#stopAgent(id))) return;
+    const pane = this.terminals.paneOfSession(id);
+    if (pane) this.terminals.closePane(pane.key);
+    this.openAgentTerminal(id);
+  }
+
+  /** Waits (briefly) until the session's pane reports its agent has ended. */
+  async #paneEnded(id: number): Promise<void> {
+    const ended = () => !this.terminals.paneOfSession(id)?.running;
+    for (let i = 0; i < 50 && !ended(); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  showAgentChanges(id: number): void {
+    void this.#showAgentChanges(id);
+  }
+
+  async #showAgentChanges(id: number): Promise<void> {
+    const session = this.agents.session(id);
+    if (!session) return;
+    let changes: AgentChanges;
+    try {
+      changes = await this.#native.agentChanges(id);
+    } catch (error) {
+      this.notifications.error(`Could not read ${session.name}'s changes: ${messageOf(error)}`);
+      return;
+    }
+    this.agents.setChanges(id, changes);
+    const where = changes.branch ?? session.worktree?.branch ?? session.name;
+    const summary = [
+      `# ${session.name} · ${where}`,
+      `# ${changes.files.length} changed file${changes.files.length === 1 ? "" : "s"}, ${changes.commits} commit${changes.commits === 1 ? "" : "s"} since ${changes.base.slice(0, 10)}`,
+      ...(changes.truncated ? ["# The diff is too large to show in full."] : []),
+      "",
+    ].join("\n");
+    this.editor.openReadOnly(
+      `/agent/${id}/changes.diff`,
+      `${session.name} changes`,
+      `${session.name}: changes on ${where} (read-only)`,
+      changes.diff === "" ? `${summary}\n# No changes yet.\n` : `${summary}\n${changes.diff}`,
+    );
+  }
+
+  openAgentFile(id: number, path: string): void {
+    void this.#openAgentFile(id, path);
+  }
+
+  async #openAgentFile(id: number, path: string): Promise<void> {
+    const session = this.agents.session(id);
+    if (!session) return;
+    try {
+      const content = await this.#native.readAgentFile(id, path);
+      const where = session.worktree?.branch ?? session.name;
+      this.editor.openReadOnly(`/agent/${id}/${path}`, `${basename(path)} · ${session.name}`, `${where}: ${path} (read-only)`, content.text);
+    } catch (error) {
+      this.notifications.error(`Could not open ${path}: ${messageOf(error)}`);
+    }
+  }
+
+  removeAgentSession(id: number): void {
+    void this.#removeAgentSession(id);
+  }
+
+  /**
+   * Removes a stopped session and its worktree. Asks first, and says exactly what
+   * goes: uncommitted changes are discarded only if the user confirms; a branch
+   * with commits is always kept.
+   */
+  async #removeAgentSession(id: number): Promise<void> {
+    const session = this.agents.session(id);
+    if (!session) return;
+    if (session.state.state === "running") {
+      this.notifications.info(`Stop ${session.name} before removing its workspace.`);
+      return;
+    }
+    let changes: AgentChanges | null = null;
+    if (session.worktree) {
+      try {
+        changes = await this.#native.agentChanges(id);
+      } catch (error) {
+        this.notifications.error(`Could not read ${session.name}'s changes: ${messageOf(error)}`);
+        return;
+      }
+    }
+    const uncommitted = changes?.uncommitted ?? false;
+    const lines = [
+      session.worktree ? `The worktree at ${session.worktree.path} is deleted.` : "The session is forgotten; your folder is not changed.",
+      ...(changes && changes.commits > 0 ? [`The branch ${session.worktree?.branch} and its ${changes.commits} commit${changes.commits === 1 ? "" : "s"} are kept.`] : []),
+      ...(changes && uncommitted ? ["Changes that were not committed are lost."] : []),
+    ];
+    const choice = await this.dialogs.ask({
+      title: session.worktree ? `Remove ${session.name}'s workspace?` : `Remove ${session.name}'s session?`,
+      message: lines.join(" "),
+      buttons: [
+        { label: uncommitted ? "Discard and Remove" : "Remove", value: "remove", role: "destructive" },
+        { label: "Cancel", value: "cancel" },
+      ],
+      cancel: "cancel",
+    });
+    if (choice !== "remove") return;
+    try {
+      const removal = await this.#native.removeAgentSession(id, uncommitted);
+      const pane = this.terminals.paneOfSession(id);
+      if (pane) this.terminals.closePane(pane.key);
+      this.editor.get().tabs.filter((t) => t.path.startsWith(`/agent/${id}/`)).forEach((t) => this.editor.close(t.path));
+      this.notifications.info(
+        removal.keptBranch ? `Removed. The branch ${removal.keptBranch} is kept.` : `Removed ${session.name}'s workspace.`,
+      );
+    } catch (error) {
+      this.notifications.error(`Could not remove ${session.name}'s workspace: ${messageOf(error)}`);
+    }
+    await this.agents.loadSessions();
+  }
+
+  /** Agent panes that start or end change what the sessions report. */
+  #agentPanesChanged(): void {
+    const running = this.terminals
+      .agentPanes()
+      .map((p) => `${p.key}:${p.running}`)
+      .join(",");
+    if (running === this.#agentPanesSeen) return;
+    this.#agentPanesSeen = running;
+    if (this.agents.get().agents !== null) void this.agents.loadSessions();
   }
 
   revokeAgent(id: string): void {

@@ -2,7 +2,7 @@
 //! without special-casing any of them.
 //!
 //! `fixtures/definitions.json` is test data, not a shipped catalog. Details such as
-//! package versions must be re-verified when the catalog is built (Phase 10).
+//! package versions must be re-verified when the catalog is built (Phase 8).
 
 use std::collections::BTreeSet;
 

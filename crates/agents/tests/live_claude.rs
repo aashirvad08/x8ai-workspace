@@ -240,8 +240,11 @@ fn claude_code_runs_through_the_runtime() {
     let start = |label: &str| {
         let recorder = Arc::new(Recorder::default());
         let authorized = authorize(&plan, &trust, &approvals).expect("authorized");
+        let id = runtime
+            .create(&plan, plan.workspace.clone(), None)
+            .expect("session");
         let session = runtime
-            .start(&sessions, authorized, SIZE, recorder.clone())
+            .run(&sessions, id, authorized, SIZE, recorder.clone())
             .expect("started");
         let pid = session.pid().unwrap();
         let drew = recorder.wait_for_output(200, Duration::from_secs(20));
