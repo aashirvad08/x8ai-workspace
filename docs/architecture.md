@@ -80,7 +80,7 @@ Status markers used below: **[built]** exists in the repository today;
 | `src/mcp/` | `McpServers` store and `McpView` (servers, secrets, add and edit) | Never holds a saved secret, never starts a server. |
 | `src/skills/` | `Skills` store and the skills a launch can choose | Text only. |
 | `src/catalog/` | `Catalog` store, local search and filters, and `CatalogView` | Read-only: every action is a `CatalogActions` request the workbench sends to the owning system. |
-| `src/home/` | The Welcome screen (the app's head): `Home` store, `/cd`, `/home` and `/name`, the pixel font, `HomeView` | Opens and closes folders only through the workbench; a folder that is not a recent one is chosen in the native picker. |
+| `src/home/` | The Welcome screen (the app's head): `Home` store, `/cd`, `/home` and `/name`, `HomeView` | Opens and closes folders only through the workbench; a folder that is not a recent one is chosen in the native picker. |
 | `src/lib/` | `Store` (observable state), `useStore`, workspace path helpers | Shared building blocks. |
 | `src/native/` | Typed client for native commands, error normalization | The only frontend module that may import `@tauri-apps/*`. |
 | `src/contracts/generated/` | TypeScript types generated from `x8ai-core` | Never edited by hand. Regenerate with `pnpm contracts`. |

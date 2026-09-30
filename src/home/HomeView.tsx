@@ -6,7 +6,6 @@ import type { Store } from "../lib/store";
 import { useStore } from "../lib/useStore";
 import type { HomeActions } from "./actions";
 import { type Home, suggestionsFor } from "./home";
-import { GLYPH_HEIGHT, pixelate } from "./pixelFont";
 
 interface Props {
   home: Home;
@@ -164,56 +163,19 @@ function Hint({ keys, text }: { keys: string; text: string }) {
   );
 }
 
-/** "WELCOME, SIR" in pixels, the name under it; plain text where a letter has no glyph. */
+/** "Welcome, Sir", a terminal cursor after it, and the name under it. */
 function Headline({ name }: { name: string | null }) {
-  const welcome = pixelate("Welcome,");
-  const sir = welcome && pixelate("Sir", welcome.width + 4);
-  const named = name ? pixelate(name) : null;
-  const title = name ? `Welcome, Sir ${name}` : "Welcome, Sir";
-  if (!welcome || !sir) return <h1 className="home-title-text">{title}</h1>;
-  const width = welcome.width + 4 + sir.width;
   return (
-    <h1 className="home-title" aria-label={title}>
-      <Pixels width={width} runs={[{ run: welcome, tone: "dim" }, { run: sir, tone: "bright" }]} className="home-pixels" />
-      {name &&
-        (named && named.width <= width * 1.6 ? (
-          <Pixels width={named.width} runs={[{ run: named, tone: "accent" }]} className="home-pixels-name" />
-        ) : (
-          <span className="home-name-text">{name}</span>
-        ))}
+    <h1 className="home-title" aria-label={name ? `Welcome, Sir ${name}` : "Welcome, Sir"}>
+      <span className="home-greeting" aria-hidden>
+        <span className="home-greeting-dim">Welcome,</span> Sir
+        <span className="home-cursor" />
+      </span>
+      {name && (
+        <span className="home-name" aria-hidden>
+          {name}
+        </span>
+      )}
     </h1>
-  );
-}
-
-function Pixels({
-  width,
-  runs,
-  className,
-}: {
-  width: number;
-  runs: readonly { run: NonNullable<ReturnType<typeof pixelate>>; tone: "dim" | "bright" | "accent" }[];
-  className: string;
-}) {
-  // Each pixel is a slightly inset square with its shadow one step down and right.
-  const height = GLYPH_HEIGHT;
-  return (
-    <svg
-      className={className}
-      viewBox={`-0.1 -0.1 ${width + 0.5} ${height + 0.5}`}
-      style={{ aspectRatio: `${width + 0.5} / ${height + 0.5}` }}
-      shapeRendering="crispEdges"
-      aria-hidden
-    >
-      {runs.map(({ run, tone }) =>
-        run.pixels.map(([x, y]) => (
-          <rect key={`s${tone}${x},${y}`} className={`pixel-shadow-${tone}`} x={x + 0.22} y={y + 0.22} width={0.88} height={0.88} />
-        )),
-      )}
-      {runs.map(({ run, tone }) =>
-        run.pixels.map(([x, y]) => (
-          <rect key={`p${tone}${x},${y}`} className={`pixel-${tone}`} x={x} y={y} width={0.88} height={0.88} />
-        )),
-      )}
-    </svg>
   );
 }
