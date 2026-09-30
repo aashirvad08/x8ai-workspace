@@ -168,9 +168,11 @@ function Headline({ name }: { name: string | null }) {
   return (
     <h1 className="home-title" aria-label={name ? `Welcome, Sir ${name}` : "Welcome, Sir"}>
       <span className="home-greeting" aria-hidden>
-        <span className="home-greeting-dim">Welcome,</span> Sir
+        <span className="home-greeting-dim">Welcome,</span>
+        <span className="home-greeting-sir">Sir</span>
         <span className="home-cursor" />
       </span>
+      <span className="home-rule" aria-hidden />
       {name && (
         <span className="home-name" aria-hidden>
           {name}
