@@ -65,7 +65,7 @@ export function AgentsView({ agents, providers, mcp, skills, drafts, terminals, 
     <div className="agents">
       <header className="explorer-header">
         <span className="explorer-title">Agents</span>
-        <button type="button" className="icon-button" title="Look for installed agents again" aria-label="Refresh agents" onClick={actions.refreshAgents}>
+        <button type="button" className="icon-button" title="Look for installed agents again" aria-label="Refresh agents" onClick={() => actions.refreshAgents()}>
           ↻
         </button>
       </header>
@@ -73,7 +73,7 @@ export function AgentsView({ agents, providers, mcp, skills, drafts, terminals, 
       {info && !info.trusted && (
         <div className="agents-banner agents-banner-warning" role="status">
           <p>“{info.name}” is not trusted. Agents run only in folders you trust.</p>
-          <button type="button" className="button-primary" onClick={actions.trustWorkspace}>
+          <button type="button" className="button-primary" onClick={() => actions.trustWorkspace()}>
             Trust Folder…
           </button>
         </div>

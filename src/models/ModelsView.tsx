@@ -37,7 +37,7 @@ export function ModelsView({ providers, actions }: Props) {
           className="icon-button"
           title="Look for local models again"
           aria-label="Refresh providers"
-          onClick={actions.refreshProviders}
+          onClick={() => actions.refreshProviders()}
         >
           ↻
         </button>

@@ -70,6 +70,13 @@ describe("module boundaries", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("passes actions to event handlers bound, never as bare methods", () => {
+    // `onClick={actions.refresh}` calls the method without its object, so it
+    // throws and the button does nothing.
+    const offenders = modulesWhere((path) => path.endsWith(".tsx") && /=\{actions\.[A-Za-z]+\}/.test(sources[path] ?? ""));
+    expect(offenders).toEqual([]);
+  });
+
   it("grants the window exactly the commands the native client calls", () => {
     // A command the client calls but the capability does not grant fails at
     // runtime; a grant nothing uses is surface for no reason.

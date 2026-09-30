@@ -38,7 +38,7 @@ export function FileExplorer({ explorer, workspace, recent, actions }: Props) {
       <aside className="explorer" aria-label="Files">
         <div className="explorer-empty">
           <p>No folder open.</p>
-          <button type="button" className="button-primary" onClick={actions.openFolder}>
+          <button type="button" className="button-primary" onClick={() => void actions.openFolder()}>
             Open Folder…
           </button>
           <p className="hint">

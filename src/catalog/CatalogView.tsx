@@ -64,7 +64,7 @@ export function CatalogView({ catalog, skills, actions }: Props) {
     <div className="agents catalog">
       <header className="explorer-header">
         <span className="explorer-title">Catalog</span>
-        <button type="button" className="icon-button" title="Look again" aria-label="Refresh the catalog" onClick={actions.refreshCatalog}>
+        <button type="button" className="icon-button" title="Look again" aria-label="Refresh the catalog" onClick={() => actions.refreshCatalog()}>
           ↻
         </button>
       </header>

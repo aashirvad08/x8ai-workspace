@@ -66,7 +66,7 @@ export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Pr
               </div>
             );
           })}
-          <button type="button" className="icon-button" title="New Terminal (⌃⇧`)" aria-label="New terminal" onClick={actions.newTerminal}>
+          <button type="button" className="icon-button" title="New Terminal (⌃⇧`)" aria-label="New terminal" onClick={() => actions.newTerminal()}>
             +
           </button>
         </div>
@@ -141,7 +141,7 @@ export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Pr
           ))}
         {tabs.length === 0 && (
           <div className="panel-empty">
-            <button type="button" className="button-primary" onClick={actions.newTerminal}>
+            <button type="button" className="button-primary" onClick={() => actions.newTerminal()}>
               New Terminal
             </button>
           </div>

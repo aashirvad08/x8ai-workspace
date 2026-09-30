@@ -39,7 +39,7 @@ export function McpView({ mcp, agents, workspace, actions }: Props) {
         <button type="button" className="icon-button" title="Add an MCP server" aria-label="Add MCP server" onClick={() => setEditing("new")}>
           +
         </button>
-        <button type="button" className="icon-button" title="Check again" aria-label="Refresh MCP servers" onClick={actions.refreshMcp}>
+        <button type="button" className="icon-button" title="Check again" aria-label="Refresh MCP servers" onClick={() => actions.refreshMcp()}>
           ↻
         </button>
       </header>
