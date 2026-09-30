@@ -389,6 +389,40 @@ pub fn configure(
     Ok(plan)
 }
 
+/// `plan` pointed at `model` from `provider` as far as approving and recording
+/// a session need: the provider, its endpoint and the model. The key is not read
+/// (only [`configure`], when the agent starts, reads it, so the user is asked for
+/// it no more often than that); `saved` says whether there is one, and a provider
+/// that needs one and has none is refused, as `configure` would. The environment
+/// and arguments are left as they are: this plan is never run.
+pub fn route(
+    mut plan: LaunchPlan,
+    provider: &ModelProviderDefinition,
+    model: &str,
+    saved: CredentialState,
+) -> Result<LaunchPlan, ConfigureError> {
+    let (adapter, endpoint) = prepare(plan.agent.as_str(), &plan.name, provider, model)?;
+    let state = match &provider.auth {
+        ProviderAuth::None => CredentialState::NotNeeded,
+        ProviderAuth::ApiKey { .. } if saved == CredentialState::InKeychain => saved,
+        ProviderAuth::ApiKey { .. } => {
+            return Err(ConfigureError::MissingCredential(provider.name.clone()));
+        }
+    };
+    let endpoint = adapter.configure(provider, endpoint, model, None).endpoint;
+    let overridden = shell_variables(adapter.agent(), &plan.env);
+    plan.provider = Some(ProviderRoute {
+        provider: provider.id.clone(),
+        endpoint: endpoint.clone(),
+    });
+    plan.model = Some(ModelSelection {
+        provider: provider.id.clone(),
+        model: model.to_owned(),
+    });
+    plan.configuration = app_configuration(provider, model, endpoint, state, overridden);
+    Ok(plan)
+}
+
 /// What a session of `agent` using `model` from `provider` would be configured
 /// with, without touching its credential: for showing a session that has not run
 /// yet in this run of the app. `env` is the inherited environment.

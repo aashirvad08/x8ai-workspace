@@ -27,8 +27,10 @@ item. Items are not synchronizable, so they stay on this Mac.
 user saves it; the command returns the provider's status. No command returns a
 key. The webview learns only whether one is saved (`notNeeded`, `missing`,
 `inKeychain`), which is checked without reading it. The native side reads a key
-only when an agent session using that provider is created or run, and places it
-only in that agent's environment (ADR 0015).
+only when the agent of a session using that provider starts, and places it only
+in that agent's environment (ADR 0015). *Amended:* the key is then kept in the
+app's memory until the app quits or it is replaced or removed, so macOS asks for
+the Keychain password at most once per app run instead of at every launch.
 
 **A type that cannot leak by accident.** `SecretValue` (`crates/secrets`) holds a
 key in memory: no `Display`, no `Serialize`, a redacted `Debug`. Construction checks

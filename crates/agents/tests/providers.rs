@@ -11,7 +11,7 @@ use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use x8ai_agents::adapter::{ConfigureError, configure, shell_variables, support};
+use x8ai_agents::adapter::{ConfigureError, configure, route, shell_variables, support};
 use x8ai_agents::{AgentRuntime, Isolation, LaunchPlan, RunError, authorize, builtin, plan};
 use x8ai_core::agent::{AgentDefinition, SessionConfiguration};
 use x8ai_core::model::{CredentialState, ModelProviderDefinition, ModelSelection};
@@ -467,6 +467,48 @@ fn codex_gets_the_model_and_a_pinned_provider_for_this_run_only() {
     // Without the app's model, Codex keeps its own configuration.
     assert!(m.plan("codex").extra_args.is_empty());
     assert_eq!(var(&m.plan("codex"), "OPENAI_API_KEY"), Some(SHELL_KEY));
+}
+
+#[test]
+fn approving_and_recording_a_session_needs_to_know_there_is_a_key_not_to_read_it() {
+    let m = machine();
+    // As the launch will be, but without the key: the route is what is approved.
+    let routed = route(
+        m.plan("codex"),
+        &provider("openai"),
+        "gpt-6.1-sol",
+        CredentialState::InKeychain,
+    )
+    .unwrap();
+    let run = m.configured("codex", "openai", "gpt-6.1-sol");
+    assert_eq!(routed.provider, run.provider);
+    assert_eq!(routed.model, run.model);
+    assert_eq!(routed.configuration, run.configuration);
+    assert_eq!(routed.approval(), run.approval());
+    assert!(
+        routed.env.iter().all(|(_, v)| v != TEST_KEY),
+        "never the key"
+    );
+    // No key saved: refused, as the launch would be.
+    assert!(matches!(
+        route(
+            m.plan("codex"),
+            &provider("openai"),
+            "gpt-6.1-sol",
+            CredentialState::Missing
+        ),
+        Err(ConfigureError::MissingCredential(_))
+    ));
+    // A provider that needs none.
+    assert!(
+        route(
+            m.plan("claude-code"),
+            &provider("ollama"),
+            "qwen3-coder:30b",
+            CredentialState::NotNeeded
+        )
+        .is_ok()
+    );
 }
 
 #[test]

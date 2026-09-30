@@ -521,8 +521,10 @@ The app never bypasses an agent's own safety model. For example, it does not add
 
 Definitions can reference secrets only by `SecretName` (for example `EnvValue::Secret`
 or `ProviderAuth::ApiKey`). They can never contain values. The native secret store
-(macOS Keychain, `crates/secrets`) is read at the moment a specific agent session is
-created or run, and the value is placed only in that process's environment. Secret
+(macOS Keychain, `crates/secrets`) is read when a specific agent session's agent
+starts (once per app run: the value is then kept in the app's memory until the app
+quits or it is replaced or removed), and the value is placed only in that
+process's environment. Secret
 values never cross IPC to the webview (it can save and delete a key, and see
 whether one exists), never appear in logs or error messages (`SecretValue` and every
 environment-carrying type print names only), and are never stored in files the app

@@ -5,7 +5,8 @@
 //! webview. The webview can store one (it sends the key once, when the user types
 //! it) and remove one, and learn whether one exists; it can never read one back.
 //! The native side reads a credential only to start an agent session that uses
-//! it, and places it only in that agent's environment.
+//! it, and places it only in that agent's environment. [`Cached`] keeps it in the
+//! app's memory after the first read, so the user is asked once per app run.
 //!
 //! [`SecretValue`] holds a credential in memory. It has no `Display`, no
 //! `Serialize`, and its `Debug` is redacted, so it cannot end up in a log line, an
@@ -183,6 +184,69 @@ impl SecretStore for Keychain {
     }
 }
 
+/// Another store, with each credential kept in memory once it has been read, for
+/// as long as this store lives (the app's run). The Keychain is asked once per
+/// app run rather than at every launch: each read by an app macOS does not
+/// recognize (an unsigned build, rebuilt) asks the user for their password.
+/// Saving and removing go through to the store and update what is kept, so a
+/// removed key is never used again. Only values are kept, never their absence:
+/// a key saved elsewhere is still found.
+pub struct Cached {
+    store: Box<dyn SecretStore>,
+    kept: Mutex<HashMap<String, SecretValue>>,
+    /// Held while reading from the store, so reads at the same moment (two
+    /// launches, or a view started twice) wait for the first one and share its
+    /// answer instead of each asking the user.
+    reading: Mutex<()>,
+}
+
+impl Cached {
+    pub fn new(store: Box<dyn SecretStore>) -> Self {
+        Self {
+            store,
+            kept: Mutex::new(HashMap::new()),
+            reading: Mutex::new(()),
+        }
+    }
+
+    fn kept(&self) -> std::sync::MutexGuard<'_, HashMap<String, SecretValue>> {
+        self.kept.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl SecretStore for Cached {
+    fn set(&self, account: &str, value: &SecretValue) -> Result<(), Error> {
+        self.store.set(account, value)?;
+        self.kept().insert(account.to_owned(), value.clone());
+        Ok(())
+    }
+    fn get(&self, account: &str) -> Result<Option<SecretValue>, Error> {
+        if let Some(value) = self.kept().get(account) {
+            return Ok(Some(value.clone()));
+        }
+        let _one_at_a_time = self.reading.lock().unwrap_or_else(PoisonError::into_inner);
+        // Read by whoever held the lock before.
+        if let Some(value) = self.kept().get(account) {
+            return Ok(Some(value.clone()));
+        }
+        let value = self.store.get(account)?;
+        if let Some(value) = &value {
+            self.kept().insert(account.to_owned(), value.clone());
+        }
+        Ok(value)
+    }
+    fn contains(&self, account: &str) -> Result<bool, Error> {
+        if self.kept().contains_key(account) {
+            return Ok(true);
+        }
+        self.store.contains(account)
+    }
+    fn remove(&self, account: &str) -> Result<(), Error> {
+        self.kept().remove(account);
+        self.store.remove(account)
+    }
+}
+
 /// Credentials in memory only, for tests and for a machine without a store.
 #[derive(Debug, Default)]
 pub struct MemoryStore {
@@ -222,6 +286,100 @@ mod tests {
         assert_eq!(format!("{secret:?}"), "SecretValue(<redacted>)");
         assert!(!format!("{:?}", Some(secret.clone())).contains("sk-test"));
         assert_eq!(secret.expose(), "sk-test-not-a-real-key");
+    }
+
+    /// Counts reads of the values, as the Keychain would prompt for them.
+    #[derive(Default)]
+    struct Counting {
+        store: MemoryStore,
+        reads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl SecretStore for std::sync::Arc<Counting> {
+        fn set(&self, account: &str, value: &SecretValue) -> Result<(), Error> {
+            self.store.set(account, value)
+        }
+        fn get(&self, account: &str) -> Result<Option<SecretValue>, Error> {
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.store.get(account)
+        }
+        fn contains(&self, account: &str) -> Result<bool, Error> {
+            self.store.contains(account)
+        }
+        fn remove(&self, account: &str) -> Result<(), Error> {
+            self.store.remove(account)
+        }
+    }
+
+    #[test]
+    fn a_kept_key_is_read_from_the_store_once_and_never_after_it_is_removed() {
+        let inner = std::sync::Arc::new(Counting::default());
+        let key = SecretValue::new("sk-test-not-a-real-key").unwrap();
+        inner.store.set("openai", &key).unwrap();
+        let cached = Cached::new(Box::new(inner.clone()));
+        let reads = || inner.reads.load(std::sync::atomic::Ordering::Relaxed);
+
+        assert!(cached.contains("openai").unwrap());
+        assert_eq!(reads(), 0, "knowing it is there reads nothing");
+        for _ in 0..3 {
+            assert_eq!(cached.get("openai").unwrap(), Some(key.clone()));
+        }
+        assert_eq!(reads(), 1);
+
+        // Replaced: the new key, still without a read.
+        let other = SecretValue::new("sk-test-another-key").unwrap();
+        cached.set("openai", &other).unwrap();
+        assert_eq!(cached.get("openai").unwrap(), Some(other));
+        assert_eq!(reads(), 1);
+
+        // Removed: gone from the store and from memory.
+        cached.remove("openai").unwrap();
+        assert_eq!(cached.get("openai").unwrap(), None);
+        assert!(!cached.contains("openai").unwrap());
+        assert!(inner.store.get("openai").unwrap().is_none());
+
+        // Absence is not kept: a key saved elsewhere is found.
+        inner.store.set("openai", &key).unwrap();
+        assert_eq!(cached.get("openai").unwrap(), Some(key));
+    }
+
+    #[test]
+    fn reads_at_the_same_moment_ask_the_store_once() {
+        /// Slow, as a Keychain prompt waiting for the user is.
+        struct Slow(std::sync::Arc<Counting>);
+        impl SecretStore for Slow {
+            fn set(&self, account: &str, value: &SecretValue) -> Result<(), Error> {
+                self.0.store.set(account, value)
+            }
+            fn get(&self, account: &str) -> Result<Option<SecretValue>, Error> {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                self.0.get(account)
+            }
+            fn contains(&self, account: &str) -> Result<bool, Error> {
+                self.0.store.contains(account)
+            }
+            fn remove(&self, account: &str) -> Result<(), Error> {
+                self.0.store.remove(account)
+            }
+        }
+        let inner = std::sync::Arc::new(Counting::default());
+        inner
+            .store
+            .set(
+                "openai",
+                &SecretValue::new("sk-test-not-a-real-key").unwrap(),
+            )
+            .unwrap();
+        let cached = std::sync::Arc::new(Cached::new(Box::new(Slow(inner.clone()))));
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let cached = cached.clone();
+                std::thread::spawn(move || cached.get("openai").unwrap().is_some())
+            })
+            .collect();
+        assert!(readers.into_iter().all(|r| r.join().unwrap()));
+        assert_eq!(inner.reads.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[test]

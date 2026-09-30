@@ -100,9 +100,14 @@ found.
   checked (not empty, at most 4096 bytes, one line, no control characters; a pasted
   newline is trimmed), wrapped in `SecretValue`, and written to the Keychain. The
   input field is cleared. The command returns the provider's status, never the key.
-- **Reading:** only the agent commands read a key, natively, when a session using
-  that provider is created or run, and only to place it in that agent's
-  environment. No command returns a key; `provider_list` reports only
+- **Reading:** only the agent commands read a key, natively, when the agent of a
+  session using that provider starts, and only to place it in that agent's
+  environment. Approving and creating the session only check that one is saved,
+  which reads nothing. The key is kept in the app's memory after the first read,
+  until the app quits or the key is replaced or removed in Models: macOS may ask
+  for the Keychain password on a read (always for a build it does not recognize,
+  such as an unsigned one that was rebuilt), so it asks at most once per app
+  run. No command returns a key; `provider_list` reports only
   `credential: notNeeded | missing | inKeychain` (checked without reading the key).
 - **Removing:** `provider_remove_credential` deletes the Keychain item. An agent
   already running keeps the key it was started with; any new run of any session
@@ -255,7 +260,7 @@ or none needed) are offered.
 | Configuration source | `configuration`: `agent` (with the shell's provider variables, by name) or `app` (provider, model, endpoint, whether a key is saved, the shell variables replaced) |
 
 The session keeps its model for every run: restart and "Terminal" relaunch with it,
-reading the key from the Keychain again each time. The model is saved in the
+with the key as the app keeps it (above). The model is saved in the
 worktree's metadata (`~/.x8ai/worktrees/…/<name>.json`: provider id and model id,
 never a key), so a session found after the app restarts keeps it. The catalog
 (Phase 8, docs/catalog.md) lists the same providers and models from this

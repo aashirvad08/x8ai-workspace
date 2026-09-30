@@ -20,7 +20,7 @@ use x8ai_core::model::{
 };
 use x8ai_providers::Settings;
 use x8ai_providers::ollama::{self, Detection};
-use x8ai_secrets::{Keychain, SecretStore, SecretValue};
+use x8ai_secrets::{Cached, Keychain, SecretStore, SecretValue};
 
 use crate::workspace::Workspaces;
 
@@ -40,12 +40,15 @@ pub struct Providers {
 
 impl Default for Providers {
     fn default() -> Self {
-        Self::with_store(Box::new(Keychain::new(KEYCHAIN_SERVICE, KEYCHAIN_LABEL)))
+        Self::with_store(Box::new(Cached::new(Box::new(Keychain::new(
+            KEYCHAIN_SERVICE,
+            KEYCHAIN_LABEL,
+        )))))
     }
 }
 
 impl Providers {
-    fn with_store(secrets: Box<dyn SecretStore>) -> Self {
+    pub(crate) fn with_store(secrets: Box<dyn SecretStore>) -> Self {
         Self {
             definitions: x8ai_providers::builtin(),
             secrets,

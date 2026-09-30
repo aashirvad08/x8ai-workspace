@@ -224,7 +224,10 @@ same rules as provider keys (ADR 0014, docs/models.md):
 - no command returns a value; the webview sees only `missing` or `inKeychain` per
   variable, and `configured` for the server;
 - a value is read natively only to start the server, and placed only in that
-  server's environment: never the agent's, never a file;
+  server's environment: never the agent's, never a file. It is kept in the
+  app's memory after the first read, until the app quits or the value is
+  replaced or removed, so macOS asks for the Keychain password at most once per
+  app run;
 - removing a server, or removing a secret variable from it, deletes the saved
   value.
 

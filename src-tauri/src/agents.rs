@@ -202,14 +202,25 @@ fn configuration_of(
         })
 }
 
+/// Whether a launch plan is for starting the agent, which needs the provider's
+/// key, or only for approving or recording a session, which needs to know
+/// there is one. The Keychain may ask the user each time a key is read, so it is
+/// read only to start the agent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Key {
+    Read,
+    Present,
+}
+
 /// The launch for `definition` in `root`: with the agent's own configuration, or
-/// pointed at `model`, with the provider's key from the Keychain.
+/// pointed at `model`, with the provider's key from the Keychain (`Key::Read`).
 fn launch_plan(
     definition: &AgentDefinition,
     environment: &Resolved,
     root: &Path,
     model: Option<&ModelSelection>,
     providers: &Providers,
+    key: Key,
 ) -> Result<LaunchPlan, CommandError> {
     let plan = plan(definition, &environment.vars, root).map_err(denied)?;
     let Some(model) = model else {
@@ -224,6 +235,15 @@ fn launch_plan(
             reason,
         })
     })?;
+    if key == Key::Present {
+        return adapter::route(
+            plan,
+            provider,
+            &model.model,
+            providers.credential_state(provider),
+        )
+        .map_err(configure_error);
+    }
     let credential = providers.credential(provider)?;
     adapter::configure(plan, provider, &model.model, credential.as_ref()).map_err(configure_error)
 }
@@ -751,6 +771,7 @@ pub async fn agent_request_approval(
             &root,
             model.as_ref(),
             &task_app.state::<Providers>(),
+            Key::Present,
         )?;
         let selection = mcp_for_new_session(
             &task_app.state::<Mcp>(),
@@ -804,6 +825,7 @@ pub async fn agent_request_session_approval(
             &root,
             record.model.as_ref(),
             &task_app.state::<Providers>(),
+            Key::Present,
         )?;
         let selection = mcp_for_run(
             &task_app.state::<Mcp>(),
@@ -885,6 +907,7 @@ pub async fn agent_create_session(
             &root,
             model.as_ref(),
             &task_app.state::<Providers>(),
+            Key::Present,
         )?;
         let selection = mcp_for_new_session(
             &task_app.state::<Mcp>(),
@@ -985,6 +1008,7 @@ pub async fn agent_run(
             &root,
             record.model.as_ref(),
             &providers,
+            Key::Read,
         )
         .inspect_err(|error| agents.runtime.fail(session, error.message.clone()))?;
         let fail = |error: CommandError| {
@@ -1436,4 +1460,113 @@ fn denied(reason: Denied) -> CommandError {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use x8ai_core::model::ProviderAuth;
+    use x8ai_secrets::{Cached, Error, MemoryStore, SecretStore, SecretValue};
+
+    use super::*;
+
+    /// A store that counts reads of values: each would be a Keychain prompt for
+    /// a build macOS does not recognize.
+    #[derive(Default)]
+    struct Counting {
+        store: MemoryStore,
+        reads: AtomicUsize,
+    }
+
+    /// The store the app is given, sharing the count with the test.
+    struct Shared(Arc<Counting>);
+
+    impl SecretStore for Shared {
+        fn set(&self, account: &str, value: &SecretValue) -> Result<(), Error> {
+            self.0.store.set(account, value)
+        }
+        fn get(&self, account: &str) -> Result<Option<SecretValue>, Error> {
+            self.0.reads.fetch_add(1, Ordering::Relaxed);
+            self.0.store.get(account)
+        }
+        fn contains(&self, account: &str) -> Result<bool, Error> {
+            self.0.store.contains(account)
+        }
+        fn remove(&self, account: &str) -> Result<(), Error> {
+            self.0.store.remove(account)
+        }
+    }
+
+    #[test]
+    fn a_session_reads_its_key_only_to_start_and_once_per_app_run() {
+        let temp = std::env::temp_dir().join(format!("x8ai-key-reads-{}", std::process::id()));
+        let bin = temp.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let codex = bin.join("codex");
+        std::fs::write(&codex, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let environment = Resolved {
+            vars: vec![("PATH".into(), format!("{}:/usr/bin:/bin", bin.display()))],
+            problem: None,
+        };
+
+        let counting = Arc::new(Counting::default());
+        let providers =
+            Providers::with_store(Box::new(Cached::new(Box::new(Shared(counting.clone())))));
+        let openai = providers.definition("openai").unwrap();
+        let ProviderAuth::ApiKey { secret } = &openai.auth else {
+            panic!("OpenAI takes a key")
+        };
+        let key = SecretValue::new("sk-x8ai-test-not-a-real-key").unwrap();
+        counting.store.set(secret.as_str(), &key).unwrap();
+        let definition = x8ai_agents::builtin()
+            .into_iter()
+            .find(|a| a.id.as_str() == "codex")
+            .unwrap();
+        let model = ModelSelection {
+            provider: IntegrationId::new("openai").unwrap(),
+            model: "gpt-6.1-sol".into(),
+        };
+        let reads = || counting.reads.load(Ordering::Relaxed);
+
+        // Asking for approval, then creating the session: the key is not read.
+        for _ in 0..2 {
+            let plan = launch_plan(
+                &definition,
+                &environment,
+                &temp,
+                Some(&model),
+                &providers,
+                Key::Present,
+            )
+            .unwrap();
+            assert_eq!(
+                plan.provider.as_ref().unwrap().endpoint,
+                "https://api.openai.com/v1"
+            );
+        }
+        assert_eq!(reads(), 0);
+        // Starting it, and starting it again: read once, then kept.
+        for _ in 0..3 {
+            let plan = launch_plan(
+                &definition,
+                &environment,
+                &temp,
+                Some(&model),
+                &providers,
+                Key::Read,
+            )
+            .unwrap();
+            assert!(
+                plan.env
+                    .iter()
+                    .any(|(n, v)| n == "X8AI_CODEX_API_KEY" && v == key.expose())
+            );
+        }
+        assert_eq!(reads(), 1);
+        let _ = std::fs::remove_dir_all(temp);
+    }
 }

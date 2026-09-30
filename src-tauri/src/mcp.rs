@@ -22,7 +22,7 @@ use x8ai_core::mcp::{
 use x8ai_core::model::CredentialState;
 use x8ai_mcp::environment::{KEYCHAIN_LABEL, KEYCHAIN_SERVICE};
 use x8ai_mcp::{Approvals, Limits, McpRuntime, Registry, prepare, secret_account};
-use x8ai_secrets::{Keychain, SecretStore, SecretValue};
+use x8ai_secrets::{Cached, Keychain, SecretStore, SecretValue};
 
 use crate::workspace::Workspaces;
 
@@ -49,7 +49,10 @@ pub(crate) struct RunServer {
 impl Default for Mcp {
     fn default() -> Self {
         Self::new(
-            Box::new(Keychain::new(KEYCHAIN_SERVICE, KEYCHAIN_LABEL)),
+            Box::new(Cached::new(Box::new(Keychain::new(
+                KEYCHAIN_SERVICE,
+                KEYCHAIN_LABEL,
+            )))),
             crate::agents::home().join(".x8ai/mcp"),
         )
     }
