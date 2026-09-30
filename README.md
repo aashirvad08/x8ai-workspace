@@ -1,115 +1,278 @@
 # x8ai Workspace
 
-A terminal-first AI development workspace for macOS.
+**A terminal-first workspace for coding with AI agents, on macOS.**
 
-The terminal is the primary surface. Coding agents such as Claude Code, OpenCode,
-Codex and Aider run inside it. Model providers (Anthropic, OpenAI, Google,
-OpenRouter, Ollama and local models), MCP servers, skills, Git worktrees and a
-catalog of all of them are organized around it. The app hosts and orchestrates these
-existing tools. It does not implement its own LLM or its own coding agent, and it
-does not privilege any vendor.
+x8ai Workspace puts your terminals, your code and the coding agents you already
+use in one window. Open a project, pick an agent such as Claude Code, OpenCode or
+Codex, choose the model it should use, and let it work. Each agent gets its own
+copy of your repository, so it never touches your checkout while it works, and
+you review what it changed.
 
-> **Status: Phase 8 (catalog and skills).** Open a folder to get a file explorer,
-> workspace search and a code editor above real PTY terminals. Coding agents such
-> as Claude Code run in the folder's terminals once you trust the folder and allow
-> the agent there; in a Git repository each agent works in a worktree of its own,
-> and you review what it changed. Save provider keys once, in the macOS Keychain,
-> and start an agent with a provider and model of your choice, or with its own
-> configuration. Add MCP servers once and give them to agent sessions: the app
-> starts stdio servers for a session, with only the variables you list, after you
-> allow them. The Catalog lists every agent, model, MCP server and skill with
-> what it needs, and sends you to the part of the app that owns it: it installs
-> and runs nothing. Skills are instructions you attach to an agent session. The
-> app does not implement an agent, a model or an MCP client. See
-> [docs/roadmap.md](docs/roadmap.md), [docs/agent-runtime.md](docs/agent-runtime.md),
-> [docs/multi-agent.md](docs/multi-agent.md), [docs/models.md](docs/models.md),
-> [docs/mcp.md](docs/mcp.md) and [docs/catalog.md](docs/catalog.md).
+The app doesn't come with its own AI. It runs the agents and models you choose,
+and it doesn't favor any vendor.
 
-## Documentation
+---
 
-- [Architecture](docs/architecture.md): subsystems, boundaries, process model and
-  future designs
-- [Roadmap](docs/roadmap.md): Phases 0–12 with acceptance criteria
-- [Security](docs/security.md): threat model, risks, and what is enforced today
-- [Agent runtime](docs/agent-runtime.md): how agents are found, approved, started and stopped
-- [Multi-agent workspaces](docs/multi-agent.md): agent sessions, worktrees and review
-- [Models and providers](docs/models.md): providers, models, keys, precedence and agent adapters
-- [MCP servers](docs/mcp.md): the registry, approvals, environment policy and session-owned servers
-- [Catalog and skills](docs/catalog.md): what the catalog shows, who owns each item, skills, and why the catalog runs nothing
-- [Decisions](docs/decisions/): architecture decision records
+## What you can do
 
-## Prerequisites
+- **Work in real terminals.** Full terminals with tabs and split panes, running
+  your own shell.
+- **Browse, search and edit your code.** A file explorer, search across the
+  folder, quick open (⌘P) and an editor with syntax highlighting.
+- **Run coding agents safely.** Agents run only in folders you trust, and only
+  after you approve the exact program and settings. In a Git repository each
+  agent session works in a Git worktree of its own, on its own branch.
+- **Run several agents at once** and see what each one changed, file by file,
+  before you merge anything.
+- **Choose the model.** Save an API key once for Anthropic, OpenAI, Google or
+  OpenRouter, or use local models with Ollama, and pick a model for each session.
+- **Give agents tools with MCP servers.** Add a server once and attach it to the
+  sessions that need it.
+- **Attach skills.** Skills are reusable instructions, such as "write a failing
+  test first", that you add to a session.
+- **Browse everything in one place.** The Catalog lists every agent, model, MCP
+  server and skill, whether it's ready, and what it still needs.
 
-- macOS 13 or later, with Xcode Command Line Tools (`xcode-select --install`)
-- Node.js 22.12 or later, and pnpm 11 (`corepack enable`, or see
-  `packageManager` in `package.json`)
-- Rust through [rustup](https://rustup.rs). The exact toolchain is pinned in
-  `rust-toolchain.toml` and installed automatically.
+## Supported agents and providers
 
-## Commands
+| Agent | Choose its model in the app | MCP servers | Skills |
+| --- | --- | --- | --- |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic, OpenRouter, Ollama | ✓ | ✓ |
+| [OpenCode](https://opencode.ai) | Anthropic, OpenAI, Google, OpenRouter, Ollama | ✓ | — |
+| [Codex](https://github.com/openai/codex) | uses its own settings | — | — |
 
-| Command | What it does |
-| --- | --- |
-| `pnpm install` | Install frontend dependencies |
-| `pnpm tauri dev` | Run the app with hot reload |
-| `pnpm tauri build` | Build the unsigned `target/release/bundle/macos/x8ai Workspace.app` |
-| `pnpm tauri build --bundles dmg` | Also build a DMG. This drives Finder through AppleScript, so your terminal needs Automation → Finder permission. Signed and notarized DMGs come in Phase 12. |
-| `pnpm check` | Everything CI checks: typecheck, frontend tests, rustfmt, clippy, cargo tests |
-| `pnpm test` | Frontend tests (Vitest), including module-boundary tests |
-| `cargo test --workspace` | Rust tests. Also regenerates the TypeScript contracts. |
-| `pnpm contracts` | Regenerate `src/contracts/generated/` from `crates/core` |
+Any agent can also use its own configuration, exactly as it does in your
+terminal. You install the agents yourself; the app finds them on your `PATH`.
+Any other command-line tool runs in the app's terminals as usual.
+
+---
+
+## Install
+
+There is no downloadable release yet, so you build the app from source. The build
+takes a few minutes the first time.
+
+**You need:**
+
+- macOS 13 or later
+- Xcode Command Line Tools: `xcode-select --install`. These include Git.
+- [Node.js](https://nodejs.org) 22.12 or later
+- [Rust](https://rustup.rs), installed with rustup. The right version is picked
+  up automatically.
+
+**Build it:**
+
+```sh
+git clone https://github.com/aashirvad08/x8ai-workspace.git
+cd x8ai-workspace
+corepack enable          # provides pnpm
+pnpm install
+pnpm tauri build
+```
+
+The app is created at `target/release/bundle/macos/x8ai Workspace.app`. Drag it
+into your Applications folder, or open it right away:
+
+```sh
+open "target/release/bundle/macos/x8ai Workspace.app"
+```
+
+**Install an agent** if you don't have one yet, for example Claude Code, OpenCode
+or Codex. Follow each agent's own instructions. The app doesn't install them.
+
+---
+
+## Getting started
+
+### 1. Open a project
+
+Press **⌘O** and choose a folder. The file explorer, the editor and a terminal
+open in that folder. The app reopens your last folder the next time it starts,
+and **⌃R** switches between recent folders.
+
+### 2. Trust the folder
+
+Agents run only in folders you trust. The status bar shows **Untrusted** until
+you trust the folder. Open **Agents** (**⇧⌘A**) and click **Trust Folder…**, then
+confirm. Trust a folder only if you trust its contents: a repository can contain
+files that try to steer an agent.
+
+### 3. Launch an agent
+
+In **Agents**, find your agent's card, for example Claude Code, and click
+**Launch**. Before anything runs, a dialog shows:
+
+- the folder and the exact program that will run,
+- the model provider it will talk to, if you chose one,
+- the MCP servers it gets, with their exact commands,
+- the skills attached to the session.
+
+Click **Allow**. The agent starts in a terminal tab of its own. You're asked
+again only if something that runs changes, for example a different program or
+another provider.
+
+### 4. Review what it did
+
+In a Git repository, each session works in its own worktree on a branch named
+`agent/<agent>/<date>-…`, so your working tree and your current branch are never
+changed. In the session's card:
+
+- **Changes** lists the changed files and commits; click a file to read it.
+- **Terminal** reopens the agent's terminal. **Stop** and **Restart** do what
+  they say.
+- **Remove** deletes the session's worktree. It asks first if there is
+  uncommitted work. If the agent made commits, its branch is kept.
+
+To bring an agent's work into your branch, use Git as usual, for example
+`git merge agent/claude-code/…`.
+
+In a folder that isn't a Git repository, one agent works directly in the folder at
+a time, and the app tells you that the agent isn't isolated.
+
+### 5. Choose a model (optional)
+
+By default an agent uses its own settings. To pick a model in the app instead:
+
+1. Open **Models** (**⇧⌘M**) and paste an API key for a provider. It is saved in
+   your macOS Keychain, and the app never shows it again.
+2. Back in **Agents**, choose the model in the agent's card before you click
+   **Launch**.
+
+For **local models**, install and start [Ollama](https://ollama.com) yourself,
+then click refresh in Models. The app looks for Ollama only when you ask.
+
+### 6. Add MCP servers (optional)
+
+Open **MCP** (**⇧⌘U**) and click **+**:
+
+- **stdio:** a program on your Mac, with its arguments, for example `npx` and a
+  package name.
+- **HTTP:** a server at a URL.
+- **Variables:** list them by name. Each value is either a secret, saved in the
+  Keychain, or taken from your shell.
+- **Scope:** every new session, sessions in this folder, or only when you choose
+  it at launch.
+
+A server runs only for an agent session, after you approve it in the launch
+dialog. It gets the basics every program needs (such as `PATH` and `HOME`) plus
+the variables you listed, nothing else, and it stops with the agent.
+
+### 7. Use skills and the Catalog (optional)
+
+Open **Catalog** (**⇧⌘K**) to see everything in one place. Search it, filter it
+by category (Agents, Models, MCP, Skills) or by status, and open an item to see
+its details and what it needs.
+
+- **Use for the next launch** and **Attach to the next launch** fill in the
+  agent's card for you. Nothing starts until you click **Launch**.
+- **New skill…** creates your own skill: a name and instructions, which are plain
+  text and never a secret. Skills are attached to every new session, to sessions
+  in one folder, or only when you choose them.
+
+The Catalog installs nothing, runs nothing and doesn't go online. It shows what
+the app knows and takes you to the right place to set things up.
+
+---
 
 ## Keyboard shortcuts
 
-⌘O Open Folder · ⌃R Open Recent · ⌘P Go to File · ⇧⌘P All Commands · ⌘N New File ·
-⌘S Save · ⌥⌘S Save All · ⌘W Close Editor · ⌘B Toggle Sidebar · ⇧⌘E Files ·
-⇧⌘F Search in Folder · ⇧⌘A Agents · ⇧⌘M Models · ⇧⌘U MCP · ⇧⌘K Catalog · ⌘F Find in File · ⌃` Toggle Terminal · ⌃⇧` New Terminal.
-In a terminal: ⌘D Split Right · ⇧⌘D Split Down · ⌘] / ⌘[ Next / Previous Pane ·
-⌘W Close Pane. In the explorer: arrows, Enter, F2 to rename, ⌘⌫ to move to the
-Trash.
+| | |
+| --- | --- |
+| **Folders and files** | ⌘O Open Folder · ⌃R Open Recent · ⌘P Go to File · ⌘N New File · ⌘S Save · ⌥⌘S Save All · ⌘W Close Editor · ⌘F Find in File |
+| **Panels** | ⇧⌘E Files · ⇧⌘F Search in Folder · ⇧⌘A Agents · ⇧⌘M Models · ⇧⌘U MCP · ⇧⌘K Catalog · ⌘B Toggle Sidebar |
+| **Terminal** | ⌃\` Show or Hide Terminal · ⌃⇧\` New Terminal · ⌘D Split Right · ⇧⌘D Split Down · ⌘] / ⌘[ Next / Previous Pane · ⌘W Close Pane |
+| **Explorer** | Arrow keys and Enter to move and open · F2 Rename · ⌘⌫ Move to Trash |
+| **Everything else** | ⇧⌘P All Commands |
 
-## Repository layout
+---
+
+## Safety and privacy
+
+- **Nothing runs without you.** Agents and MCP servers start only in folders you
+  trusted, after you approve exactly what will run. A repository can't trust or
+  approve anything for itself.
+- **Your keys stay in the Keychain.** API keys and MCP secrets are never written
+  to files, logs or your projects. An agent gets a key only for the session you
+  chose it for.
+- **MCP servers get only what you list.** Apart from basics such as `PATH`, they
+  receive only the variables you listed: never your provider keys or other
+  secrets from your shell.
+- **No surprise network traffic.** The app makes no network connections when it
+  starts. It contacts Ollama on your own Mac only when you ask. Agents talk to
+  their providers themselves.
+- **Your agent settings stay yours.** The app never edits `~/.claude`, OpenCode's
+  or Codex's global configuration. It gives agents their settings per session
+  only.
+- **Agents run as you.** Like any program you start in a terminal, an agent can
+  read your files and reach the network. The app doesn't sandbox agents, so trust
+  folders and approve agents deliberately.
+
+Closing a terminal, or quitting the app while a program or an agent is running,
+asks you first.
+
+## Where your data lives
+
+| What | Where |
+| --- | --- |
+| Recent and trusted folders, approvals, providers, MCP servers, skills (no secrets) | `~/Library/Application Support/com.x8ai.workspace/` |
+| API keys and MCP secrets | macOS Keychain, under `com.x8ai.workspace.providers` and `com.x8ai.workspace.mcp` |
+| Agent worktrees | `~/.x8ai/worktrees/` |
+
+To start over, quit the app, delete that Application Support folder, and remove
+the Keychain items in Keychain Access.
+
+## Troubleshooting
+
+- **An agent says "Not installed".** Install it, and check that its command
+  works in a new terminal window. The app uses the `PATH` from your login shell.
+  Then click refresh in Agents.
+- **Launch is disabled.** Open a folder first, then trust it.
+- **Ollama shows "Not found" or "not running".** Install Ollama or start it, then
+  click refresh in Models.
+- **I can't choose a model for my agent.** Save a key for a provider that agent
+  supports (see the table above), or add a model id in Models.
+- **An MCP server shows as not configured.** Save its secret variables in MCP,
+  and check that its command is installed.
+
+---
+
+## For contributors
+
+```sh
+pnpm tauri dev      # run the app with hot reload
+pnpm check          # everything CI checks: types, tests, formatting, lints
+pnpm test           # frontend tests only
+cargo test --workspace
+```
+
+`pnpm tauri build --bundles dmg` also builds a DMG. It drives Finder, so your
+terminal needs permission to control Finder (System Settings → Privacy &
+Security → Automation).
+
+The app is a [Tauri](https://tauri.app) app with a Rust core and a React +
+TypeScript interface:
 
 ```
-crates/core/        x8ai-core — IPC contracts and integration definitions (no Tauri, no I/O)
-crates/pty/         x8ai-pty — PTY sessions: the user's shell, streamed output, lifecycle (no Tauri)
-crates/workspace/   x8ai-workspace — the chosen folder, scoped file operations, search, recent, trust, approvals (no Tauri)
-crates/agents/      x8ai-agents — agent definitions, discovery, sessions, worktree isolation, runtime, model adapters (no Tauri)
-crates/git/         x8ai-git — the user's git: repository facts, worktrees, changes (no Tauri)
-crates/secrets/     x8ai-secrets — provider keys in the macOS Keychain; a value that cannot be printed (no Tauri)
-crates/providers/   x8ai-providers — provider definitions, models, provider settings, Ollama detection (no Tauri)
-crates/mcp/         x8ai-mcp — MCP server registry, approvals, environment policy, session-owned servers and the bridge (no Tauri)
-crates/skills/      x8ai-skills — built-in and user skills, and which skills a session gets (no Tauri)
-crates/catalog/     x8ai-catalog — catalog metadata and items from what each system reports; runs nothing (no Tauri)
-src-tauri/          x8ai-desktop — the Tauri host: window, commands, capability grants
-src/app/            UI shell: layout, sidebar, splitters, overlays, shortcuts (React)
-src/workbench/      user actions and coordination; notifications, dialogs, commands
-src/workspace/      file explorer and workspace search
-src/editor/         editor tabs and CodeMirror
-src/terminal/       terminal sessions, tabs, split panes and xterm.js view
-src/agents/         agents view and store: agents, sessions, review, the next launch's choices
-src/models/         models view and store: providers, keys, model ids
-src/mcp/            MCP view and store: servers, secrets, launch choices
-src/skills/         skills store and launch choices
-src/catalog/        catalog view and store: search, filters, actions
-src/native/         typed client for native commands; the only code that imports Tauri
-src/contracts/      TypeScript types generated from crates/core (do not edit)
-docs/               architecture, roadmap, security, decisions
+crates/      the Rust core: terminals, workspace files, agents, Git, Keychain,
+             providers, MCP, skills and the catalog (none of it depends on Tauri)
+src-tauri/   the desktop app: window, native commands and their permissions
+src/         the interface (React + TypeScript)
+docs/        design documents and decision records
 ```
 
-Subsystem modules are added in the phase that implements them. The planned
-homes are in [docs/architecture.md §3](docs/architecture.md#3-repository-map).
+To learn how it works, read [Architecture](docs/architecture.md),
+[Security](docs/security.md), [Agents](docs/agent-runtime.md),
+[Agent sessions and worktrees](docs/multi-agent.md), [Models](docs/models.md),
+[MCP servers](docs/mcp.md), [Catalog and skills](docs/catalog.md) and the
+[decision records](docs/decisions/).
 
-## Development rules
+**Ground rules**
 
-1. Keep subsystems separate. No business logic in UI components.
-2. Prefer simple designs to premature abstraction. Build features in their phase.
-3. Justify every new dependency in the change that adds it.
-4. Keep every commit small and buildable. Never hide errors.
-5. No mock implementations posing as real functionality. Mark future work with
-   `TODO(phase-N)`.
-6. Keep platform-specific code isolated. The platform is macOS first, with Linux
-   kept possible.
-7. Never hard-code credentials. Never couple the app to a single agent, provider or
+1. Keep parts separate: no business logic in UI components.
+2. Prefer simple designs, and justify every new dependency.
+3. Keep commits small and buildable, and never hide errors.
+4. No mock implementations posing as real features.
+5. Never hard-code credentials, and never tie the app to one agent, provider or
    MCP server.
-8. Changes to `src-tauri/capabilities/` are security changes. Review them as such.
+6. Changes to `src-tauri/capabilities/` are security changes. Review them as
+   such.
