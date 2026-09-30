@@ -15,6 +15,8 @@ import type { McpServerInput } from "../contracts/generated/McpServerInput";
 import type { SkillInput } from "../contracts/generated/SkillInput";
 import type { ModelSelection } from "../contracts/generated/ModelSelection";
 import type { EditorActions } from "../editor/actions";
+import type { HomeActions } from "../home/actions";
+import { Home, MAX_NAME_LENGTH, matchRecent, parseCommand } from "../home/home";
 import { EditorStore } from "../editor/editor-store";
 import { basename, dirname, join } from "../lib/paths";
 import { Value } from "../lib/store";
@@ -51,7 +53,8 @@ export class Workbench
     AgentActions,
     ModelActions,
     McpActions,
-    CatalogActions
+    CatalogActions,
+    HomeActions
 {
   readonly workspace = new Value<WorkspaceInfo | null>(null);
   /** Recently opened folders, most recent first. */
@@ -64,6 +67,8 @@ export class Workbench
   readonly mcp: McpServers;
   readonly skills: Skills;
   readonly catalog: Catalog;
+  /** The welcome screen, the app's head. */
+  readonly home: Home;
   /** What the next launch of each agent asks for, from its card or the catalog. */
   readonly drafts = new LaunchDrafts();
   readonly terminals = new Terminals();
@@ -90,43 +95,137 @@ export class Workbench
     this.mcp = new McpServers(native);
     this.skills = new Skills(native);
     this.catalog = new Catalog(native);
+    this.home = new Home(native);
     this.editor.subscribe(() => this.#reportUnsaved());
     this.terminals.subscribe(() => this.#agentPanesChanged());
   }
 
   /**
    * Connects to the native host: quit requests and startup warnings. Reopens the
-   * most recent workspace if it still exists, then starts a first terminal (in
-   * that workspace, if one opened).
+   * most recent workspace if it still exists, behind the welcome screen, then
+   * starts a first terminal (in that workspace, if one opened).
    */
   async start(): Promise<void> {
     this.#native.subscribeApp((event) => {
       if (event.type === "quitRequested") void this.#quitRequested();
     }).catch((error: unknown) => this.notifications.error(`Could not connect to the app: ${messageOf(error)}`));
+    void this.home.load();
     await this.#refreshRecent();
     const last = this.recent.get()[0];
-    if (last?.available) await this.#open((listener) => this.#native.openRecentWorkspace(last.root, listener));
+    if (last?.available) await this.#open((listener) => this.#native.openRecentWorkspace(last.root, listener), true);
     if (this.terminals.get().tabs.length === 0) this.terminals.add();
     await this.#showWarnings();
   }
 
   // Workspace
 
-  async openFolder(): Promise<void> {
-    if (!(await this.#confirmStopAgents())) return;
-    if (!(await this.#confirmDiscard("Opening another folder closes its open files."))) return;
-    await this.#open((listener) => this.#native.openWorkspace(listener));
+  /** The native folder picker, starting at `start` if given. Resolves to whether a folder opened. */
+  async openFolder(start: string | null = null): Promise<boolean> {
+    if (!(await this.#confirmStopAgents())) return false;
+    if (!(await this.#confirmDiscard("Opening another folder closes its open files."))) return false;
+    return this.#open((listener) => this.#native.openWorkspace(listener, start));
   }
 
   openRecent(root: string): void {
     void this.#openRecent(root);
   }
 
-  async #openRecent(root: string): Promise<void> {
-    if (this.workspace.get()?.root === root) return;
-    if (!(await this.#confirmStopAgents())) return;
-    if (!(await this.#confirmDiscard("Opening another folder closes its open files."))) return;
-    await this.#open((listener) => this.#native.openRecentWorkspace(root, listener));
+  async #openRecent(root: string): Promise<boolean> {
+    if (this.workspace.get()?.root === root) return true;
+    if (!(await this.#confirmStopAgents())) return false;
+    if (!(await this.#confirmDiscard("Opening another folder closes its open files."))) return false;
+    return this.#open((listener) => this.#native.openRecentWorkspace(root, listener));
+  }
+
+  /**
+   * Closes the open folder, after asking about running agents and unsaved files:
+   * the workspace with no folder, a new shell in the home folder. Resolves to
+   * whether it closed (or none was open).
+   */
+  async closeFolder(): Promise<boolean> {
+    if (!this.workspace.get()) return true;
+    if (!(await this.#confirmStopAgents("Agents run only in the folder they were allowed in. Closing it stops them."))) return false;
+    if (!(await this.#confirmDiscard("Closing the folder closes its open files."))) return false;
+    try {
+      await this.#native.closeWorkspace();
+    } catch (error) {
+      this.notifications.error(`Could not close the folder: ${messageOf(error)}`);
+      return false;
+    }
+    this.#shown = null;
+    this.editor.closeAll();
+    this.#files = null;
+    this.workspace.set(null);
+    this.explorer.reset(false);
+    this.search.reset();
+    // The folder's agents stopped natively; shells stay, and a new one starts at home.
+    this.terminals.closeAgents();
+    this.terminals.add();
+    this.#reloadAgents();
+    await this.#refreshRecent();
+    return true;
+  }
+
+  // Welcome (the head)
+
+  /** ⇧⌘H: the welcome screen over the workspace, which keeps running. */
+  showHome(): void {
+    this.home.show();
+  }
+
+  leaveHome(): void {
+    this.home.hide();
+    this.terminals.requestFocus();
+  }
+
+  /**
+   * `/cd <folder>`: a recent space opens at once; any other folder in the native
+   * picker, starting there (the user chooses it; the interface cannot open a
+   * folder by itself). `/home`: the workspace with no folder. `/name`: who the
+   * welcome greets. The welcome screen closes once a space opens.
+   */
+  async runHomeCommand(text: string): Promise<void> {
+    const command = parseCommand(text);
+    if (command.kind === "empty") {
+      this.leaveHome();
+      return;
+    }
+    if (command.kind === "unknown") {
+      this.home.say(`“${command.word}” is not a command here. Try /cd <folder>, /home or /name <your name>.`, "error");
+      return;
+    }
+    switch (command.name) {
+      case "/home":
+        if (await this.closeFolder()) this.leaveHome();
+        return;
+      case "/name": {
+        const name = command.arg.slice(0, MAX_NAME_LENGTH);
+        this.home.setName(name || null);
+        this.home.say(name ? `Hello, ${name}.` : "Greeting you with your account's name again.");
+        return;
+      }
+      case "/cd": {
+        if (command.arg === "") {
+          if (!(await this.openFolder())) this.home.say("No folder was opened.");
+          return;
+        }
+        const matches = matchRecent(command.arg, this.recent.get());
+        if (matches.length > 1) {
+          this.home.say(`Several spaces match “${command.arg}”: ${matches.map((m) => m.root).join(", ")}. Type more of the path.`, "error");
+          return;
+        }
+        const [match] = matches;
+        if (match) {
+          if (match.root === this.workspace.get()?.root) this.leaveHome();
+          else if (!(await this.#openRecent(match.root))) this.home.say(`${match.name} was not opened.`);
+          return;
+        }
+        if (!(await this.openFolder(command.arg))) {
+          this.home.say(`${command.arg} is not one of your spaces yet. Choose it in the folder picker to open it.`);
+        }
+        return;
+      }
+    }
   }
 
   forgetRecent(root: string): void {
@@ -185,7 +284,11 @@ export class Workbench
    * one. Disk events are followed only for the workspace that is shown: events
    * still arriving from a previous one are ignored.
    */
-  async #open(opening: (listener: (event: WorkspaceEvent) => void) => Promise<WorkspaceInfo | null>): Promise<void> {
+  /** Resolves to whether a folder opened. The welcome screen closes then, unless `keepHome`. */
+  async #open(
+    opening: (listener: (event: WorkspaceEvent) => void) => Promise<WorkspaceInfo | null>,
+    keepHome = false,
+  ): Promise<boolean> {
     const token = Symbol("workspace");
     let info: WorkspaceInfo | null;
     try {
@@ -196,12 +299,13 @@ export class Workbench
       this.notifications.error(`Could not open the folder: ${messageOf(error)}`);
       // A folder that is gone has been dropped from the list.
       await this.#refreshRecent();
-      return;
+      return false;
     } finally {
       await this.#showWarnings();
     }
-    if (!info) return;
+    if (!info) return false;
     this.#shown = token;
+    if (!keepHome) this.home.hide();
     this.editor.closeAll();
     this.#files = null;
     this.workspace.set(info);
@@ -213,6 +317,7 @@ export class Workbench
     this.terminals.add();
     this.#reloadAgents();
     await this.#refreshRecent();
+    return true;
   }
 
   async #refreshRecent(): Promise<void> {
@@ -430,6 +535,8 @@ export class Workbench
     return [
       { id: "workspace.open", title: "Open Folder…", shortcut: { key: "o", meta: true }, run: () => void this.openFolder() },
       { id: "workspace.openRecent", title: "Open Recent Folder…", shortcut: { key: "r", ctrl: true }, run: () => void this.showRecent() },
+      { id: "workspace.close", title: "Close Folder", run: () => void this.closeFolder() },
+      { id: "view.home", title: "Show Welcome", shortcut: { key: "h", meta: true, shift: true }, run: () => this.showHome() },
       { id: "workspace.trust", title: "Trust This Folder…", run: () => void this.setTrust(true) },
       { id: "workspace.untrust", title: "Remove Trust from This Folder…", run: () => void this.setTrust(false) },
       { id: "file.quickOpen", title: "Go to File…", shortcut: { key: "p", meta: true }, run: () => void this.quickOpen() },
@@ -1091,13 +1198,15 @@ export class Workbench
   }
 
   /** Resolves to whether it is fine to stop the running agents, which belong to the open folder. */
-  async #confirmStopAgents(): Promise<boolean> {
+  async #confirmStopAgents(
+    why = "Agents run only in the folder they were allowed in. Opening another folder stops them.",
+  ): Promise<boolean> {
     const running = this.terminals.agentPanes().filter((pane) => pane.running);
     if (running.length === 0) return true;
     const names = [...new Set(running.map((pane) => (pane.kind.type === "agent" ? pane.kind.name : "")))];
     const choice = await this.dialogs.ask({
       title: names.length === 1 ? `Stop ${names[0]}?` : `Stop ${running.length} agents?`,
-      message: "Agents run only in the folder they were allowed in. Opening another folder stops them.",
+      message: why,
       buttons: [
         { label: "Stop and Continue", value: "stop", role: "destructive" },
         { label: "Cancel", value: "cancel" },

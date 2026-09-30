@@ -42,6 +42,7 @@ const COMMANDS: &[&str] = &[
     "terminal_is_busy",
     "terminal_close",
     "workspace_open",
+    "workspace_close",
     "workspace_open_recent",
     "workspace_recent",
     "workspace_forget_recent",

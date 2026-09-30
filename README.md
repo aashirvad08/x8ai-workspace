@@ -15,6 +15,8 @@ and it doesn't favor any vendor.
 
 ## What you can do
 
+- **Start from the Welcome screen.** Type `/cd` to open a folder as your space
+  and `/home` for the workspace with no folder; ⇧⌘H brings it back any time.
 - **Work in real terminals.** Full terminals with tabs and split panes, running
   your own shell.
 - **Browse, search and edit your code.** A file explorer, search across the
@@ -84,11 +86,22 @@ or Codex. Follow each agent's own instructions. The app doesn't install them.
 
 ## Getting started
 
-### 1. Open a project
+### 1. Open a space from the Welcome screen
 
-Press **⌘O** and choose a folder. The file explorer, the editor and a terminal
-open in that folder. The app reopens your last folder the next time it starts,
-and **⌃R** switches between recent folders.
+The app starts on the **Welcome** screen, its head: a greeting and a command
+line. Each folder you work in is a *space*, and one space is open at a time.
+
+| Command | What it does |
+| --- | --- |
+| `/cd <folder>` | Opens a space. A recent one opens at once, by its path or the start of its name (`/cd gymRL`, `/cd gym`, `/cd ~/code/app`). Any other folder opens the macOS folder picker at that place, where you choose it. `/cd` alone opens the picker. |
+| `/home` | The workspace with no folder open, and a new terminal in your home folder. |
+| `/name <your name>` | How the Welcome greets you. `/name` alone goes back to your Mac account's name. |
+
+Typing `/` lists the commands; after `/cd `, your recent spaces (Tab completes,
+↑↓ choose). **Esc** goes to the space as it is, and **⇧⌘H** (or **⌂ Welcome**
+in the status bar) brings the Welcome back while everything keeps running. The
+app reopens your last space behind the Welcome when it starts. **⌘O** and
+**⌃R** open folders from the workspace too.
 
 ### 2. Trust the folder
 
@@ -178,6 +191,7 @@ the app knows and takes you to the right place to set things up.
 
 | | |
 | --- | --- |
+| **Welcome** | ⇧⌘H Show Welcome · on it: `/cd <folder>` · `/home` · `/name <your name>` · Esc back to the space |
 | **Folders and files** | ⌘O Open Folder · ⌃R Open Recent · ⌘P Go to File · ⌘N New File · ⌘S Save · ⌥⌘S Save All · ⌘W Close Editor · ⌘F Find in File |
 | **Panels** | ⇧⌘E Files · ⇧⌘F Search in Folder · ⇧⌘A Agents · ⇧⌘M Models · ⇧⌘U MCP · ⇧⌘K Catalog · ⌘B Toggle Sidebar |
 | **Terminal** | ⌃\` Show or Hide Terminal · ⌃⇧\` New Terminal · ⌘D Split Right · ⇧⌘D Split Down · ⌘] / ⌘[ Next / Previous Pane · ⌘W Close Pane |

@@ -12,4 +12,9 @@ os: string,
 /**
  * CPU architecture as reported by Rust: `aarch64`, `x86_64`, ...
  */
-arch: string, };
+arch: string, 
+/**
+ * The full name of the user's account, if it has one, for the welcome
+ * screen. Nothing else is read about the user.
+ */
+userName: string | null, };

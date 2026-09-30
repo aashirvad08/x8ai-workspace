@@ -44,6 +44,7 @@
     "allow-terminal-is-busy",
     "allow-terminal-close",
     "allow-workspace-open",
+    "allow-workspace-close",
     "allow-workspace-open-recent",
     "allow-workspace-recent",
     "allow-workspace-forget-recent",

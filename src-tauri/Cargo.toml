@@ -26,6 +26,8 @@ x8ai-secrets.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 serde_json.workspace = true
+# Already used by x8ai-pty and x8ai-agents; here only for the account's full name.
+nix = { workspace = true, features = ["user"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true

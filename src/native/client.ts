@@ -90,10 +90,13 @@ export interface TerminalApi {
  */
 export interface WorkspaceApi {
   /**
-   * Shows the native folder picker. The chosen folder becomes the workspace and
-   * changes on disk are reported to `listener`. Resolves to `null` if cancelled.
+   * Shows the native folder picker, starting at `start` if given (`~` is the home
+   * folder). The chosen folder becomes the workspace and changes on disk are
+   * reported to `listener`. Resolves to `null` if cancelled.
    */
-  openWorkspace(listener: (event: WorkspaceEvent) => void): Promise<WorkspaceInfo | null>;
+  openWorkspace(listener: (event: WorkspaceEvent) => void, start?: string | null): Promise<WorkspaceInfo | null>;
+  /** Closes the open folder; its agents stop, and new terminals start in the home folder. */
+  closeWorkspace(): Promise<void>;
   /**
    * Reopens a folder from the recent list, the only other way to open one. Fails
    * with `notFound` (and drops it from the list) if the folder is gone.
@@ -272,10 +275,12 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     isTerminalBusy: (id) => call<boolean>("terminal_is_busy", { id }),
     closeTerminal: (id) => call<void>("terminal_close", { id }),
 
-    openWorkspace: (listener) =>
+    openWorkspace: (listener, start = null) =>
       call<WorkspaceInfo | null>("workspace_open", {
+        start,
         events: createChannel((message) => listener(message as WorkspaceEvent)),
       }),
+    closeWorkspace: () => call<void>("workspace_close"),
     openRecentWorkspace: (root, listener) =>
       call<WorkspaceInfo>("workspace_open_recent", {
         root,

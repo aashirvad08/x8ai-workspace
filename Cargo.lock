@@ -5031,6 +5031,7 @@ dependencies = [
 name = "x8ai-desktop"
 version = "0.1.0"
 dependencies = [
+ "nix",
  "objc2",
  "serde_json",
  "tauri",

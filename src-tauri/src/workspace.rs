@@ -212,20 +212,32 @@ impl Workspaces {
 /// Shows the native folder picker. The chosen folder replaces the open workspace,
 /// and changes on disk are reported on `events`. `None` if the user cancels, in
 /// which case the current workspace stays open.
+///
+/// `start` (typed after `/cd` on the welcome screen) only says where the picker
+/// starts: `~` is the home folder and a relative path is inside it. The user
+/// still chooses the folder in the picker, so the webview cannot open one by
+/// itself (ADR 0009).
 #[tauri::command]
 pub async fn workspace_open(
+    start: Option<String>,
     window: WebviewWindow,
     events: Channel<WorkspaceEvent>,
     workspaces: State<'_, Workspaces>,
     agents: State<'_, Agents>,
     terminals: State<'_, Terminals>,
 ) -> Result<Option<WorkspaceInfo>, CommandError> {
-    let picked = window
+    let mut picker = window
         .dialog()
         .file()
         .set_parent(&window)
-        .set_title("Open Folder")
-        .blocking_pick_folder();
+        .set_title("Open Folder");
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if let (Some(start), Some(home)) = (start.as_deref(), home.as_deref())
+        && let Some(directory) = picker_start(start, home)
+    {
+        picker = picker.set_directory(directory);
+    }
+    let picked = picker.blocking_pick_folder();
     let Some(picked) = picked else {
         return Ok(None);
     };
@@ -236,6 +248,39 @@ pub async fn workspace_open(
     let info = workspaces.install(workspace, events)?;
     agents.stop_outside(&terminals, Path::new(&info.root));
     Ok(Some(info))
+}
+
+/// Closes the open folder: its agents stop, as when another folder opens, and
+/// new terminals start in the home folder. Shells already open stay.
+#[tauri::command]
+pub fn workspace_close(
+    workspaces: State<'_, Workspaces>,
+    agents: State<'_, Agents>,
+    terminals: State<'_, Terminals>,
+) {
+    if let Some(root) = workspaces.root() {
+        agents.stop_in(&terminals, &root);
+    }
+    workspaces.close();
+}
+
+/// Where the folder picker starts for `/cd <start>`: the folder itself if it
+/// exists, else the nearest folder above it that does. `~` is `home`; a
+/// relative path is inside `home`. `None` for anything unusable.
+fn picker_start(start: &str, home: &Path) -> Option<PathBuf> {
+    let start = start.trim();
+    if start.is_empty() || start.len() > 4096 || start.chars().any(char::is_control) {
+        return None;
+    }
+    let path = match start.strip_prefix('~') {
+        Some("") => home.to_owned(),
+        Some(rest) if rest.starts_with('/') => home.join(rest.trim_start_matches('/')),
+        // `~user` is someone else's home: not supported.
+        Some(_) => return None,
+        None if start.starts_with('/') => PathBuf::from(start),
+        None => home.join(start),
+    };
+    path.ancestors().find(|p| p.is_dir()).map(Path::to_owned)
 }
 
 /// Reopens a folder from the recent list. Only folders in that list, which the
@@ -517,4 +562,30 @@ pub(crate) fn command_error(error: x8ai_workspace::Error) -> CommandError {
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::picker_start;
+
+    #[test]
+    fn the_picker_starts_where_cd_points_or_the_nearest_folder_above() {
+        let temp = std::env::temp_dir().join(format!("x8ai-picker-start-{}", std::process::id()));
+        let home = temp.join("home");
+        std::fs::create_dir_all(home.join("projects/app")).unwrap();
+        let start = |s: &str| picker_start(s, &home);
+        assert_eq!(start("~"), Some(home.clone()));
+        assert_eq!(start("~/projects/app"), Some(home.join("projects/app")));
+        assert_eq!(start("projects/app"), Some(home.join("projects/app")));
+        assert_eq!(
+            start(&home.join("projects").display().to_string()),
+            Some(home.join("projects"))
+        );
+        // A folder that does not exist yet: where it would be.
+        assert_eq!(start("~/projects/new-app"), Some(home.join("projects")));
+        for unusable in ["", "   ", "~root/x", "a\u{7}b"] {
+            assert_eq!(start(unusable), None, "{unusable:?}");
+        }
+        let _ = std::fs::remove_dir_all(temp);
+    }
 }

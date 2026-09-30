@@ -132,6 +132,7 @@ pub fn run() {
             terminal::terminal_is_busy,
             terminal::terminal_close,
             workspace::workspace_open,
+            workspace::workspace_close,
             workspace::workspace_open_recent,
             workspace::workspace_recent,
             workspace::workspace_forget_recent,

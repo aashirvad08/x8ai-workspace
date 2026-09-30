@@ -7,7 +7,7 @@ import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
 import { createNativeClient, type Invoke, type InvokeArgs, type InvokeOptions, SESSION_ID_HEADER } from "./client";
 import { NativeError } from "./errors";
 
-const info: AppInfo = { name: "x8ai Workspace", version: "0.1.0", os: "macos", arch: "aarch64" };
+const info: AppInfo = { name: "x8ai Workspace", version: "0.1.0", os: "macos", arch: "aarch64", userName: "Ada Lovelace" };
 
 interface Call {
   command: string;
@@ -297,5 +297,17 @@ describe("native client skill and catalog commands", () => {
     expect(Object.keys(client).filter((name) => /catalog/i.test(name))).toEqual(["listCatalog"]);
     // A skill is text: nothing runs one.
     expect(Object.keys(client).filter((name) => /skill/i.test(name) && /run|start|exec|install/i.test(name))).toEqual([]);
+  });
+});
+
+describe("native client folder commands", () => {
+  it("passes where the picker starts, and closes the folder", async () => {
+    const { calls, client } = bridge();
+    await client.openWorkspace(() => {}, "~/projects/app");
+    await client.openWorkspace(() => {});
+    await client.closeWorkspace();
+    expect(calls[0]).toMatchObject({ command: "workspace_open", args: { start: "~/projects/app" } });
+    expect(calls[1]).toMatchObject({ command: "workspace_open", args: { start: null } });
+    expect(calls[2]).toMatchObject({ command: "workspace_close", args: undefined });
   });
 });

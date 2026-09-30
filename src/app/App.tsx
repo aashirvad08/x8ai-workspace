@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { EditorArea } from "../editor/EditorArea";
+import { HomeView } from "../home/HomeView";
 import { useStore } from "../lib/useStore";
 import type { NativeClient } from "../native";
 import { TerminalPanel } from "../terminal/TerminalPanel";
@@ -24,6 +25,7 @@ export function App({ workbench, native }: { workbench: Workbench; native: Nativ
   const status = useNativeStatus(native);
   const layout = useStore(workbench.layout);
   const workspace = useStore(workbench.workspace);
+  const { visible: homeVisible } = useStore(workbench.home);
   const windowHeight = useWindowHeight();
   useShortcuts(workbench);
 
@@ -33,8 +35,10 @@ export function App({ workbench, native }: { workbench: Workbench; native: Nativ
 
   return (
     <div className="shell">
+      {/* Under the welcome screen, the workspace keeps running but cannot take focus or clicks. */}
       <div
         className="workbench"
+        inert={homeVisible}
         style={{
           gridTemplateRows: layout.terminalVisible ? `minmax(0, 1fr) auto ${terminalHeight}px` : "minmax(0, 1fr)",
         }}
@@ -75,7 +79,13 @@ export function App({ workbench, native }: { workbench: Workbench; native: Nativ
           onHide={() => workbench.layout.setTerminalVisible(false)}
         />
       </div>
-      <StatusBar status={status} workspace={workspace} onTrust={(trusted) => void workbench.setTrust(trusted)} />
+      {homeVisible && <HomeView home={workbench.home} recent={workbench.recent} workspace={workbench.workspace} actions={workbench} />}
+      <StatusBar
+        status={status}
+        workspace={workspace}
+        onHome={() => workbench.showHome()}
+        onTrust={(trusted) => void workbench.setTrust(trusted)}
+      />
       <NotificationList notifications={workbench.notifications} />
       <PickerView picker={workbench.picker} onOpenFile={openFile} onOpenWorkspace={openRecent} />
       <DialogHost dialogs={workbench.dialogs} />

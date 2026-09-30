@@ -89,7 +89,7 @@ function fakeNative() {
   };
   const notFound = (path: string) => new NativeError("x", "notFound", `"${path}" does not exist`);
   const native: NativeClient = {
-    getAppInfo: async () => ({ name: "x8ai", version: "0", os: "macos", arch: "aarch64" }),
+    getAppInfo: async () => ({ name: "x8ai", version: "0", os: "macos", arch: "aarch64", userName: "Ada Lovelace" }),
     subscribeApp: async (listener) => void (state.appListener = listener),
     setUnsavedChanges: async (unsaved) => void (state.unsaved = unsaved),
     quit: async () => void (state.quit = true),
@@ -100,13 +100,18 @@ function fakeNative() {
     ackTerminal: async () => {},
     closeTerminal: async () => {},
     isTerminalBusy: async (id) => state.busy.has(id),
-    openWorkspace: async (listener) => {
+    openWorkspace: async (listener, start) => {
+      calls.push(`pick${start ? ` from ${start}` : ""}`);
       if (!state.pickResult) return null;
       state.diskListener = listener;
       const info = { ...state.pickResult, trusted: state.trusted.has(state.pickResult.root) };
       state.open = info;
       remember(info);
       return info;
+    },
+    closeWorkspace: async () => {
+      calls.push("closeWorkspace");
+      state.open = null;
     },
     openRecentWorkspace: async (root, listener) => {
       calls.push(`openRecent ${root}`);
@@ -1242,5 +1247,131 @@ describe("Workbench shortcuts", () => {
       .filter((c) => c.shortcut)
       .map((c) => `${c.when ?? "any"} ${JSON.stringify(c.shortcut)}`);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+describe("Workbench welcome", () => {
+  const home = (workbench: Workbench) => workbench.home.get();
+
+  it("starts on the welcome screen, with the last folder reopened behind it", async () => {
+    const { native, state } = fakeNative();
+    state.recent = [{ root: "/Users/me/project", name: "project", available: true }];
+    const workbench = new Workbench(native);
+    await workbench.start();
+    await settle();
+    expect(home(workbench).visible).toBe(true);
+    expect(workbench.workspace.get()?.root).toBe("/Users/me/project");
+    expect(workbench.home.name()).toBe("Ada Lovelace");
+
+    workbench.leaveHome();
+    expect(home(workbench).visible).toBe(false);
+    const show = workbench.commands().find((c) => c.id === "view.home")!;
+    expect(show.shortcut).toMatchObject({ key: "h", meta: true, shift: true });
+    show.run();
+    expect(home(workbench).visible).toBe(true);
+    // Nothing typed: back to the workspace as it is.
+    await workbench.runHomeCommand("   ");
+    expect(home(workbench).visible).toBe(false);
+  });
+
+  it("/cd opens a recent space at once, and the welcome screen closes", async () => {
+    const { workbench, state } = await opened();
+    state.recent.push({ root: "/Users/me/other", name: "other", available: true });
+    await workbench.start();
+    workbench.showHome();
+    await workbench.runHomeCommand("/cd other");
+    expect(state.calls).toContain("openRecent /Users/me/other");
+    expect(workbench.workspace.get()?.root).toBe("/Users/me/other");
+    expect(home(workbench).visible).toBe(false);
+    // The space already open: just back to it.
+    workbench.showHome();
+    await workbench.runHomeCommand("/cd /Users/me/other");
+    expect(state.calls.filter((c) => c === "openRecent /Users/me/other")).toHaveLength(1);
+    expect(home(workbench).visible).toBe(false);
+  });
+
+  it("/cd to a folder that is not a space yet opens the picker there, and only the user opens it", async () => {
+    const { workbench, state } = await opened();
+    workbench.showHome();
+    state.pickResult = null;
+    await workbench.runHomeCommand("/cd ~/projects/new");
+    expect(state.calls).toContain("pick from ~/projects/new");
+    expect(workbench.workspace.get()?.name).toBe("project");
+    expect(home(workbench)).toMatchObject({ visible: true, message: { tone: "info" } });
+    expect(home(workbench).message?.text).toContain("not one of your spaces yet");
+
+    state.pickResult = { root: "/Users/me/projects/new", name: "new", trusted: false };
+    await workbench.runHomeCommand("/cd ~/projects/new");
+    expect(workbench.workspace.get()?.root).toBe("/Users/me/projects/new");
+    expect(home(workbench).visible).toBe(false);
+
+    // /cd alone is the picker from its usual place.
+    workbench.showHome();
+    await workbench.runHomeCommand("/cd");
+    expect(state.calls.at(-1)).toBe("pick");
+  });
+
+  it("/cd that matches several spaces asks for more of the path", async () => {
+    const { workbench, state } = await opened();
+    state.recent.push({ root: "/Users/me/a/app", name: "app", available: true }, { root: "/Users/me/b/app", name: "app", available: true });
+    await workbench.start();
+    workbench.showHome();
+    await workbench.runHomeCommand("/cd app");
+    expect(home(workbench).message).toMatchObject({ tone: "error" });
+    expect(home(workbench).message?.text).toContain("/Users/me/a/app, /Users/me/b/app");
+    expect(workbench.workspace.get()?.name).toBe("project");
+  });
+
+  it("/home closes the folder: no folder, a shell at home", async () => {
+    const { workbench, state } = await opened();
+    workbench.showHome();
+    const tabs = workbench.terminals.get().tabs.length;
+    await workbench.runHomeCommand("/home");
+    expect(state.calls).toContain("closeWorkspace");
+    expect(workbench.workspace.get()).toBeNull();
+    expect(workbench.explorer.get().listings.size).toBe(0);
+    expect(workbench.terminals.get().tabs).toHaveLength(tabs + 1);
+    expect(home(workbench).visible).toBe(false);
+    // With no folder open, /home just shows the workspace.
+    workbench.showHome();
+    await workbench.runHomeCommand("/home");
+    expect(state.calls.filter((c) => c === "closeWorkspace")).toHaveLength(1);
+    expect(home(workbench).visible).toBe(false);
+  });
+
+  it("/home asks before stopping a running agent, and a no keeps the folder", async () => {
+    const { workbench } = await opened();
+    await workbench.agents.load();
+    await workbench.setTrust(true);
+    workbench.launchAgent("claude-code");
+    await settle();
+    await settle();
+    started(workbench, workbench.terminals.agentPanes("claude-code")[0]!.key, 12);
+    workbench.showHome();
+
+    const declined = workbench.runHomeCommand("/home");
+    await answer(workbench, "cancel");
+    await declined;
+    expect(workbench.workspace.get()?.name).toBe("project");
+    expect(home(workbench).visible).toBe(true);
+
+    const closing = workbench.runHomeCommand("/home");
+    await answer(workbench, "stop");
+    await closing;
+    expect(workbench.workspace.get()).toBeNull();
+    expect(workbench.terminals.agentPanes("claude-code")).toEqual([]);
+  });
+
+  it("/name changes the greeting, and anything else is explained", async () => {
+    const { workbench } = await opened();
+    workbench.showHome();
+    await workbench.runHomeCommand("/name Countess of Lovelace");
+    expect(workbench.home.name()).toBe("Countess of Lovelace");
+    await workbench.runHomeCommand("/name");
+    expect(workbench.home.name()).toBe("Ada Lovelace");
+    await workbench.runHomeCommand("ls -la");
+    expect(home(workbench).message).toMatchObject({ tone: "error" });
+    expect(home(workbench).message?.text).toContain("/cd <folder>");
+    expect(home(workbench).visible).toBe(true);
   });
 });

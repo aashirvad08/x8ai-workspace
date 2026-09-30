@@ -4,12 +4,16 @@ import type { NativeStatus } from "./useNativeStatus";
 interface Props {
   status: NativeStatus;
   workspace: WorkspaceInfo | null;
+  onHome: () => void;
   onTrust: (trusted: boolean) => void;
 }
 
-export function StatusBar({ status, workspace, onTrust }: Props) {
+export function StatusBar({ status, workspace, onHome, onTrust }: Props) {
   return (
     <footer className={status.state === "failed" ? "statusbar statusbar-error" : "statusbar"}>
+      <button type="button" className="statusbar-home" title="Welcome (⇧⌘H)" onClick={onHome}>
+        ⌂ Welcome
+      </button>
       <Connection status={status} />
       <span className="statusbar-spacer" />
       {workspace && (
