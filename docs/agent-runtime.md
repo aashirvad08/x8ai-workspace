@@ -158,6 +158,17 @@ Refresh):
   shell's own state (`PWD`, `SHLVL`, …), plus the terminal variables every session
   gets (`TERM=xterm-256color`, `COLORTERM`, `TERM_PROGRAM`, `LANG` if unset).
   Nothing from the app's own environment is added.
+- One variable is left out: `CLAUDE_CODE_CHILD_SESSION`. Claude Code sets it (with
+  `CLAUDECODE`, its session id and the like) in the environment of every process
+  it starts. When the app itself is started from inside a Claude Code session
+  (`pnpm tauri dev` or `open` run there; macOS gives an opened app its caller's
+  environment), the app inherits it, the login shell inherits it from the app,
+  and so would the agent. A Claude Code that finds it takes itself for that
+  session's child and saves no transcript ("Transcript saving is off — inherited
+  CLAUDE_CODE_CHILD_SESSION marker"). An agent the app launches is a session of
+  its own, so the marker stops at the agent's process (`plan`, in
+  `crates/agents/src/runtime.rs`). The other variables pass as before, and the
+  app's own terminals keep the environment the app was started with.
 - If the environment cannot be read, agents are looked up with the app's own
   environment and the Agents view says why.
 

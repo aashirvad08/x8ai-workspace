@@ -122,9 +122,22 @@ pub enum Denied {
     NotApproved { name: String, workspace: PathBuf },
 }
 
+/// Claude Code sets this, with `CLAUDECODE` and its session id, in the
+/// environment of every process it starts, and a Claude Code that finds it
+/// takes itself for that session's child: it saves no transcript ("Transcript
+/// saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker"). It reaches
+/// agents when the app itself was started from inside a Claude Code session
+/// (`pnpm tauri dev`, or `open`, run there: macOS gives an opened app its
+/// caller's environment), through the login shell, which inherits the app's
+/// environment as a terminal does. An agent the app launches is a session of
+/// its own, not a child of whatever started the app, so this one marker is not
+/// passed on. Everything else is, as before.
+const CLAUDE_CODE_CHILD_SESSION: &str = "CLAUDE_CODE_CHILD_SESSION";
+
 /// Works out how `definition` would start in `workspace` with the user's login
 /// `environment`: the executable is looked up on that environment's `PATH`, and the
-/// definition's own variables are added to it. The agent uses its own model
+/// definition's own variables are added to it. An inherited
+/// `CLAUDE_CODE_CHILD_SESSION` marker is left out. The agent uses its own model
 /// configuration; [`configure`](crate::adapter::configure) points it at a
 /// provider instead.
 pub fn plan(
@@ -143,7 +156,11 @@ pub fn plan(
             program: launch.program.clone(),
         }
     })?;
-    let mut env = environment.to_vec();
+    let mut env: Vec<(String, String)> = environment
+        .iter()
+        .filter(|(name, _)| name != CLAUDE_CODE_CHILD_SESSION)
+        .cloned()
+        .collect();
     for extra in &launch.env {
         let value = match &extra.value {
             EnvValue::Literal(value) => value.clone(),

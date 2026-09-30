@@ -525,3 +525,121 @@ fn a_session_runs_only_the_agent_and_workspace_it_was_made_for() {
         Err(RunError::OutsideWorkspace)
     );
 }
+
+/// Stands in for `claude`: reports whether it would take itself for a child
+/// session, and what else it got.
+const FAKE_CLAUDE: &str = r#"#!/bin/sh
+trap 'echo "interrupted"; exit 130' INT
+echo "cwd=$(pwd)"
+echo "child-session=${CLAUDE_CODE_CHILD_SESSION-absent}"
+echo "claudecode=${CLAUDECODE-absent}"
+echo "profile=${FROM_PROFILE-absent}"
+echo "path=$PATH"
+if [ -t 0 ] && [ -t 1 ]; then echo "tty=yes"; else echo "tty=no"; fi
+echo "ready"
+while read -r line; do echo "got:$line"; done
+"#;
+
+fn claude_code() -> AgentDefinition {
+    x8ai_agents::builtin()
+        .into_iter()
+        .find(|a| a.id.as_str() == "claude-code")
+        .unwrap()
+}
+
+#[test]
+fn the_child_session_marker_is_the_only_variable_left_out_of_an_agents_environment() {
+    let f = fixture();
+    let claude = f.bin.join("claude");
+    fs::write(&claude, FAKE_CLAUDE).unwrap();
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+    // The login environment of an app started from inside a Claude Code session.
+    let mut inherited = f.environment();
+    inherited.push(("CLAUDE_CODE_CHILD_SESSION".into(), "1".into()));
+    inherited.push(("CLAUDECODE".into(), "1".into()));
+    let launch = plan(&claude_code(), &inherited, &f.workspace).unwrap();
+
+    assert_eq!(launch.program, claude);
+    assert_eq!(launch.workspace, f.workspace);
+    let expected: Vec<_> = inherited
+        .iter()
+        .filter(|(name, _)| name != "CLAUDE_CODE_CHILD_SESSION")
+        .cloned()
+        .collect();
+    assert_eq!(
+        launch.env, expected,
+        "nothing else is added, removed or reordered"
+    );
+    // It is not what an approval covers, so approvals are unchanged by it.
+    let without = plan(&claude_code(), &f.environment(), &f.workspace).unwrap();
+    assert_eq!(launch.approval(), without.approval());
+}
+
+#[test]
+fn claude_code_launched_by_the_app_is_not_a_child_of_the_session_that_started_the_app() {
+    let mut f = fixture();
+    let claude = f.bin.join("claude");
+    fs::write(&claude, FAKE_CLAUDE).unwrap();
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+    // A login shell that inherited Claude Code's markers from the app, as it does
+    // when the app was started from a Claude Code session, and a profile that
+    // puts `claude` on the PATH.
+    let home = f.workspace.parent().unwrap().join("home");
+    fs::create_dir(&home).unwrap();
+    fs::write(
+        home.join(".profile"),
+        format!(
+            "export PATH=\"{}:$PATH\"\nexport FROM_PROFILE=yes\n",
+            f.bin.display()
+        ),
+    )
+    .unwrap();
+    let shell = f.bin.join("inheriting-shell");
+    fs::write(
+        &shell,
+        "#!/bin/sh\nexport CLAUDE_CODE_CHILD_SESSION=1 CLAUDECODE=1\nexec /bin/sh \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+    let login = x8ai_agents::environment::resolve(&shell, &home, TIMEOUT).unwrap();
+    let var = |name| x8ai_agents::environment::var(&login, name);
+    assert_eq!(var("CLAUDE_CODE_CHILD_SESSION"), Some("1"), "inherited");
+
+    let launch = plan(&claude_code(), &login, &f.workspace).unwrap();
+    assert_eq!(launch.program, claude, "found on the login PATH");
+    // Still only with the folder trusted and the agent approved.
+    assert!(matches!(
+        authorize(&launch, &f.trust, &f.approvals),
+        Err(Denied::Untrusted(_))
+    ));
+    f.trust.set(&launch.workspace, true).unwrap();
+    assert!(matches!(
+        authorize(&launch, &f.trust, &f.approvals),
+        Err(Denied::NotApproved { .. })
+    ));
+    f.approvals.approve(&launch.approval()).unwrap();
+    let (session, recorder) = f.start(&launch);
+
+    let output = recorder.output();
+    assert!(output.contains("child-session=absent"), "{output}");
+    assert!(
+        output.contains(&format!("cwd={}", f.workspace.display())),
+        "{output}"
+    );
+    assert!(
+        output.contains("claudecode=1"),
+        "other variables are left alone: {output}"
+    );
+    assert!(output.contains("profile=yes"), "{output}");
+    assert!(
+        output.contains(&format!("path={}", var("PATH").unwrap())),
+        "the login PATH: {output}"
+    );
+    assert!(output.contains("tty=yes"), "{output}");
+    // The PTY behaves as for any agent.
+    session.write(b"hello\n".to_vec()).unwrap();
+    recorder.wait_for("got:hello");
+    session.write(vec![0x03]).unwrap();
+    recorder.wait_for("interrupted");
+    assert_eq!(recorder.wait_for_exit().code, 130);
+}
