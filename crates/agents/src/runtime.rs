@@ -131,7 +131,8 @@ pub enum Denied {
 /// caller's environment), through the login shell, which inherits the app's
 /// environment as a terminal does. An agent the app launches is a session of
 /// its own, not a child of whatever started the app, so this one marker is not
-/// passed on. Everything else is, as before.
+/// passed on. Everything else is, as before. (Every terminal leaves it out too,
+/// shells included: `x8ai_pty::CLAUDE_CODE_CHILD_SESSION`.)
 const CLAUDE_CODE_CHILD_SESSION: &str = "CLAUDE_CODE_CHILD_SESSION";
 
 /// Works out how `definition` would start in `workspace` with the user's login

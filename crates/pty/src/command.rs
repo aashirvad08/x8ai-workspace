@@ -5,6 +5,16 @@ use portable_pty::CommandBuilder;
 
 use crate::locale;
 
+/// Claude Code sets this in the environment of every process it starts, and a
+/// Claude Code that finds it takes itself for that session's child: it saves no
+/// transcript ("Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION
+/// marker"). It reaches the app when the app itself was started from inside a
+/// Claude Code session (`pnpm tauri dev` or `open` run there: macOS gives an
+/// opened app its caller's environment). A terminal the app opens is not part of
+/// that session, so no session, shell or agent, gets the marker: `claude` typed
+/// in one starts as a session of its own. Nothing else is removed.
+pub const CLAUDE_CODE_CHILD_SESSION: &str = "CLAUDE_CODE_CHILD_SESSION";
+
 /// What a session runs.
 #[derive(Debug, Clone)]
 pub enum Program {
@@ -106,6 +116,7 @@ impl Program {
         if !names_a_locale && let Some(lang) = locale::user_lang() {
             cmd.env("LANG", lang);
         }
+        cmd.env_remove(CLAUDE_CODE_CHILD_SESSION);
         (cmd, path, cwd)
     }
 }

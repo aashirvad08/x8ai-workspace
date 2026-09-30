@@ -165,10 +165,11 @@ Refresh):
   environment), the app inherits it, the login shell inherits it from the app,
   and so would the agent. A Claude Code that finds it takes itself for that
   session's child and saves no transcript ("Transcript saving is off — inherited
-  CLAUDE_CODE_CHILD_SESSION marker"). An agent the app launches is a session of
-  its own, so the marker stops at the agent's process (`plan`, in
-  `crates/agents/src/runtime.rs`). The other variables pass as before, and the
-  app's own terminals keep the environment the app was started with.
+  CLAUDE_CODE_CHILD_SESSION marker"). An agent the app launches, or `claude`
+  typed in one of its shells, is a session of its own, so the marker stops at
+  every terminal the app starts (`x8ai-pty`, `Program::command`), and at an
+  agent's planned environment (`plan`, in `crates/agents/src/runtime.rs`). The
+  other variables pass as before.
 - If the environment cannot be read, agents are looked up with the app's own
   environment and the Agents view says why.
 

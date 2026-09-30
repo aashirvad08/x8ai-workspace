@@ -559,6 +559,31 @@ fn knows_when_a_job_is_in_the_foreground() {
 }
 
 #[test]
+fn no_terminal_gets_claude_codes_child_session_marker() {
+    // Even in an exact environment that names it; everything else stays.
+    let program = Program::Exec {
+        program: PathBuf::from("/bin/sh"),
+        args: vec![
+            "-c".into(),
+            "echo \"[${CLAUDE_CODE_CHILD_SESSION-absent}|$CLAUDECODE|$KEEP]\"".into(),
+        ],
+        cwd: None,
+        env: Environment::Exactly(vec![
+            ("CLAUDE_CODE_CHILD_SESSION".into(), "1".into()),
+            ("CLAUDECODE".into(), "1".into()),
+            ("KEEP".into(), "yes".into()),
+        ]),
+    };
+    let (_session, recorder) = start(&program);
+    recorder.wait_for_exit();
+    assert!(
+        recorder.output().contains("[absent|1|yes]"),
+        "{:?}",
+        recorder.output()
+    );
+}
+
+#[test]
 fn an_exact_environment_replaces_the_apps() {
     let program = Program::Exec {
         program: PathBuf::from("/bin/sh"),
