@@ -552,7 +552,15 @@ fn knows_when_a_job_is_in_the_foreground() {
 
     type_line(&session, "sleep 30");
     wait_for_foreground_job(&session);
-    session.write(vec![0x03]).unwrap();
+    // A Ctrl+C that lands while the job is still starting (before `sleep` has
+    // the default SIGINT disposition) is lost, which happens on a busy machine:
+    // send it until the job has stopped.
+    let deadline = Instant::now() + TIMEOUT;
+    while session.has_foreground_job() {
+        assert!(Instant::now() < deadline, "the job did not stop");
+        session.write(vec![0x03]).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    }
     type_line(&session, "echo back-$((2 + 2))");
     recorder.wait_for_output("back-4");
     assert!(!session.has_foreground_job());
