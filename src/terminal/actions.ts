@@ -9,4 +9,6 @@ export interface TerminalActions {
   closeTerminalPane(key: number): void;
   /** Asks first if a program is running in any of the tab's panes. */
   closeTerminalTab(key: number): void;
+  /** A model dropped on the terminal: a session of the agent that can use it, after the usual trust and approval. */
+  launchModel(provider: string, model: string): void;
 }

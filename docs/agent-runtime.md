@@ -259,8 +259,8 @@ built-in definitions).
 - **Skills** [built: Phase 8, docs/catalog.md]: the adapter gives the agent its
   session's skills (instructions only): `--append-system-prompt` for Claude Code.
   OpenCode and Codex are unsupported.
-- **More agents:** a definition in `builtin.json` (Codex was added in Phase 8,
-  without an adapter). A future signed remote catalog could deliver more, through
+- **More agents:** a definition in `builtin.json`, and an adapter for what the app
+  should configure (Codex: its model). A future signed remote catalog could deliver more, through
   the runtime and its approvals (ADR 0018).
 - **Structured agents:** a second runtime kind for agents with machine interfaces
   (ACP, headless JSON), reusing definitions, trust and approvals.

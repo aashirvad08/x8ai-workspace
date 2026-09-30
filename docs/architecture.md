@@ -449,8 +449,8 @@ AgentRuntime = AgentDefinition (data) + launch in a Session (Phase 1)
   what each agent actually reads: documented flags, environment variables or inline
   configuration. This is the one place agent-specific code is allowed, isolated
   per agent behind one trait (`AgentAdapter`), looked up by agent id. Claude Code
-  and OpenCode have one; Codex is a built-in definition without one (Phase 8), so
-  it runs with its own configuration only.
+  and OpenCode have one; Codex has one for its model (OpenAI, through its
+  Responses API).
 - **Structured mode** [future, after Phase 4]. Some agents also offer machine
   interfaces: headless JSON streams, local servers, and the Agent Client Protocol
   (ACP). A second runtime kind can use these for richer UI (diff review, tool call

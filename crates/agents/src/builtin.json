@@ -23,10 +23,10 @@
   {
     "id": "codex",
     "name": "Codex",
-    "description": "OpenAI's coding agent for the terminal. It uses its own configuration: the app has no adapter for it.",
+    "description": "OpenAI's coding agent for the terminal.",
     "launch": { "program": "codex" },
     "requirements": [{ "kind": "executable", "program": "codex" }],
-    "capabilities": {},
+    "capabilities": { "modelApis": ["openAiResponses"] },
     "platforms": ["macos", "linux"]
   }
 ]

@@ -335,8 +335,7 @@ supplies a command, a path, a socket or a value.
   check it. A server is exercised only by an approved session.
 - **OpenCode** support is implemented from its documentation and unit-tested, not
   verified against a running OpenCode.
-- **Codex** is a built-in agent definition since Phase 8, with no adapter: it
-  gets no servers.
+- **Codex** has an adapter for its model only: it gets no servers.
 - Duplicate-server resolution inside an agent (the user's own server with the
   same command) follows the agent's rules; the app's are named `x8ai-<id>`.
 - SSE servers, header secrets, and server definitions from a catalog are not

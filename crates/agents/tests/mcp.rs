@@ -247,7 +247,10 @@ fn an_agent_without_mcp_support_gets_nothing_and_says_why() {
     }))
     .unwrap();
     let plan = plan(&codex, &m.shell(), &m.root.join("project")).unwrap();
+    // Codex has an adapter (for models) that gives it no MCP servers.
     let reason = mcp_support("codex", BOTH).unwrap_err();
+    assert!(reason.contains("documented way"), "{reason}");
+    let reason = mcp_support("some-agent", BOTH).unwrap_err();
     assert!(reason.contains("no adapter"), "{reason}");
     let error = attach_mcp(plan.clone(), BOTH, &[stdio("github")]).unwrap_err();
     assert!(

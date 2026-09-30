@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentChanges } from "../contracts/generated/AgentChanges";
 import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
+import type { AgentStatus } from "../contracts/generated/AgentStatus";
 import type { AppEvent } from "../contracts/generated/AppEvent";
 import type { CatalogItem } from "../contracts/generated/CatalogItem";
 import type { DirEntry } from "../contracts/generated/DirEntry";
@@ -79,6 +80,8 @@ function fakeNative() {
       },
     ] as SkillStatus[],
     catalog: [] as CatalogItem[],
+    /** Agents listed after Claude Code. */
+    moreAgents: [] as AgentStatus[],
     appListener: null as ((event: AppEvent) => void) | null,
     diskListener: null as ((event: WorkspaceEvent) => void) | null,
     unsaved: false,
@@ -202,6 +205,7 @@ function fakeNative() {
           skills: { supported: true, reason: null },
           capabilities: { modelApis: ["anthropicMessages"], mcpTransports: ["stdio"] },
         },
+        ...state.moreAgents,
       ],
       environmentProblem: null,
       isolation: state.git
@@ -1373,5 +1377,52 @@ describe("Workbench welcome", () => {
     expect(home(workbench).message).toMatchObject({ tone: "error" });
     expect(home(workbench).message?.text).toContain("/cd <folder>");
     expect(home(workbench).visible).toBe(true);
+  });
+});
+
+describe("Workbench model drop", () => {
+  const codex: AgentStatus = {
+    id: "codex",
+    name: "Codex",
+    description: "",
+    availability: { state: "installed", executable: "/opt/homebrew/bin/codex" },
+    approved: false,
+    providers: [{ provider: "openai", supported: true, reason: null }],
+    mcp: { supported: false, reason: "no" },
+    skills: { supported: false, reason: "no" },
+    capabilities: { modelApis: ["openAiResponses"], mcpTransports: [] },
+  };
+  const openai: ProviderStatus = {
+    id: "openai",
+    name: "OpenAI",
+    description: "",
+    hosting: "hosted",
+    credential: "inKeychain",
+    local: null,
+    models: [{ id: "gpt-6.1-sol", provider: "openai", name: "gpt-6.1-sol", source: "custom", contextWindow: null }],
+  };
+
+  it("opens a dropped model in the agent that can use it, through the usual approval", async () => {
+    const { workbench, state } = await opened();
+    state.moreAgents = [codex];
+    state.providers.push(openai);
+    await workbench.setTrust(true);
+    workbench.launchModel("openai", "gpt-6.1-sol");
+    await settle();
+    await settle();
+    await settle();
+    expect(state.calls).toContain("approve codex openai/gpt-6.1-sol");
+    expect(state.calls).toContain("createSession codex openai/gpt-6.1-sol");
+    expect(workbench.notifications.get().some((n) => n.message.includes("in Codex"))).toBe(true);
+  });
+
+  it("says so when no installed agent can use it, and launches nothing", async () => {
+    const { workbench, state } = await opened();
+    state.providers.push(openai);
+    workbench.launchModel("openai", "gpt-6.1-sol");
+    await settle();
+    await settle();
+    expect(state.calls.filter((c) => c.startsWith("approve") || c.startsWith("createSession"))).toEqual([]);
+    expect(workbench.notifications.get().at(-1)?.message).toContain("No installed agent here can use gpt-6.1-sol");
   });
 });

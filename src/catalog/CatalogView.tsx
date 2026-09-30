@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import type { CatalogItem } from "../contracts/generated/CatalogItem";
+import { setModelDrag } from "../lib/modelDrag";
 import type { CatalogSource } from "../contracts/generated/CatalogSource";
 import type { CatalogStatus } from "../contracts/generated/CatalogStatus";
 import type { McpScopeKind } from "../contracts/generated/McpScopeKind";
@@ -163,8 +164,21 @@ function CatalogRow({
   actions: CatalogActions;
 }) {
   const by = item.details.kind === "model" ? item.details.providerName : item.publisher;
+  const d = item.details;
+  // A model that is ready can be dragged onto the terminal to open it.
+  const draggable = d.kind === "model" && item.status === "configured";
   return (
-    <li className="agent catalog-item" aria-label={`${item.displayName} ${TYPE_LABELS[item.type]}`}>
+    <li
+      className={draggable ? "agent catalog-item catalog-draggable" : "agent catalog-item"}
+      aria-label={`${item.displayName} ${TYPE_LABELS[item.type]}`}
+      draggable={draggable}
+      title={draggable ? "Drag onto the terminal to open it" : undefined}
+      onDragStart={(e) => {
+        if (d.kind !== "model") return;
+        setModelDrag(e.dataTransfer, { provider: d.provider, model: d.model, name: item.displayName });
+        e.dataTransfer.effectAllowed = "copy";
+      }}
+    >
       <button type="button" className="catalog-row" aria-expanded={open} onClick={onToggle}>
         <span className="agent-heading">
           <span className="agent-name">{item.displayName}</span>
@@ -244,9 +258,14 @@ function CatalogDetails({ item, onEditSkill, actions }: { item: CatalogItem; onE
         )}
         {d.kind === "model" &&
           (item.status === "configured" ? (
-            <button type="button" onClick={() => actions.chooseModel(d.provider, d.model)}>
-              Use for the next launch
-            </button>
+            <>
+              <button type="button" onClick={() => actions.launchModel(d.provider, d.model)}>
+                Open in a terminal
+              </button>
+              <button type="button" onClick={() => actions.chooseModel(d.provider, d.model)}>
+                Use for the next launch
+              </button>
+            </>
           ) : (
             <button type="button" onClick={() => actions.configureProvider(d.provider)}>
               Set up {d.providerName}

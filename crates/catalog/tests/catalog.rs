@@ -344,9 +344,10 @@ fn an_agent_is_installed_when_the_runtime_finds_it_and_only_then() {
             .unwrap()
             .contains("does not install programs")
     );
-    assert!(
-        codex.capabilities.is_empty(),
-        "nothing claimed that is not known"
+    // Only what its definition and adapter say: a model, no MCP or skills.
+    assert_eq!(
+        codex.capabilities,
+        ["OpenAI Responses API", "Model chosen in the app"]
     );
     assert_eq!(
         item(&items, "agent.opencode").status,
@@ -510,7 +511,7 @@ fn nothing_the_catalog_returns_holds_a_secret() {
 }
 
 #[test]
-fn agents_without_an_adapter_are_shown_but_offer_nothing_they_cannot_do() {
+fn an_agent_offers_only_what_its_adapter_supports() {
     let m = machine();
     let items = catalog(&m);
     let CatalogDetails::Agent {
@@ -522,7 +523,14 @@ fn agents_without_an_adapter_are_shown_but_offer_nothing_they_cannot_do() {
     else {
         panic!()
     };
-    assert!(providers.is_empty() && !mcp && !skills);
+    assert_eq!(
+        providers
+            .iter()
+            .map(IntegrationId::as_str)
+            .collect::<Vec<_>>(),
+        ["openai"]
+    );
+    assert!(!mcp && !skills);
     let codex = agents(&m)
         .into_iter()
         .find(|a| a.id.as_str() == "codex")

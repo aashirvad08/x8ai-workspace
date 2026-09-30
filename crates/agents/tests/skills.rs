@@ -137,15 +137,18 @@ fn agents_that_cannot_take_skills_are_refused_with_the_reason() {
 }
 
 #[test]
-fn codex_is_a_builtin_agent_found_by_the_runtime_with_no_adapter() {
+fn codex_is_found_by_the_runtime_and_takes_a_model_but_no_mcp_or_skills() {
     let codex = builtin()
         .into_iter()
         .find(|a| a.id.as_str() == "codex")
         .expect("defined");
-    assert!(
-        codex.capabilities.model_apis.is_empty() && codex.capabilities.mcp_transports.is_empty()
+    assert_eq!(
+        codex.capabilities.model_apis,
+        [x8ai_core::model::ProviderApi::OpenAiResponses]
     );
-    assert!(x8ai_agents::adapter::adapter("codex").is_none());
+    assert!(codex.capabilities.mcp_transports.is_empty());
+    assert!(x8ai_agents::adapter::adapter("codex").is_some());
+    assert!(skills_support("codex").is_err());
     let m = machine();
     // Installed means the runtime found its program, nothing else.
     let found = plan(&codex, &m.env(), &m.root.join("project")).unwrap();

@@ -1880,3 +1880,28 @@ kbd {
   border-color: var(--accent);
   color: var(--text);
 }
+
+/* A catalog model dragged onto the terminal */
+
+.catalog-draggable {
+  cursor: grab;
+}
+
+.terminal-panel {
+  position: relative;
+}
+
+.terminal-drop {
+  position: absolute;
+  inset: 8px;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  background: rgb(20 20 20 / 80%);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  pointer-events: none;
+}

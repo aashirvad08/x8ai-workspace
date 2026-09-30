@@ -177,7 +177,7 @@ Through its adapter, for the session only, like models and MCP servers:
 - **OpenCode:** unsupported. It reads extra instructions only from files, and the
   app writes no files for it. Choosing a skill for it is refused, with this
   reason.
-- **Codex:** no adapter (see below). Unsupported.
+- **Codex:** unsupported (see below).
 
 ## Session integration
 
@@ -225,11 +225,14 @@ silently switches to something else:
 
 ## Codex
 
-Codex is now a built-in agent definition (`codex` on the `PATH`), so the
-runtime can find it and the catalog can say whether it is installed. It has no
-adapter: the app cannot give it a model, MCP servers or skills, and it launches
-with its own configuration only, like an agent without an adapter in Phase 6.
-Its global configuration (`~/.codex`) is never read or written.
+Codex is a built-in agent definition (`codex` on the `PATH`), so the runtime
+can find it and the catalog can say whether it is installed. Its adapter gives
+it an OpenAI model for a session (docs/models.md); it takes no MCP servers or
+skills from the app. Its global configuration (`~/.codex`) is never written.
+
+A model whose provider is set up can be dragged from the Catalog onto the
+terminal, or opened with **Open in a terminal**: it opens in the agent that can
+use it, through the usual trust and approval (docs/models.md).
 
 ## Search and filters
 
@@ -325,7 +328,7 @@ attached, changed or removed).
   installed software version is shown only where a system already knows it.
 - No remote catalog, no MCP server definitions to pick from (GitHub, Playwright),
   no signed index: future work, as above.
-- OpenCode and Codex take no skills. Codex has no adapter at all.
+- OpenCode and Codex take no skills, and Codex takes no MCP servers.
 - A skill's suggested tools are informational: the app has no way to restrict an
   agent's tools, and does not pretend to.
 - Skills are passed on Claude Code's command line (`--append-system-prompt`), so
@@ -346,7 +349,7 @@ attached, changed or removed).
   skills a session gets, and a session runs only with exactly what it recorded.
 - `crates/agents/tests/skills.rs`: Claude Code gets skills through
   `--append-system-prompt` and nothing else changes; unsupported agents are
-  refused; Codex is found with no adapter; a session runs only with its recorded
+  refused; Codex is found, takes a model and no MCP or skills; a session runs only with its recorded
   skills; a worktree records skills by reference only.
 - Desktop (`src-tauri/src`): session skill states, which agents are offered
   skills, the catalog JSON with a real key and a real secret in the stores, and

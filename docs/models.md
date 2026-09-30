@@ -155,8 +155,8 @@ pub trait AgentAdapter: Send + Sync {
 ```
 
 The adapter is looked up by agent id in one table (`adapter()`); nothing else
-compares agent ids. An agent without an adapter (Codex, Aider) runs with its own
-configuration only, and the UI offers it no model choice.
+compares agent ids. An agent without an adapter (Aider, for example) runs with
+its own configuration only, and the UI offers it no model choice.
 
 ### Claude Code
 
@@ -213,9 +213,33 @@ running OpenCode.
 
 ### Codex
 
-No adapter. Codex is a built-in definition since Phase 8 (`codex` on the `PATH`),
-so the runtime reports whether it is installed. It runs with its own
-configuration (`~/.codex`), which the app never reads or writes.
+Codex speaks only the OpenAI Responses API (`wire_api = "responses"`; it
+refuses `"chat"`), so it can use OpenAI. It is configured through its
+documented command-line options only, for the run:
+
+- `-c` overrides, which take precedence over `~/.codex/config.toml`, declare a
+  model provider of the app's, `x8ai`: `name`, `base_url` (the provider's
+  endpoint, pinned; a provider in the user's or the project's Codex
+  configuration cannot take the key elsewhere), `wire_api = "responses"`, and
+  `env_key = "X8AI_CODEX_API_KEY"`. Then `model_provider = "x8ai"` selects it.
+- `-m <model>`.
+- The key, in `X8AI_CODEX_API_KEY`, in that session's environment only. The
+  shell's `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_API_KEY`,
+  `OPENAI_ORGANIZATION` and `OPENAI_PROJECT` are removed (ADR 0015).
+
+Codex's files (`~/.codex`) are never written by the app. Without a model chosen
+in the app, Codex runs with its own configuration, as before. MCP servers and
+skills are not supported for it. Verified against Codex 0.153 (a request with
+an invalid key reached `https://api.openai.com/v1/responses` and was refused
+with `invalid_api_key`).
+
+### Opening a model from the Catalog
+
+A model whose provider is set up can be dragged from the Catalog onto the
+terminal, or opened with **Open in a terminal**. It opens in the installed
+agent from the provider's own publisher (Codex for OpenAI, Claude Code for
+Anthropic, as the catalog's metadata says), or else the first installed agent
+that can use it, through the usual trust and approval.
 
 ## Sessions
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentStatus } from "../contracts/generated/AgentStatus";
 import type { ProviderStatus } from "../contracts/generated/ProviderStatus";
-import { modelChoices, Providers } from "./providers";
+import { agentForModel, modelChoices, Providers } from "./providers";
 
 const agent: AgentStatus = {
   id: "claude-code",
@@ -50,6 +50,53 @@ describe("model choices", () => {
 
   it("offers nothing for an agent without an adapter", () => {
     expect(modelChoices({ ...agent, providers: [] }, [provider("anthropic", "inKeychain", ["x"])])).toEqual([]);
+  });
+});
+
+describe("the agent a dropped model opens in", () => {
+  const codex: AgentStatus = {
+    ...agent,
+    id: "codex",
+    name: "Codex",
+    providers: [
+      { provider: "anthropic", supported: false, reason: "no" },
+      { provider: "openai", supported: true, reason: null },
+    ],
+  };
+  const opencode: AgentStatus = {
+    ...agent,
+    id: "opencode",
+    name: "OpenCode",
+    providers: [
+      { provider: "anthropic", supported: true, reason: null },
+      { provider: "openai", supported: true, reason: null },
+    ],
+  };
+  const providers = [provider("anthropic", "inKeychain", ["claude-sonnet-5"]), provider("openai", "inKeychain", ["gpt-6.1-sol"])];
+  const publishers: Record<string, string> = {
+    "provider.anthropic": "Anthropic",
+    "provider.openai": "OpenAI",
+    "agent.claude-code": "Anthropic",
+    "agent.codex": "OpenAI",
+  };
+  const publisherOf = (id: string) => publishers[id] ?? null;
+
+  it("prefers the agent from the provider's own publisher", () => {
+    const all = [agent, opencode, codex];
+    expect(agentForModel(all, providers, { provider: "openai", model: "gpt-6.1-sol" }, publisherOf)?.id).toBe("codex");
+    expect(agentForModel(all, providers, { provider: "anthropic", model: "claude-sonnet-5" }, publisherOf)?.id).toBe("claude-code");
+  });
+
+  it("otherwise the first installed agent that can use it, and none without one", () => {
+    const notInstalled = { ...codex, availability: { state: "notInstalled" as const, program: "codex" } };
+    expect(agentForModel([agent, opencode, notInstalled], providers, { provider: "openai", model: "gpt-6.1-sol" }, publisherOf)?.id).toBe(
+      "opencode",
+    );
+    expect(agentForModel([agent, notInstalled], providers, { provider: "openai", model: "gpt-6.1-sol" }, publisherOf)).toBeNull();
+    // A model the provider does not list, or a provider without its key.
+    expect(agentForModel([codex], providers, { provider: "openai", model: "gpt-other" }, publisherOf)).toBeNull();
+    const noKey = [provider("openai", "missing", ["gpt-6.1-sol"])];
+    expect(agentForModel([codex], noKey, { provider: "openai", model: "gpt-6.1-sol" }, publisherOf)).toBeNull();
   });
 });
 

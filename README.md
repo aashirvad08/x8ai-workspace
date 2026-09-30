@@ -41,7 +41,7 @@ and it doesn't favor any vendor.
 | --- | --- | --- | --- |
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic, OpenRouter, Ollama | ✓ | ✓ |
 | [OpenCode](https://opencode.ai) | Anthropic, OpenAI, Google, OpenRouter, Ollama | ✓ | — |
-| [Codex](https://github.com/openai/codex) | uses its own settings | — | — |
+| [Codex](https://github.com/openai/codex) | OpenAI | — | — |
 
 Any agent can also use its own configuration, exactly as it does in your
 terminal. You install the agents yourself; the app finds them on your `PATH`.
@@ -176,6 +176,10 @@ Open **Catalog** (**⇧⌘K**) to see everything in one place. Search it, filter
 by category (Agents, Models, MCP, Skills) or by status, and open an item to see
 its details and what it needs.
 
+- **Drag a model onto the terminal** (or click **Open in a terminal**) to open it
+  right away, in the agent that can use it: an OpenAI model in Codex, an
+  Anthropic one in Claude Code. The launch dialog appears as usual. A model can
+  be dragged once its provider's key is saved.
 - **Use for the next launch** and **Attach to the next launch** fill in the
   agent's card for you. Nothing starts until you click **Launch**.
 - **New skill…** creates your own skill: a name and instructions, which are plain

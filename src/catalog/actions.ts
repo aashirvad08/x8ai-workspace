@@ -10,6 +10,8 @@ export interface CatalogActions {
   openAgent(agent: string): void;
   /** Chooses the model for the next launch of each agent that can use it. */
   chooseModel(provider: string, model: string): void;
+  /** Opens a session with the model now, in the agent that can use it (as dropping it on the terminal does). */
+  launchModel(provider: string, model: string): void;
   /** Shows the provider in the Models view. */
   configureProvider(provider: string): void;
   /** Attaches a session MCP server to the next launch of each agent that can use it. */

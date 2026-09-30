@@ -27,6 +27,7 @@
 //! mechanism, or refuses. A skill is text; it changes nothing else.
 
 mod claude_code;
+mod codex;
 mod opencode;
 
 use std::fmt;
@@ -43,6 +44,7 @@ use x8ai_core::skill::SkillRef;
 use x8ai_secrets::SecretValue;
 
 pub use claude_code::ClaudeCode;
+pub use codex::Codex;
 pub use opencode::OpenCode;
 
 use crate::runtime::{LaunchPlan, ProviderRoute};
@@ -218,10 +220,10 @@ pub trait AgentAdapter: Send + Sync {
     }
 }
 
-static ADAPTERS: [&dyn AgentAdapter; 2] = [&ClaudeCode, &OpenCode];
+static ADAPTERS: [&dyn AgentAdapter; 3] = [&ClaudeCode, &OpenCode, &Codex];
 
-/// The adapter for the agent with this id. Codex and other agents have none yet:
-/// they run with their own configuration only.
+/// The adapter for the agent with this id. Agents without one run with their own
+/// configuration only.
 pub fn adapter(agent: &str) -> Option<&'static dyn AgentAdapter> {
     ADAPTERS.iter().copied().find(|a| a.agent() == agent)
 }

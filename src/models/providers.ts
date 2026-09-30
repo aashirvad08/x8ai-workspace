@@ -73,3 +73,26 @@ export function modelChoices(agent: AgentStatus, providers: readonly ProviderSta
     }));
   });
 }
+
+/**
+ * The installed agent a model opens in, when dropped on the terminal: among the
+ * installed agents that can use it, the one from the provider's own publisher
+ * (Codex for OpenAI, Claude Code for Anthropic, as the catalog says), else the
+ * first. `null` if none can.
+ */
+export function agentForModel(
+  agents: readonly AgentStatus[],
+  providers: readonly ProviderStatus[],
+  selection: ModelSelection,
+  publisherOf: (id: string) => string | null,
+): AgentStatus | null {
+  const able = agents.filter(
+    (agent) =>
+      agent.availability.state === "installed" &&
+      modelChoices(agent, providers).some(
+        (c) => c.selection.provider === selection.provider && c.selection.model === selection.model,
+      ),
+  );
+  const publisher = publisherOf(`provider.${selection.provider}`);
+  return (publisher && able.find((agent) => publisherOf(`agent.${agent.id}`) === publisher)) || able[0] || null;
+}

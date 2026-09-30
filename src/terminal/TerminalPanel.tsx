@@ -1,5 +1,6 @@
-import { type KeyboardEvent, type PointerEvent, type RefObject, useMemo, useRef } from "react";
+import { type DragEvent, type KeyboardEvent, type PointerEvent, type RefObject, useMemo, useRef, useState } from "react";
 
+import { carriesModel, readModelDrag } from "../lib/modelDrag";
 import { useStore } from "../lib/useStore";
 import type { AgentApi, TerminalApi } from "../native";
 import type { TerminalActions } from "./actions";
@@ -31,9 +32,39 @@ export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Pr
     .flatMap((tab) => layouts.get(tab.key)!.panes.map((p) => ({ ...p, tab })))
     .sort((a, b) => a.key - b.key);
   const activeTab = tabs.find((tab) => tab.key === active);
+  // A model from the catalog, dragged over: dropping it opens it in a terminal of its own.
+  const [dropping, setDropping] = useState(false);
+  const overModel = (e: DragEvent) => {
+    if (!carriesModel(e.dataTransfer)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setDropping(true);
+  };
+  const dropModel = (e: DragEvent) => {
+    setDropping(false);
+    const dragged = readModelDrag(e.dataTransfer);
+    if (!dragged) return;
+    e.preventDefault();
+    actions.launchModel(dragged.provider, dragged.model);
+  };
 
   return (
-    <section className="terminal-panel" aria-label="Terminal" hidden={hidden}>
+    <section
+      className="terminal-panel"
+      aria-label="Terminal"
+      hidden={hidden}
+      onDragEnterCapture={overModel}
+      onDragOverCapture={overModel}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false);
+      }}
+      onDropCapture={dropModel}
+    >
+      {dropping && (
+        <div className="terminal-drop" aria-hidden>
+          Drop to open the model in a new terminal
+        </div>
+      )}
       <header className="panel-header">
         <div className="panel-tabs" role="tablist">
           {tabs.map((tab) => {

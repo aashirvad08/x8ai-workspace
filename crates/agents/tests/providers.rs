@@ -90,7 +90,7 @@ fn machine() -> Machine {
     let root = fs::canonicalize(temp.path()).unwrap();
     let bin = root.join("bin");
     fs::create_dir_all(&bin).unwrap();
-    for program in ["claude", "opencode"] {
+    for program in ["claude", "opencode", "codex"] {
         fs::write(bin.join(program), FAKE_CLAUDE).unwrap();
         fs::set_permissions(bin.join(program), fs::Permissions::from_mode(0o755)).unwrap();
     }
@@ -279,6 +279,11 @@ fn support_is_decided_by_the_agents_adapter_and_says_why_not() {
         ("opencode", "google", true),
         ("opencode", "openrouter", true),
         ("opencode", "ollama", true),
+        ("codex", "anthropic", false),
+        ("codex", "openai", true),
+        ("codex", "google", false),
+        ("codex", "openrouter", false),
+        ("codex", "ollama", false),
     ];
     for (agent, provider_id, supported) in expected {
         let result = support(agent, &provider(provider_id));
@@ -290,6 +295,8 @@ fn support_is_decided_by_the_agents_adapter_and_says_why_not() {
     }
     let reason = support("claude-code", &provider("openai")).unwrap_err();
     assert!(reason.contains("Anthropic Messages API"), "{reason}");
+    let reason = support("codex", &provider("anthropic")).unwrap_err();
+    assert!(reason.contains("OpenAI Responses API"), "{reason}");
 
     let m = machine();
     let error = configure(
@@ -407,6 +414,59 @@ fn opencode_gets_the_model_and_a_pinned_endpoint_in_its_inline_configuration() {
         ollama["models"]["qwen3-coder:30b"]["name"],
         "qwen3-coder:30b"
     );
+}
+
+#[test]
+fn codex_gets_the_model_and_a_pinned_provider_for_this_run_only() {
+    let m = machine();
+    let plan = m.configured("codex", "openai", "gpt-6.1-sol");
+    let provider_arg = |key: &str, value: &str| format!("model_providers.x8ai.{key}=\"{value}\"");
+    assert_eq!(
+        plan.extra_args,
+        [
+            "-c".to_owned(),
+            provider_arg("name", "OpenAI"),
+            "-c".to_owned(),
+            provider_arg("base_url", "https://api.openai.com/v1"),
+            "-c".to_owned(),
+            provider_arg("env_key", "X8AI_CODEX_API_KEY"),
+            "-c".to_owned(),
+            provider_arg("wire_api", "responses"),
+            "-c".to_owned(),
+            "model_provider=\"x8ai\"".to_owned(),
+            "-m".to_owned(),
+            "gpt-6.1-sol".to_owned(),
+        ]
+    );
+    // The key is in the app's variable, never an argument; the shell's is gone.
+    assert_eq!(var(&plan, "X8AI_CODEX_API_KEY"), Some(TEST_KEY));
+    assert!(plan.extra_args.iter().all(|a| !a.contains(TEST_KEY)));
+    assert_eq!(var(&plan, "OPENAI_API_KEY"), None);
+    assert_eq!(
+        var(&plan, "ANTHROPIC_API_KEY"),
+        Some(SHELL_KEY),
+        "not Codex's"
+    );
+    assert_eq!(var(&plan, "EDITOR"), Some("vim"));
+    let route = plan.provider.clone().unwrap();
+    assert_eq!(
+        (route.provider.as_str(), route.endpoint.as_str()),
+        ("openai", "https://api.openai.com/v1")
+    );
+    match &plan.configuration {
+        SessionConfiguration::App {
+            overridden_shell_variables,
+            model,
+            ..
+        } => {
+            assert_eq!(model, "gpt-6.1-sol");
+            assert_eq!(overridden_shell_variables, &["OPENAI_API_KEY".to_owned()]);
+        }
+        other => panic!("{other:?}"),
+    }
+    // Without the app's model, Codex keeps its own configuration.
+    assert!(m.plan("codex").extra_args.is_empty());
+    assert_eq!(var(&m.plan("codex"), "OPENAI_API_KEY"), Some(SHELL_KEY));
 }
 
 #[test]

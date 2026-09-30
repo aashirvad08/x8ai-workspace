@@ -23,7 +23,7 @@ import { Value } from "../lib/store";
 import type { McpActions } from "../mcp/actions";
 import { McpServers, mcpChoices } from "../mcp/servers";
 import type { ModelActions } from "../models/actions";
-import { modelChoices, Providers } from "../models/providers";
+import { agentForModel, modelChoices, Providers } from "../models/providers";
 import { Skills, skillChoices } from "../skills/skills";
 import { type NativeClient, NativeError } from "../native";
 import type { TerminalActions } from "../terminal/actions";
@@ -753,6 +753,27 @@ export class Workbench
       if (choice) this.drafts.setModel(agent.id, choice.selection);
       return choice !== undefined;
     });
+  }
+
+  launchModel(provider: string, model: string): void {
+    void this.#launchModel({ provider, model });
+  }
+
+  async #launchModel(selection: ModelSelection): Promise<void> {
+    await Promise.all([this.agents.load(), this.providers.load()]);
+    const name = this.catalog.find(`model.${selection.provider}.${selection.model}`)?.displayName ?? selection.model;
+    const agent = agentForModel(
+      this.agents.get().agents ?? [],
+      this.providers.get().providers ?? [],
+      selection,
+      (id) => this.catalog.find(id)?.publisher ?? null,
+    );
+    if (!agent) {
+      this.notifications.info(`No installed agent here can use ${name}. Install one that can (see the Catalog), or save its provider's key in Models.`);
+      return;
+    }
+    this.notifications.info(`Opening ${name} in ${agent.name}.`);
+    await this.#launchAgent(agent.id, selection, [], []);
   }
 
   configureProvider(_provider: string): void {
