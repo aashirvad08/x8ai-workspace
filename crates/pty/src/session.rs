@@ -1,4 +1,5 @@
 use std::io::{ErrorKind, Read, Write};
+use std::os::fd::RawFd;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -40,10 +41,10 @@ const MIN_SEND_INTERVAL: Duration = Duration::from_millis(4);
 
 /// After the process exits, its output counts as drained once the PTY reports end
 /// of output. A background process that keeps the terminal open prevents end of
-/// output, so the reader also counts as drained once it has waited this long with
-/// nothing to read, measured from the exit: output written just before the exit
-/// wakes the reader well within it. The exit is reported only then, so it never
-/// overtakes output.
+/// output, so the reader also counts as drained once it has waited this long,
+/// measured from the exit, and the PTY has nothing waiting to be read: a reader
+/// that is merely slow to be scheduled does not count as having drained it. The
+/// exit is reported only then, so it never overtakes output.
 const DRAIN_QUIET_PERIOD: Duration = Duration::from_millis(500);
 
 /// Concurrent `openpty(3)` calls fail intermittently on macOS (observed as
@@ -94,6 +95,9 @@ pub struct Session {
 struct Shared {
     state: Mutex<State>,
     changed: Condvar,
+    /// The PTY's master side, to ask whether output is waiting. Open for as long
+    /// as the session is not closed; only used then (see `drained`).
+    master_fd: Option<RawFd>,
 }
 
 #[derive(Default)]
@@ -135,16 +139,32 @@ impl Shared {
             .0
     }
 
-    fn drained(state: &State) -> bool {
+    fn drained(&self, state: &State) -> bool {
         if state.eof {
             return true;
         }
         match (state.exited_at, state.reading_since) {
             // Waiting since before the exit does not count: output written just
             // before it may not have woken the reader yet.
-            (Some(exited), Some(waiting)) => waiting.max(exited).elapsed() >= DRAIN_QUIET_PERIOD,
+            (Some(exited), Some(waiting)) => {
+                waiting.max(exited).elapsed() >= DRAIN_QUIET_PERIOD && !self.output_waiting()
+            }
             _ => false,
         }
+    }
+
+    /// Whether the PTY has output (or end of output) the reader has not read yet.
+    /// When this cannot be checked, the quiet period alone decides, as before.
+    fn output_waiting(&self) -> bool {
+        let Some(fd) = self.master_fd else {
+            return false;
+        };
+        let mut pfd = [filedescriptor::pollfd {
+            fd,
+            events: filedescriptor::POLLIN,
+            revents: 0,
+        }];
+        matches!(filedescriptor::poll(&mut pfd, Some(Duration::ZERO)), Ok(n) if n > 0)
     }
 
     fn update(&self, change: impl FnOnce(&mut State)) {
@@ -188,13 +208,20 @@ impl Session {
             .slave
             .spawn_command(command)
             .map_err(|e| spawn_error(&e))?;
-        // Only the child may hold the slave side; if we kept it open, reading would
-        // never report end of output.
-        drop(pair.slave);
+        // The slave side stays open here until the process has exited, then closes
+        // (see the waiter). Otherwise the process's own exit could be the last
+        // close of the terminal, and macOS discards output not yet read when the
+        // exiting session leader closes it: a short-lived program's output was lost
+        // whenever the reader was slow to run. Closed afterwards, the last close is
+        // ours, it waits for the output to be read, and end of output follows.
+        let slave = pair.slave;
 
         let pid = child.process_id();
         let mut killer = child.clone_killer();
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared {
+            master_fd: pair.master.as_raw_fd(),
+            ..Shared::default()
+        });
         let (input, input_rx) = mpsc::channel();
 
         let started = (|| {
@@ -235,6 +262,8 @@ impl Session {
                         s.exit = Some(exit);
                         s.exited_at = Some(Instant::now());
                     });
+                    // Now end of output can come, once what is left has been read.
+                    drop(slave);
                 }
             })
         })();
@@ -460,7 +489,7 @@ fn send_loop(shared: &Shared, events: &dyn SessionEvents) {
                 continue;
             }
             match &state.exit {
-                Some(exit) if Shared::drained(&state) => {
+                Some(exit) if shared.drained(&state) => {
                     let exit = exit.clone();
                     drop(state);
                     events.exited(exit);

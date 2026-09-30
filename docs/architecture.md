@@ -223,14 +223,18 @@ fit ─▶ terminal_resize ─▶ TIOCSWINSZ (the foreground process gets SIGWIN
   `ACK_BYTES` (64 KiB) of rendered output. Batches are coalesced at least 4 ms
   apart. Memory per session is bounded.
 - **Exit is reported after the last output:** when the PTY reports end of output,
-  or when the reader has been idle for 500 ms after the exit (a background job may
-  keep the terminal open). Known limitation of that fallback: if the reader thread
-  is not scheduled at all for 500 ms after the exit, the exit can be reported
-  before the last output is read. Seen only with the test suite running at
-  background priority on a heavily loaded machine (about 1 in 12 runs of
-  `short_lived_output_survives_concurrent_spawns`; 0 in 60 at normal priority).
-  Detecting pending output without that timing would need to poll the PTY, which
-  `portable-pty` does not expose safely.
+  or, when a background job keeps the terminal open, once the reader has been
+  idle for 500 ms after the exit *and* the PTY has nothing waiting to be read
+  (checked with a zero-timeout `select` through `filedescriptor`, portable-pty's
+  own dependency, without unsafe code), so a reader slow to be scheduled never
+  counts as idle.
+- **The slave side stays open in the app until the process exits.** Then the
+  app closes it. On macOS, output not yet read is discarded when the exiting
+  session leader's close is the terminal's last one. A short-lived program's
+  output was lost whenever the reader had not run before the program exited, on
+  a loaded machine or CI runner. With the app's close the last one, the kernel
+  keeps the output until it is read, and end of output follows
+  (`short_lived_output_survives_a_starved_reader`).
 - **Close** sends SIGHUP to the shell and the foreground job, then SIGKILL to the
   shell's process group after 2 s. Jobs the user detached deliberately (`nohup`,
   `disown`) survive, as in any terminal. A closed session's output is no longer

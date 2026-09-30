@@ -1,6 +1,6 @@
 # 0006 — Terminal stack: portable-pty, xterm.js and Tauri Channels
 
-**Status:** Accepted (Phase 1, 2026-09-28). Proposed in Phase 0.
+**Status:** Accepted (Phase 1, 2026-09-28). Proposed in Phase 0. Amended after Phase 7 (see the end): the slave side stays open until the process exits.
 
 ## Context
 
@@ -77,3 +77,17 @@ many concurrent sessions.
   falls short.
 - **Native GPU rendering** with the webview only for chrome. It gives the best
   performance, at a large cost in complexity and platform-specific code.
+
+## Amendment (after Phase 7)
+
+The "theory disproved" above was only half disproved. Closing the slave side
+early from the app does not lose output. But when the program's own exit is the
+terminal's last close, macOS discards output not yet read: the reader then gets
+end of output with nothing read. It shows only when the reader has not run
+before the program exits: under load, as on a CI runner. The app now keeps the
+slave side open until the process has exited and closes it itself, so the
+output is kept until it is read. The idle fallback for terminals held open by a
+background job also checks that nothing is waiting to be read, closing the
+timing gap noted in `docs/architecture.md`. The regression test
+`short_lived_output_survives_a_starved_reader` starves the readers with busy
+threads: it fails on every run without the change, and passes with it.

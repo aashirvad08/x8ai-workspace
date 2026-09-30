@@ -218,6 +218,51 @@ fn short_lived_output_survives_concurrent_spawns() {
 }
 
 #[test]
+fn short_lived_output_survives_a_starved_reader() {
+    // Regression test: on macOS, output not yet read when a short-lived program's
+    // exit closed its terminal was discarded, so a reader slow to be scheduled
+    // (a loaded machine) lost it. Busy threads make the readers slow here.
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let busy: Vec<_> = (0..std::thread::available_parallelism().map_or(8, |n| n.get() * 3))
+        .map(|_| {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::hint::spin_loop();
+                }
+            })
+        })
+        .collect();
+    let sessions = Arc::new(Sessions::default());
+    let mut lost = Vec::new();
+    for round in 0..4 {
+        let workers: Vec<_> = (0..32)
+            .map(|i| {
+                let sessions = sessions.clone();
+                std::thread::spawn(move || {
+                    let recorder = Arc::new(Recorder::default());
+                    let program = exec("/bin/echo", &[&format!("marker-{round}-{i}")]);
+                    let _session = sessions.spawn(&program, SIZE, recorder.clone()).unwrap();
+                    recorder.wait_for_exit();
+                    (format!("marker-{round}-{i}"), recorder.output())
+                })
+            })
+            .collect();
+        for worker in workers {
+            let (marker, output) = worker.join().unwrap();
+            if !output.contains(&marker) {
+                lost.push(marker);
+            }
+        }
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for thread in busy {
+        thread.join().unwrap();
+    }
+    assert_eq!(lost, Vec::<String>::new(), "output lost");
+}
+
+#[test]
 fn reports_the_exit_code() {
     let (_session, recorder) = start(&exec("/bin/sh", &["-c", "exit 3"]));
     assert_eq!(recorder.wait_for_exit().code, 3);

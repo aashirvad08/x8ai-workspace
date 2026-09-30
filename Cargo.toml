@@ -48,6 +48,10 @@ url = "2"
 
 # PTY allocation and process spawning (WezTerm's PTY crate). See ADR 0006.
 portable-pty = "0.9"
+# Already in the tree through portable-pty. Its `poll` asks whether a PTY has
+# output waiting without unsafe code, and uses select(2) on macOS, where poll(2)
+# does not work on terminal devices.
+filedescriptor = "0.8"
 
 # Safe process-group signals for terminal teardown. Pinned to the major version
 # portable-pty already builds, so it adds no second copy; only `signal` is enabled.

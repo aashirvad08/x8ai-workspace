@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 x8ai-core.workspace = true
 portable-pty.workspace = true
+filedescriptor.workspace = true
 nix.workspace = true
 thiserror.workspace = true
 
