@@ -5,6 +5,7 @@ import type { AgentSessionId } from "../contracts/generated/AgentSessionId";
 import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
 import type { AppEvent } from "../contracts/generated/AppEvent";
 import type { AppInfo } from "../contracts/generated/AppInfo";
+import type { CatalogList } from "../contracts/generated/CatalogList";
 import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { FileContent } from "../contracts/generated/FileContent";
 import type { FileList } from "../contracts/generated/FileList";
@@ -19,6 +20,9 @@ import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchEvent } from "../contracts/generated/SearchEvent";
 import type { SearchQuery } from "../contracts/generated/SearchQuery";
 import type { SessionId } from "../contracts/generated/SessionId";
+import type { Skill } from "../contracts/generated/Skill";
+import type { SkillInput } from "../contracts/generated/SkillInput";
+import type { SkillList } from "../contracts/generated/SkillList";
 import type { TerminalEvent } from "../contracts/generated/TerminalEvent";
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
 import type { TerminalSize } from "../contracts/generated/TerminalSize";
@@ -140,11 +144,17 @@ export interface AgentApi {
    * Makes sure the agent may run in the open workspace, with its own model
    * configuration (`model` null) or pointed at `model`, and with the MCP servers a
    * new session gets (the session-scoped servers `mcp` among them), asking the user
-   * in one native dialog for what is not approved there yet. Fails with
+   * in one native dialog for what is not approved there yet. The session-scoped
+   * skills `skills` are named in it; skills need no approval. Fails with
    * `permissionDenied` if the workspace is not trusted. Resolves to `false` if the
    * user declined.
    */
-  requestAgentApproval(agent: string, model: ModelSelection | null, mcp: readonly string[]): Promise<boolean>;
+  requestAgentApproval(
+    agent: string,
+    model: ModelSelection | null,
+    mcp: readonly string[],
+    skills: readonly string[],
+  ): Promise<boolean>;
   /** The same for an existing session, before it runs again. */
   requestSessionApproval(session: AgentSessionId): Promise<boolean>;
   /** Forgets the agent's approval in the open workspace. */
@@ -153,9 +163,15 @@ export interface AgentApi {
    * A new session for an approved agent in the open workspace (docs/multi-agent.md):
    * a worktree of its own in a Git repository, the folder itself otherwise. The
    * native side decides where; nothing is started yet. The session keeps `model`
-   * (null: the agent's own configuration) and its MCP servers for every run.
+   * (null: the agent's own configuration), its MCP servers and its skills (exactly
+   * as they are now) for every run.
    */
-  createAgentSession(agent: string, model: ModelSelection | null, mcp: readonly string[]): Promise<AgentSessionInfo>;
+  createAgentSession(
+    agent: string,
+    model: ModelSelection | null,
+    mcp: readonly string[],
+    skills: readonly string[],
+  ): Promise<AgentSessionInfo>;
   /**
    * Runs the session's agent (again) on a new terminal session, driven afterwards
    * like any other with the `TerminalApi` methods.
@@ -204,11 +220,27 @@ export interface McpApi {
   removeMcpSecret(id: string, name: string): Promise<McpServerStatus>;
 }
 
+/** Skills (docs/catalog.md): instructions for agent sessions. Text only. */
+export interface SkillApi {
+  listSkills(): Promise<SkillList>;
+  addSkill(skill: SkillInput): Promise<Skill>;
+  updateSkill(id: string, skill: SkillInput): Promise<Skill>;
+  removeSkill(id: string): Promise<void>;
+}
+
+/**
+ * The catalog (docs/catalog.md): read-only discovery over agents, models, MCP
+ * servers and skills. Acting on an item uses the owning system's own methods.
+ */
+export interface CatalogApi {
+  listCatalog(): Promise<CatalogList>;
+}
+
 /**
  * Typed access to the native host. Each method maps to one command in
  * `src-tauri/src/`. UI code depends on these interfaces, never on Tauri.
  */
-export interface NativeClient extends AppApi, TerminalApi, WorkspaceApi, AgentApi, ProviderApi, McpApi {}
+export interface NativeClient extends AppApi, TerminalApi, WorkspaceApi, AgentApi, ProviderApi, McpApi, SkillApi, CatalogApi {}
 
 export function createNativeClient({ invoke, createChannel }: NativeBridge): NativeClient {
   // Return values come from the trusted side and are typed by the generated
@@ -269,10 +301,12 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     cancelSearch: () => call<void>("workspace_search_cancel"),
 
     listAgents: (refresh) => call<AgentList>("agent_list", { refresh }),
-    requestAgentApproval: (agent, model, mcp) => call<boolean>("agent_request_approval", { agent, model, mcp }),
+    requestAgentApproval: (agent, model, mcp, skills) =>
+      call<boolean>("agent_request_approval", { agent, model, mcp, skills }),
     requestSessionApproval: (session) => call<boolean>("agent_request_session_approval", { session }),
     revokeAgentApproval: (agent) => call<void>("agent_revoke", { agent }),
-    createAgentSession: (agent, model, mcp) => call<AgentSessionInfo>("agent_create_session", { agent, model, mcp }),
+    createAgentSession: (agent, model, mcp, skills) =>
+      call<AgentSessionInfo>("agent_create_session", { agent, model, mcp, skills }),
     runAgentSession: (session, size, listener) =>
       call<TerminalInfo>("agent_run", { session, size, events: sessionChannel(listener) }),
     agentSessions: () => call<AgentSessionInfo[]>("agent_sessions"),
@@ -294,6 +328,13 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     removeMcpServer: (id) => call<void>("mcp_remove", { id }),
     setMcpSecret: (id, name, value) => call<McpServerStatus>("mcp_set_secret", { id, name, value }),
     removeMcpSecret: (id, name) => call<McpServerStatus>("mcp_remove_secret", { id, name }),
+
+    listSkills: () => call<SkillList>("skill_list"),
+    addSkill: (skill) => call<Skill>("skill_add", { skill }),
+    updateSkill: (id, skill) => call<Skill>("skill_update", { id, skill }),
+    removeSkill: (id) => call<void>("skill_remove", { id }),
+
+    listCatalog: () => call<CatalogList>("catalog_list"),
   };
 
   /**

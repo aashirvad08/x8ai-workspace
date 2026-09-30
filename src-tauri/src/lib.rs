@@ -8,12 +8,14 @@
 
 mod agents;
 mod app;
+mod catalog;
 mod commands;
 #[cfg(target_os = "macos")]
 mod macos;
 mod mcp;
 mod menu;
 mod providers;
+mod skills;
 mod terminal;
 mod workspace;
 
@@ -24,6 +26,7 @@ use agents::Agents;
 use app::AppState;
 use mcp::Mcp;
 use providers::Providers;
+use skills::Skills;
 use terminal::Terminals;
 use workspace::Workspaces;
 
@@ -38,6 +41,7 @@ pub fn run() {
         .manage(Agents::default())
         .manage(Providers::default())
         .manage(Mcp::default())
+        .manage(Skills::default())
         .setup(|app| {
             let workspaces = app.state::<Workspaces>();
             match app.path().app_data_dir() {
@@ -47,6 +51,7 @@ pub fn run() {
                         .load_settings(&data_dir, &workspaces);
                     // Loads the registry and approvals; starts no server.
                     app.state::<Mcp>().load(&data_dir, &workspaces);
+                    app.state::<Skills>().load(&data_dir, &workspaces);
                 }
                 // The app still works; it just cannot remember folders or trust.
                 Err(e) => workspaces.warn(format!("Recent folders and trust are unavailable: {e}")),
@@ -115,6 +120,11 @@ pub fn run() {
             mcp::mcp_remove,
             mcp::mcp_set_secret,
             mcp::mcp_remove_secret,
+            skills::skill_list,
+            skills::skill_add,
+            skills::skill_update,
+            skills::skill_remove,
+            catalog::catalog_list,
             terminal::terminal_create,
             terminal::terminal_write,
             terminal::terminal_resize,

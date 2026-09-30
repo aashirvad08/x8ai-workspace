@@ -17,6 +17,8 @@ const agent: AgentStatus = {
     { provider: "openrouter", supported: true, reason: null },
   ],
   mcp: { supported: true, reason: null },
+  skills: { supported: true, reason: null },
+  capabilities: { modelApis: ["anthropicMessages"], mcpTransports: ["stdio"] },
 };
 
 function provider(id: string, credential: ProviderStatus["credential"], models: string[]): ProviderStatus {

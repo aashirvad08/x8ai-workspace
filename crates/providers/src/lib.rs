@@ -22,6 +22,28 @@ pub use settings::{ProviderSettings, Settings};
 
 use x8ai_core::model::{ModelDefinition, ModelProviderDefinition, ModelSource};
 
+/// A provider as the webview and the catalog see it: whether it has what it
+/// needs to authenticate (never the key), what `local` detection found last
+/// (`None`: not checked, and not checked here), and its models.
+pub fn status(
+    provider: &ModelProviderDefinition,
+    credential: x8ai_core::model::CredentialState,
+    local: Option<&ollama::Detection>,
+    custom: &[String],
+) -> x8ai_core::model::ProviderStatus {
+    let detection = local.filter(|_| provider.hosting == x8ai_core::model::ProviderKind::Local);
+    let found = detection.map(|d| d.models.as_slice()).unwrap_or_default();
+    x8ai_core::model::ProviderStatus {
+        id: provider.id.clone(),
+        name: provider.name.clone(),
+        description: provider.description.clone(),
+        hosting: provider.hosting,
+        credential,
+        local: detection.map(|d| d.availability.clone()),
+        models: models(provider, found, custom),
+    }
+}
+
 /// Every model the app can offer for `provider`: its known models, then models
 /// found on this machine, then the user's own, without duplicates.
 pub fn models(

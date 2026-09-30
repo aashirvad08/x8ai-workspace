@@ -25,6 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use x8ai_core::id::IntegrationId;
 use x8ai_core::model::{ModelSelection, is_model_id};
+use x8ai_core::skill::SkillRef;
 use x8ai_git::{Git, Repository, check_branch, check_commit};
 
 /// Where every agent worktree lives. Deliberately free of spaces: tools break on
@@ -68,6 +69,9 @@ pub struct Worktree {
     /// The MCP servers attached to its session, by id (never their
     /// configuration or secrets).
     pub mcp: Vec<IntegrationId>,
+    /// The skills attached to its session: id, version and fingerprint, never
+    /// their text.
+    pub skills: Vec<SkillRef>,
 }
 
 /// What removing a worktree kept.
@@ -93,6 +97,9 @@ struct Metadata {
     /// MCP server ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     mcp: Vec<IntegrationId>,
+    /// Skill ids, versions and fingerprints.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    skills: Vec<SkillRef>,
 }
 
 const METADATA_VERSION: u32 = 1;
@@ -152,6 +159,7 @@ impl Isolation {
         agent: &IntegrationId,
         model: Option<&ModelSelection>,
         mcp: &[IntegrationId],
+        skills: &[SkillRef],
     ) -> Result<Worktree, Error> {
         if model.is_some_and(|m| !is_model_id(&m.model)) {
             return Err(Error::Unsafe("not a model id".into()));
@@ -171,6 +179,7 @@ impl Isolation {
                 created: now_ms(),
                 model: model.cloned(),
                 mcp: mcp.to_vec(),
+                skills: skills.to_vec(),
             };
             check_branch(&worktree.branch)?;
             if worktree.path.exists() || git.branch_exists(repo, &worktree.branch)? {
@@ -205,6 +214,7 @@ impl Isolation {
                     created: worktree.created,
                     model: worktree.model.clone(),
                     mcp: worktree.mcp.clone(),
+                    skills: worktree.skills.clone(),
                 },
             )?;
             return Ok(Worktree {
@@ -241,7 +251,11 @@ impl Isolation {
                     && is_token(&meta.token)
                     && name == format!("{agent}-{}", meta.token)
                     && check_commit(&meta.base).is_ok()
-                    && meta.model.as_ref().is_none_or(|m| is_model_id(&m.model));
+                    && meta.model.as_ref().is_none_or(|m| is_model_id(&m.model))
+                    && meta.skills.iter().all(|s| {
+                        s.fingerprint.len() == 16
+                            && s.fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
+                    });
                 if !valid {
                     return None;
                 }
@@ -259,6 +273,7 @@ impl Isolation {
                         created: meta.created,
                         model: meta.model,
                         mcp: meta.mcp,
+                        skills: meta.skills,
                     })
             })
             .collect();

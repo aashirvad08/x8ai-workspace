@@ -39,11 +39,11 @@ jobs:
       - run: pnpm test
 
       - run: cargo fmt --all --check
-      - run: cargo clippy -p x8ai-core -p x8ai-pty -p x8ai-workspace -p x8ai-git -p x8ai-secrets -p x8ai-providers -p x8ai-mcp -p x8ai-agents --all-targets -- -D warnings
+      - run: cargo clippy -p x8ai-core -p x8ai-pty -p x8ai-workspace -p x8ai-git -p x8ai-secrets -p x8ai-providers -p x8ai-mcp -p x8ai-agents -p x8ai-skills -p x8ai-catalog --all-targets -- -D warnings
       - name: cargo test
         run: |
           set -o pipefail
-          cargo test -p x8ai-core -p x8ai-pty -p x8ai-workspace -p x8ai-git -p x8ai-secrets -p x8ai-providers -p x8ai-mcp -p x8ai-agents 2>&1 | tee cargo-test.log
+          cargo test -p x8ai-core -p x8ai-pty -p x8ai-workspace -p x8ai-git -p x8ai-secrets -p x8ai-providers -p x8ai-mcp -p x8ai-agents -p x8ai-skills -p x8ai-catalog 2>&1 | tee cargo-test.log
       - name: Name the failing tests
         if: failure()
         run: scripts/ci/annotate-test-failures.sh cargo-test.log

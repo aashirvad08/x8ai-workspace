@@ -1,22 +1,28 @@
 import type { AgentActions } from "../agents/actions";
 import { Agents } from "../agents/agents";
+import { LaunchDrafts } from "../agents/draft";
+import type { CatalogActions } from "../catalog/actions";
+import { Catalog } from "../catalog/catalog";
 import type { AgentChanges } from "../contracts/generated/AgentChanges";
 import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
+import type { AgentStatus } from "../contracts/generated/AgentStatus";
 import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchMatch } from "../contracts/generated/SearchMatch";
 import type { WorkspaceEvent } from "../contracts/generated/WorkspaceEvent";
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
 import type { McpServerInput } from "../contracts/generated/McpServerInput";
+import type { SkillInput } from "../contracts/generated/SkillInput";
 import type { ModelSelection } from "../contracts/generated/ModelSelection";
 import type { EditorActions } from "../editor/actions";
 import { EditorStore } from "../editor/editor-store";
 import { basename, dirname, join } from "../lib/paths";
 import { Value } from "../lib/store";
 import type { McpActions } from "../mcp/actions";
-import { McpServers } from "../mcp/servers";
+import { McpServers, mcpChoices } from "../mcp/servers";
 import type { ModelActions } from "../models/actions";
-import { Providers } from "../models/providers";
+import { modelChoices, Providers } from "../models/providers";
+import { Skills, skillChoices } from "../skills/skills";
 import { type NativeClient, NativeError } from "../native";
 import type { TerminalActions } from "../terminal/actions";
 import type { SplitDirection } from "../terminal/panes";
@@ -37,7 +43,15 @@ import { Picker } from "./picker";
  * testable without React.
  */
 export class Workbench
-  implements ExplorerActions, EditorActions, TerminalActions, SearchActions, AgentActions, ModelActions, McpActions
+  implements
+    ExplorerActions,
+    EditorActions,
+    TerminalActions,
+    SearchActions,
+    AgentActions,
+    ModelActions,
+    McpActions,
+    CatalogActions
 {
   readonly workspace = new Value<WorkspaceInfo | null>(null);
   /** Recently opened folders, most recent first. */
@@ -48,6 +62,10 @@ export class Workbench
   readonly agents: Agents;
   readonly providers: Providers;
   readonly mcp: McpServers;
+  readonly skills: Skills;
+  readonly catalog: Catalog;
+  /** What the next launch of each agent asks for, from its card or the catalog. */
+  readonly drafts = new LaunchDrafts();
   readonly terminals = new Terminals();
   readonly notifications = new Notifications();
   readonly dialogs = new Dialogs();
@@ -70,6 +88,8 @@ export class Workbench
     this.agents = new Agents(native);
     this.providers = new Providers(native);
     this.mcp = new McpServers(native);
+    this.skills = new Skills(native);
+    this.catalog = new Catalog(native);
     this.editor.subscribe(() => this.#reportUnsaved());
     this.terminals.subscribe(() => this.#agentPanesChanged());
   }
@@ -426,6 +446,7 @@ export class Workbench
       { id: "view.agents", title: "Show Agents", shortcut: { key: "a", meta: true, shift: true }, run: () => this.showAgents() },
       { id: "view.models", title: "Show Models", shortcut: { key: "m", meta: true, shift: true }, run: () => this.showModels() },
       { id: "view.mcp", title: "Show MCP Servers", shortcut: { key: "u", meta: true, shift: true }, run: () => this.showMcp() },
+      { id: "view.catalog", title: "Show Catalog", shortcut: { key: "k", meta: true, shift: true }, run: () => this.showCatalog() },
       { id: "terminal.toggle", title: "Toggle Terminal", shortcut: { key: "`", ctrl: true }, run: () => this.toggleTerminal() },
       { id: "terminal.new", title: "New Terminal", shortcut: { key: "`", ctrl: true, shift: true }, run: () => this.newTerminal() },
       { id: "terminal.splitRight", title: "Split Terminal Right", shortcut: { key: "d", meta: true }, when: "terminalFocused", run: () => this.splitTerminal("right") },
@@ -582,6 +603,128 @@ export class Workbench
       .catch((error: unknown) => this.notifications.error(`Could not remove the model: ${messageOf(error)}`));
   }
 
+  // Catalog
+
+  /** ⇧⌘K: the catalog in the sidebar. It lists; it starts and fetches nothing. */
+  showCatalog(): void {
+    this.layout.showSidebar("catalog");
+    void this.catalog.load();
+    void this.skills.load();
+  }
+
+  refreshCatalog(): void {
+    void this.catalog.load();
+    void this.skills.load();
+  }
+
+  openAgent(_agent: string): void {
+    this.showAgents();
+  }
+
+  /**
+   * Chooses a catalog item for the next launch of every installed agent that
+   * `choose` accepts it for, then shows Agents. Nothing starts: the user presses
+   * Launch, and the approval dialog follows as always.
+   */
+  async #forNextLaunch(what: string, choose: (agent: AgentStatus) => boolean): Promise<void> {
+    await Promise.all([this.agents.load(), this.providers.load(), this.mcp.load(), this.skills.load()]);
+    const names = (this.agents.get().agents ?? []).filter((a) => a.availability.state === "installed" && choose(a)).map((a) => a.name);
+    this.showAgents();
+    if (names.length === 0) {
+      this.notifications.info(`No installed agent here can use ${what}.`);
+    } else {
+      this.notifications.info(`${what} is chosen for the next launch of ${names.join(", ")}. Press Launch to start it.`);
+    }
+  }
+
+  chooseModel(provider: string, model: string): void {
+    const name = this.catalog.find(`model.${provider}.${model}`)?.displayName ?? model;
+    void this.#forNextLaunch(name, (agent) => {
+      const choice = modelChoices(agent, this.providers.get().providers ?? []).find(
+        (c) => c.selection.provider === provider && c.selection.model === model,
+      );
+      if (choice) this.drafts.setModel(agent.id, choice.selection);
+      return choice !== undefined;
+    });
+  }
+
+  configureProvider(_provider: string): void {
+    this.showModels();
+  }
+
+  attachMcp(server: string): void {
+    const name = this.catalog.find(`mcp.${server}`)?.displayName ?? this.mcp.find(server)?.server.name ?? server;
+    void this.#forNextLaunch(name, (agent) => {
+      const offered = mcpChoices(agent, this.mcp.get().servers ?? [], this.workspace.get()?.root ?? null).optional.some(
+        (s) => s.server.id === server,
+      );
+      if (offered) this.drafts.setMcp(agent.id, server, true);
+      return offered;
+    });
+  }
+
+  configureMcp(_server: string): void {
+    this.showMcp();
+  }
+
+  attachSkill(skill: string): void {
+    const name = this.catalog.find(`skill.${skill}`)?.displayName ?? this.skills.find(skill)?.skill.name ?? skill;
+    void this.#forNextLaunch(name, (agent) => {
+      const offered = skillChoices(agent, this.skills.get().skills ?? [], this.workspace.get()?.root ?? null).optional.some(
+        (s) => s.skill.id === skill,
+      );
+      if (offered) this.drafts.setSkill(agent.id, skill, true);
+      return offered;
+    });
+  }
+
+  async addSkill(skill: SkillInput): Promise<boolean> {
+    try {
+      await this.#native.addSkill(skill);
+    } catch (error) {
+      this.notifications.error(`Could not add ${skill.name || "the skill"}: ${messageOf(error)}`);
+      return false;
+    }
+    this.refreshCatalog();
+    return true;
+  }
+
+  async updateSkill(id: string, skill: SkillInput): Promise<boolean> {
+    try {
+      await this.#native.updateSkill(id, skill);
+    } catch (error) {
+      this.notifications.error(`Could not save ${skill.name || "the skill"}: ${messageOf(error)}`);
+      return false;
+    }
+    this.refreshCatalog();
+    return true;
+  }
+
+  removeSkill(id: string): void {
+    void this.#removeSkill(id);
+  }
+
+  async #removeSkill(id: string): Promise<void> {
+    const name = this.skills.find(id)?.skill.name ?? id;
+    const choice = await this.dialogs.ask({
+      title: `Remove the skill “${name}”?`,
+      message: "Sessions that have it no longer start: they say so, and a new session goes without it.",
+      buttons: [
+        { label: "Remove", value: "remove", role: "destructive" },
+        { label: "Cancel", value: "cancel" },
+      ],
+      cancel: "cancel",
+    });
+    if (choice !== "remove") return;
+    try {
+      await this.#native.removeSkill(id);
+    } catch (error) {
+      this.notifications.error(`Could not remove ${name}: ${messageOf(error)}`);
+      return;
+    }
+    this.refreshCatalog();
+  }
+
   // MCP
 
   /** ⇧⌘U: MCP servers in the sidebar. */
@@ -617,7 +760,10 @@ export class Workbench
   setMcpServerEnabled(id: string, enabled: boolean): void {
     this.#native
       .setMcpServerEnabled(id, enabled)
-      .then((status) => this.mcp.replace(status))
+      .then((status) => {
+        this.mcp.replace(status);
+        if (this.catalog.get().items !== null) void this.catalog.load();
+      })
       .catch((error: unknown) => this.notifications.error(`Could not change the server: ${messageOf(error)}`));
   }
 
@@ -686,6 +832,7 @@ export class Workbench
     void this.agents.load();
     void this.providers.load();
     void this.mcp.load();
+    void this.skills.load();
   }
 
   refreshAgents(): void {
@@ -696,8 +843,8 @@ export class Workbench
     void this.setTrust(true);
   }
 
-  launchAgent(id: string, model: ModelSelection | null = null, mcp: readonly string[] = []): void {
-    void this.#launchAgent(id, model, mcp);
+  launchAgent(id: string, model: ModelSelection | null = null, mcp: readonly string[] = [], skills: readonly string[] = []): void {
+    void this.#launchAgent(id, model, mcp, skills);
   }
 
   /**
@@ -708,7 +855,7 @@ export class Workbench
    * the native side makes the agent a session (a worktree of its own in a Git
    * repository) that keeps the model, and a terminal pane starts the agent in it.
    */
-  async #launchAgent(id: string, model: ModelSelection | null, mcp: readonly string[]): Promise<void> {
+  async #launchAgent(id: string, model: ModelSelection | null, mcp: readonly string[], skills: readonly string[]): Promise<void> {
     const workspace = this.workspace.get();
     if (!workspace) {
       this.notifications.info("Open a folder first (⌘O). Agents run in the open folder.");
@@ -731,7 +878,7 @@ export class Workbench
     }
     let approved: boolean;
     try {
-      approved = await this.#native.requestAgentApproval(id, model, mcp);
+      approved = await this.#native.requestAgentApproval(id, model, mcp, skills);
     } catch (error) {
       this.notifications.error(`Could not start ${name}: ${messageOf(error)}`);
       return;
@@ -740,7 +887,7 @@ export class Workbench
     if (!approved) return;
     let session: AgentSessionInfo;
     try {
-      session = await this.#native.createAgentSession(id, model, mcp);
+      session = await this.#native.createAgentSession(id, model, mcp, skills);
     } catch (error) {
       this.notifications.error(`Could not start ${name}: ${messageOf(error)}`);
       return;

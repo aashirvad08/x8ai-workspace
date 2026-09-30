@@ -157,7 +157,7 @@ fn two_claude_code_sessions_work_in_separate_worktrees() {
     let mut started = Vec::new();
     for label in ["first", "second"] {
         let worktree = isolation
-            .create(&git, &repo, &claude.id, None, &[])
+            .create(&git, &repo, &claude.id, None, &[], &[])
             .unwrap();
         let id = runtime
             .create(&plan, worktree.path.clone(), Some(worktree.clone()))

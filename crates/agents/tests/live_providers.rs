@@ -284,7 +284,7 @@ fn claude_code_gets_the_provider_the_app_configures_and_nothing_leaks() {
 
     // 6. A session with a worktree of its own, keeping the model.
     let worktree = isolation
-        .create(&git, &repo, &claude.id, haiku.model.as_ref(), &[])
+        .create(&git, &repo, &claude.id, haiku.model.as_ref(), &[], &[])
         .unwrap();
     let runtime = AgentRuntime::default();
     let sessions = Sessions::default();
@@ -382,7 +382,7 @@ fn claude_code_gets_the_provider_the_app_configures_and_nothing_leaks() {
     let ollama = configure(own.clone(), &provider("ollama"), "qwen3-coder:30b", None).unwrap();
     approvals.approve(&ollama.approval()).unwrap();
     let local = isolation
-        .create(&git, &repo, &claude.id, ollama.model.as_ref(), &[])
+        .create(&git, &repo, &claude.id, ollama.model.as_ref(), &[], &[])
         .unwrap();
     let local_id = runtime
         .create(&ollama, local.path.clone(), Some(local.clone()))

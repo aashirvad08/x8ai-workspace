@@ -25,3 +25,4 @@ NNNN), **Context**, **Decision**, **Consequences**, and **Alternatives considere
 | [0015](0015-environment-precedence.md) | Environment precedence, and what an approval covers | Accepted |
 | [0016](0016-provider-and-model-configuration.md) | Providers as data, agents configured by adapters | Accepted |
 | [0017](0017-platform-managed-mcp.md) | MCP servers managed by the app, owned by agent sessions | Accepted |
+| [0018](0018-catalog-is-discovery-not-execution.md) | The catalog is discovery and orchestration, not execution | Accepted |

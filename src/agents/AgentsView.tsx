@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 
 import type { AgentChanges } from "../contracts/generated/AgentChanges";
 import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
@@ -9,6 +9,10 @@ import type { WorkspaceIsolation } from "../contracts/generated/WorkspaceIsolati
 import type { Store } from "../lib/store";
 import { useStore } from "../lib/useStore";
 import type { SessionMcpServer } from "../contracts/generated/SessionMcpServer";
+import type { SessionSkill } from "../contracts/generated/SessionSkill";
+import type { SkillStatus } from "../contracts/generated/SkillStatus";
+import { type Skills, skillChoices } from "../skills/skills";
+import type { LaunchDrafts } from "./draft";
 import { type McpChoices, mcpChoices, type McpServers } from "../mcp/servers";
 import { type ModelChoice, modelChoices, type Providers } from "../models/providers";
 import { type AgentRunStatus, agentRunStatus, type Terminals } from "../terminal/terminals";
@@ -19,6 +23,8 @@ interface Props {
   agents: Agents;
   providers: Providers;
   mcp: McpServers;
+  skills: Skills;
+  drafts: LaunchDrafts;
   terminals: Terminals;
   workspace: Store<WorkspaceInfo | null>;
   actions: AgentActions;
@@ -38,10 +44,12 @@ const LABELS: Record<Shown, string> = {
 };
 
 /** The agents the app can run, and the sessions they work in (⇧⌘A). */
-export function AgentsView({ agents, providers, mcp, terminals, workspace, actions }: Props) {
+export function AgentsView({ agents, providers, mcp, skills, drafts, terminals, workspace, actions }: Props) {
   const { agents: list, loading, environmentProblem, isolation, sessions, changes, error } = useStore(agents);
   const { providers: providerList } = useStore(providers);
   const { servers: mcpList } = useStore(mcp);
+  const { skills: skillList } = useStore(skills);
+  useStore(drafts);
   const info = useStore(workspace);
   const { panes } = useStore(terminals);
 
@@ -50,7 +58,8 @@ export function AgentsView({ agents, providers, mcp, terminals, workspace, actio
     // Keys and models only; local providers are looked for in the Models view.
     if (providers.get().providers === null) void providers.load();
     if (mcp.get().servers === null) void mcp.load();
-  }, [agents, providers, mcp]);
+    if (skills.get().skills === null) void skills.load();
+  }, [agents, providers, mcp, skills]);
 
   return (
     <div className="agents">
@@ -88,6 +97,8 @@ export function AgentsView({ agents, providers, mcp, terminals, workspace, actio
             agent={agent}
             choices={modelChoices(agent, providerList ?? [])}
             mcpChoices={mcpChoices(agent, mcpList ?? [], info?.root ?? null)}
+            skillChoices={skillChoices(agent, skillList ?? [], info?.root ?? null)}
+            drafts={drafts}
             canLaunch={info !== null}
             actions={actions}
           />
@@ -137,17 +148,23 @@ function AgentCard({
   agent,
   choices,
   mcpChoices,
+  skillChoices,
+  drafts,
   canLaunch,
   actions,
 }: {
   agent: AgentStatus;
   choices: readonly ModelChoice[];
   mcpChoices: McpChoices;
+  skillChoices: { always: readonly SkillStatus[]; optional: readonly SkillStatus[] };
+  drafts: LaunchDrafts;
   canLaunch: boolean;
   actions: AgentActions;
 }) {
-  const [chosen, setChosen] = useState(-1);
-  const [chosenMcp, setChosenMcp] = useState<readonly string[]>([]);
+  const draft = drafts.of(agent.id);
+  const chosen = choices.findIndex(
+    (c) => c.selection.provider === draft.model?.provider && c.selection.model === draft.model?.model,
+  );
   const shown: Shown = agent.availability.state === "installed" ? "installed" : agent.availability.state;
   const installed = agent.availability.state === "installed";
   const choice = choices[chosen];
@@ -180,7 +197,7 @@ function AgentCard({
           <select
             className="model-select"
             value={choice ? chosen : -1}
-            onChange={(e) => setChosen(Number(e.target.value))}
+            onChange={(e) => drafts.setModel(agent.id, choices[Number(e.target.value)]?.selection ?? null)}
             aria-label={`Model for ${agent.name}`}
           >
             <option value={-1}>{agent.name}'s own configuration</option>
@@ -195,7 +212,22 @@ function AgentCard({
       {installed && supported > 0 && choices.length === 0 && (
         <p className="agent-approval">To choose a model here, add a provider key or model in Models.</p>
       )}
-      {installed && <McpLaunchChoices agent={agent} choices={mcpChoices} chosen={chosenMcp} onChange={setChosenMcp} />}
+      {installed && (
+        <McpLaunchChoices
+          agent={agent}
+          choices={mcpChoices}
+          chosen={draft.mcp}
+          onChange={(id, on) => drafts.setMcp(agent.id, id, on)}
+        />
+      )}
+      {installed && (
+        <SkillLaunchChoices
+          agent={agent}
+          choices={skillChoices}
+          chosen={draft.skills}
+          onChange={(id, on) => drafts.setSkill(agent.id, id, on)}
+        />
+      )}
       <button
         type="button"
         className="button-primary agent-launch"
@@ -204,7 +236,8 @@ function AgentCard({
           actions.launchAgent(
             agent.id,
             choice?.selection ?? null,
-            chosenMcp.filter((id) => mcpChoices.optional.some((s) => s.server.id === id)),
+            draft.mcp.filter((id) => mcpChoices.optional.some((s) => s.server.id === id)),
+            draft.skills.filter((id) => skillChoices.optional.some((s) => s.skill.id === id)),
           )
         }
       >
@@ -243,6 +276,7 @@ function SessionCard({
       </p>
       <ConfigurationNote name={session.name} configuration={session.configuration} />
       {session.mcp.length > 0 && <SessionMcp servers={session.mcp} />}
+      {session.skills.length > 0 && <SessionSkills skills={session.skills} />}
       {session.state.state === "failed" && <p className="agent-approval agents-error">{session.state.message}</p>}
       <div className="agent-actions">
         <button type="button" onClick={() => actions.openAgentTerminal(session.id)}>
@@ -309,7 +343,7 @@ function McpLaunchChoices({
   agent: AgentStatus;
   choices: McpChoices;
   chosen: readonly string[];
-  onChange: (chosen: readonly string[]) => void;
+  onChange: (id: string, on: boolean) => void;
 }) {
   if (!agent.mcp.supported) {
     return (
@@ -330,12 +364,67 @@ function McpLaunchChoices({
             type="checkbox"
             checked={chosen.includes(s.server.id)}
             aria-label={`Attach ${s.server.name}`}
-            onChange={(e) => onChange(e.target.checked ? [...chosen, s.server.id] : chosen.filter((id) => id !== s.server.id))}
+            onChange={(e) => onChange(s.server.id, e.target.checked)}
           />
           <span>MCP: {s.server.name}</span>
         </label>
       ))}
     </div>
+  );
+}
+
+/** Which skills a new session gets, and the per-session ones to choose. */
+function SkillLaunchChoices({
+  agent,
+  choices,
+  chosen,
+  onChange,
+}: {
+  agent: AgentStatus;
+  choices: { always: readonly SkillStatus[]; optional: readonly SkillStatus[] };
+  chosen: readonly string[];
+  onChange: (id: string, on: boolean) => void;
+}) {
+  if (!agent.skills.supported) {
+    return (
+      <p className="agent-approval" title={agent.skills.reason ?? undefined}>
+        Skills: not supported for {agent.name}
+      </p>
+    );
+  }
+  if (choices.always.length === 0 && choices.optional.length === 0) return null;
+  return (
+    <div className="agent-mcp">
+      {choices.always.length > 0 && <p className="agent-approval">Skills: {choices.always.map((s) => s.skill.name).join(", ")}</p>}
+      {choices.optional.map((s) => (
+        <label key={s.skill.id} className="agent-model">
+          <input
+            type="checkbox"
+            checked={chosen.includes(s.skill.id)}
+            aria-label={`Attach the skill ${s.skill.name}`}
+            onChange={(e) => onChange(s.skill.id, e.target.checked)}
+          />
+          <span>Skill: {s.skill.name}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+const SKILL_STATES = { attached: "attached", changed: "changed", removed: "removed" } as const;
+
+/** The session's skills, as recorded; a changed or removed one stops it running. */
+function SessionSkills({ skills }: { skills: readonly SessionSkill[] }) {
+  return (
+    <ul className="agent-files" aria-label="Skills">
+      {skills.map((s) => (
+        <li key={s.id} className={s.state.state === "attached" ? "agent-approval" : "agent-approval agents-error"}>
+          Skill: {s.name} (v{s.version}) · {SKILL_STATES[s.state.state]}
+          {s.state.state === "changed" && ` (now v${s.state.currentVersion}): start a new session to use it`}
+          {s.state.state === "removed" && ": start a new session without it"}
+        </li>
+      ))}
+    </ul>
   );
 }
 

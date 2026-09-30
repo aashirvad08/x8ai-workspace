@@ -189,14 +189,14 @@ describe("native client agent commands", () => {
 
   it("passes only ids for sessions, never paths for worktrees", async () => {
     const { calls, client } = bridge();
-    await client.createAgentSession("claude-code", null, ["docs"]);
+    await client.createAgentSession("claude-code", null, ["docs"], ["tests-first"]);
     await client.agentSessions();
     await client.stopAgentSession(3);
     await client.removeAgentSession(3, false);
     await client.agentChanges(3);
     await client.readAgentFile(3, "src/main.rs");
     expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
-      { command: "agent_create_session", args: { agent: "claude-code", model: null, mcp: ["docs"] } },
+      { command: "agent_create_session", args: { agent: "claude-code", model: null, mcp: ["docs"], skills: ["tests-first"] } },
       { command: "agent_sessions", args: undefined },
       { command: "agent_stop", args: { session: 3 } },
       { command: "agent_remove", args: { session: 3, discard: false } },
@@ -208,14 +208,14 @@ describe("native client agent commands", () => {
   it("lists, approves and revokes with named arguments", async () => {
     const { calls, client } = bridge();
     await client.listAgents(true);
-    await client.requestAgentApproval("claude-code", { provider: "openrouter", model: "anthropic/claude-sonnet-5" }, []);
+    await client.requestAgentApproval("claude-code", { provider: "openrouter", model: "anthropic/claude-sonnet-5" }, [], []);
     await client.requestSessionApproval(4);
     await client.revokeAgentApproval("claude-code");
     expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
       { command: "agent_list", args: { refresh: true } },
       {
         command: "agent_request_approval",
-        args: { agent: "claude-code", model: { provider: "openrouter", model: "anthropic/claude-sonnet-5" }, mcp: [] },
+        args: { agent: "claude-code", model: { provider: "openrouter", model: "anthropic/claude-sonnet-5" }, mcp: [], skills: [] },
       },
       { command: "agent_request_session_approval", args: { session: 4 } },
       { command: "agent_revoke", args: { agent: "claude-code" } },
@@ -274,5 +274,28 @@ describe("native client MCP commands", () => {
     // Nothing reads a secret back, and nothing starts a server.
     const methods = Object.keys(client).filter((name) => /mcp/i.test(name));
     expect(methods.filter((m) => /get|read|start|run|test/i.test(m))).toEqual([]);
+  });
+});
+
+describe("native client skill and catalog commands", () => {
+  it("names skills by id and only lists the catalog", async () => {
+    const { calls, client } = bridge();
+    const skill = { name: "Tests first", description: "", instructions: "Write the test first.", allowedTools: [], scope: "session" as const };
+    await client.listSkills();
+    await client.addSkill(skill);
+    await client.updateSkill("tests-first", skill);
+    await client.removeSkill("tests-first");
+    await client.listCatalog();
+    expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
+      { command: "skill_list", args: undefined },
+      { command: "skill_add", args: { skill } },
+      { command: "skill_update", args: { id: "tests-first", skill } },
+      { command: "skill_remove", args: { id: "tests-first" } },
+      { command: "catalog_list", args: undefined },
+    ]);
+    // The catalog can list and nothing else: it installs, starts and fetches nothing.
+    expect(Object.keys(client).filter((name) => /catalog/i.test(name))).toEqual(["listCatalog"]);
+    // A skill is text: nothing runs one.
+    expect(Object.keys(client).filter((name) => /skill/i.test(name) && /run|start|exec|install/i.test(name))).toEqual([]);
   });
 });

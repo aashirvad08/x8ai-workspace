@@ -419,6 +419,7 @@ fn a_worktree_remembers_its_sessions_servers_by_id_only() {
             &id("claude-code"),
             None,
             &[id("github"), id("db")],
+            &[],
         )
         .unwrap();
     let found = isolation.find(&git_cli, &repo).unwrap();

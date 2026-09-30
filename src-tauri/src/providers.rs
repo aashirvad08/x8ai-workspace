@@ -16,8 +16,7 @@ use std::sync::{Mutex, PoisonError};
 use tauri::{AppHandle, Manager};
 use x8ai_core::error::{CommandError, ErrorCode};
 use x8ai_core::model::{
-    CredentialState, ModelProviderDefinition, ProviderAuth, ProviderKind, ProviderList,
-    ProviderStatus,
+    CredentialState, ModelProviderDefinition, ProviderAuth, ProviderList, ProviderStatus,
 };
 use x8ai_providers::Settings;
 use x8ai_providers::ollama::{self, Detection};
@@ -104,25 +103,23 @@ impl Providers {
         }
     }
 
-    fn status(&self, provider: &ModelProviderDefinition) -> ProviderStatus {
-        let local = lock(&self.local);
-        let detection = local
-            .as_ref()
-            .filter(|_| provider.hosting == ProviderKind::Local);
+    /// Every provider's status, with the last local detection: never a new one.
+    pub(crate) fn statuses(&self) -> Vec<ProviderStatus> {
+        self.definitions.iter().map(|p| self.status(p)).collect()
+    }
+
+    /// A provider's status, with the last local detection: never a new one.
+    pub(crate) fn status(&self, provider: &ModelProviderDefinition) -> ProviderStatus {
         let custom = lock(&self.settings)
             .as_ref()
             .map(|s| s.get(provider.id.as_str()).models)
             .unwrap_or_default();
-        let found = detection.map(|d| d.models.as_slice()).unwrap_or_default();
-        ProviderStatus {
-            id: provider.id.clone(),
-            name: provider.name.clone(),
-            description: provider.description.clone(),
-            hosting: provider.hosting,
-            credential: self.credential_state(provider),
-            local: detection.map(|d| d.availability.clone()),
-            models: x8ai_providers::models(provider, found, &custom),
-        }
+        x8ai_providers::status(
+            provider,
+            self.credential_state(provider),
+            lock(&self.local).as_ref(),
+            &custom,
+        )
     }
 
     fn with_settings<T>(
@@ -308,6 +305,21 @@ mod tests {
         };
         let json = serde_json::to_string(&list).unwrap();
         assert!(!json.contains(KEY), "{json}");
+        // Nor does the catalog built from it.
+        let catalog = x8ai_catalog::assemble(
+            &x8ai_catalog::Metadata::builtin(),
+            &x8ai_catalog::Facts {
+                agents: &[],
+                providers: &list.providers,
+                mcp: &[],
+                skills: &[],
+            },
+        );
+        let listed = serde_json::to_string(&catalog).unwrap();
+        assert!(
+            listed.contains(r#""credential":"inKeychain""#) && !listed.contains(KEY),
+            "{listed}"
+        );
         // Only the agent commands read it, natively.
         assert_eq!(
             providers.credential(anthropic).unwrap().unwrap().expose(),

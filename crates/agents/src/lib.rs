@@ -20,6 +20,7 @@ pub mod discovery;
 pub mod environment;
 pub mod isolation;
 pub mod runtime;
+mod status;
 
 pub use builtin::builtin;
 pub use isolation::{Isolation, Removal, Worktree};
@@ -27,3 +28,4 @@ pub use runtime::{
     AgentRuntime, AgentSession, Authorized, Denied, LaunchPlan, ProviderRoute, RunError,
     SessionState, authorize, plan,
 };
+pub use status::status;

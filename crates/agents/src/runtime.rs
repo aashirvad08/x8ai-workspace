@@ -28,6 +28,7 @@ use x8ai_core::agent::{AgentDefinition, AgentSessionId, SessionConfiguration};
 use x8ai_core::id::IntegrationId;
 use x8ai_core::launch::EnvValue;
 use x8ai_core::model::ModelSelection;
+use x8ai_core::skill::SkillRef;
 use x8ai_core::terminal::{SessionId, TerminalExit, TerminalSize};
 use x8ai_pty::{Environment, Program, Session, SessionEvents, Sessions};
 use x8ai_workspace::{Approval, ApprovalStore, ApprovedProvider, TrustStore};
@@ -62,6 +63,8 @@ pub struct LaunchPlan {
     pub configuration: SessionConfiguration,
     /// The MCP servers this launch gives the agent, by id (docs/mcp.md).
     pub mcp: Vec<IntegrationId>,
+    /// The skills this launch gives the agent, exactly as recorded.
+    pub skills: Vec<SkillRef>,
 }
 
 /// A provider and the endpoint an agent is configured to send requests, and the
@@ -83,6 +86,7 @@ impl std::fmt::Debug for LaunchPlan {
             .field("extra_args", &self.extra_args)
             .field("provider", &self.provider)
             .field("mcp", &self.mcp)
+            .field("skills", &self.skills)
             .finish_non_exhaustive()
     }
 }
@@ -167,6 +171,7 @@ pub fn plan(
         provider: None,
         model: None,
         mcp: Vec::new(),
+        skills: Vec::new(),
     })
 }
 
@@ -228,6 +233,8 @@ pub struct AgentSession {
     pub configuration: SessionConfiguration,
     /// The MCP servers attached when it was created. Never grows.
     pub mcp: Vec<IntegrationId>,
+    /// The skills attached when it was created, as they were then.
+    pub skills: Vec<SkillRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -245,7 +252,7 @@ pub enum RunError {
     SharedBusy,
     #[error("the launch does not belong to this agent session")]
     Mismatch,
-    #[error("a worktree's model or MCP servers do not match its session")]
+    #[error("a worktree's model, MCP servers or skills do not match its session")]
     ModelMismatch,
     #[error("the agent's directory is not inside its workspace")]
     OutsideWorkspace,
@@ -264,6 +271,7 @@ struct Record {
     model: Option<ModelSelection>,
     configuration: SessionConfiguration,
     mcp: Vec<IntegrationId>,
+    skills: Vec<SkillRef>,
     pty: Option<Arc<Session>>,
     failure: Option<String>,
 }
@@ -293,6 +301,7 @@ impl Record {
             model: self.model.clone(),
             configuration: self.configuration.clone(),
             mcp: self.mcp.clone(),
+            skills: self.skills.clone(),
             terminal: self
                 .pty
                 .as_ref()
@@ -330,7 +339,7 @@ impl AgentRuntime {
         }
         if worktree
             .as_ref()
-            .is_some_and(|w| w.model != plan.model || w.mcp != plan.mcp)
+            .is_some_and(|w| w.model != plan.model || w.mcp != plan.mcp || w.skills != plan.skills)
         {
             return Err(RunError::ModelMismatch);
         }
@@ -354,6 +363,7 @@ impl AgentRuntime {
             model: plan.model.clone(),
             configuration: plan.configuration.clone(),
             mcp: plan.mcp.clone(),
+            skills: plan.skills.clone(),
             pty: None,
             failure: None,
         });
@@ -389,6 +399,7 @@ impl AgentRuntime {
             model: worktree.model.clone(),
             configuration,
             mcp: worktree.mcp.clone(),
+            skills: worktree.skills.clone(),
             worktree: Some(worktree),
             pty: None,
             failure: None,
@@ -429,6 +440,7 @@ impl AgentRuntime {
             || record.workspace != plan.workspace
             || record.model != plan.model
             || !plan.mcp.iter().all(|id| record.mcp.contains(id))
+            || plan.skills != record.skills
         {
             return Err(RunError::Mismatch);
         }

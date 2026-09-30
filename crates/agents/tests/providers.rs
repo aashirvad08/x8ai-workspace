@@ -580,7 +580,7 @@ fn the_key_reaches_the_agent_and_is_written_nowhere() {
     approvals.approve(&plan.approval()).unwrap();
     let selection = plan.model.clone().unwrap();
     let worktree = isolation
-        .create(&git_cli, &repo, &plan.agent, Some(&selection), &[])
+        .create(&git_cli, &repo, &plan.agent, Some(&selection), &[], &[])
         .unwrap();
     let runtime = AgentRuntime::default();
     let sessions = Sessions::default();
@@ -691,7 +691,7 @@ fn a_tampered_model_in_worktree_metadata_is_not_used() {
     };
     let agent_id = agent("claude-code").id;
     let worktree = isolation
-        .create(&git_cli, &repo, &agent_id, Some(&selection), &[])
+        .create(&git_cli, &repo, &agent_id, Some(&selection), &[], &[])
         .unwrap();
     let metadata = worktree.path.with_extension("json");
     let text = fs::read_to_string(&metadata).unwrap();
@@ -707,7 +707,7 @@ fn a_tampered_model_in_worktree_metadata_is_not_used() {
     };
     assert!(
         isolation
-            .create(&git_cli, &repo, &agent_id, Some(&bad), &[])
+            .create(&git_cli, &repo, &agent_id, Some(&bad), &[], &[])
             .is_err()
     );
     isolation.remove(&git_cli, &repo, &worktree, true).unwrap();

@@ -19,5 +19,14 @@
       "mcpTransports": ["stdio", "streamableHttp"]
     },
     "platforms": ["macos", "linux"]
+  },
+  {
+    "id": "codex",
+    "name": "Codex",
+    "description": "OpenAI's coding agent for the terminal. It uses its own configuration: the app has no adapter for it.",
+    "launch": { "program": "codex" },
+    "requirements": [{ "kind": "executable", "program": "codex" }],
+    "capabilities": {},
+    "platforms": ["macos", "linux"]
   }
 ]

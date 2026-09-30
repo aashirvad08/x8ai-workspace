@@ -1,0 +1,16 @@
+[package]
+name = "x8ai-skills"
+description = "Skills: built-in and user instructions for agent sessions, their registry and how sessions keep them. Text only. No Tauri."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+x8ai-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

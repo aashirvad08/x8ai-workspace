@@ -360,7 +360,7 @@ fn validate_env(transport: &McpServerTransport, env: &[McpEnvVar]) -> Result<(),
     Ok(())
 }
 
-fn looks_like_credential(value: &str) -> bool {
+pub(crate) fn looks_like_credential(value: &str) -> bool {
     let value = value.rsplit_once('=').map_or(value, |(_, v)| v);
     let value = value.trim_start_matches('/');
     CREDENTIAL_PREFIXES

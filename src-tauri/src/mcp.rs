@@ -177,6 +177,18 @@ impl Mcp {
             .collect()
     }
 
+    /// Every registered server's status. Nothing is started or contacted.
+    pub(crate) fn statuses(
+        &self,
+        path: Option<&str>,
+        agents: &[AgentDefinition],
+    ) -> Vec<McpServerStatus> {
+        self.servers()
+            .iter()
+            .map(|s| self.status(s, path, agents))
+            .collect()
+    }
+
     fn status(
         &self,
         server: &McpServer,
@@ -472,11 +484,26 @@ mod tests {
         let after = mcp.status(&server, Some("/usr/bin:/bin"), &x8ai_agents::builtin());
         assert!(after.configured, "{:?}", after.problem);
         assert_eq!(after.secrets[0].state, CredentialState::InKeychain);
+        let catalog = x8ai_catalog::assemble(
+            &x8ai_catalog::Metadata::builtin(),
+            &x8ai_catalog::Facts {
+                agents: &[],
+                providers: &[],
+                mcp: std::slice::from_ref(&after),
+                skills: &[],
+            },
+        );
         let json = serde_json::to_string(&McpServerList {
             servers: vec![after],
         })
         .unwrap();
         assert!(!json.contains(SECRET), "{json}");
+        // Nor does the catalog, which says only whether it is saved.
+        let listed = serde_json::to_string(&catalog).unwrap();
+        assert!(
+            listed.contains("mcp.github") && !listed.contains(SECRET),
+            "{listed}"
+        );
         let file = std::fs::read_to_string(temp.join("mcp-servers.json")).unwrap();
         assert!(!file.contains(SECRET));
         // Both built-in agents can use it.

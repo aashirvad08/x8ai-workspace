@@ -213,7 +213,9 @@ running OpenCode.
 
 ### Codex
 
-No adapter. Codex runs with its own configuration (`~/.codex`), untouched.
+No adapter. Codex is a built-in definition since Phase 8 (`codex` on the `PATH`),
+so the runtime reports whether it is installed. It runs with its own
+configuration (`~/.codex`), which the app never reads or writes.
 
 ## Sessions
 
@@ -231,7 +233,10 @@ or none needed) are offered.
 The session keeps its model for every run: restart and "Terminal" relaunch with it,
 reading the key from the Keychain again each time. The model is saved in the
 worktree's metadata (`~/.x8ai/worktrees/…/<name>.json`: provider id and model id,
-never a key), so a session found after the app restarts keeps it. A session runs
+never a key), so a session found after the app restarts keeps it. The catalog
+(Phase 8, docs/catalog.md) lists the same providers and models from this
+registry. "Use for the next launch" there only selects the model on the agent
+card. A session runs
 only with its own model (`Mismatch` otherwise). To use another model, start another
 session.
 

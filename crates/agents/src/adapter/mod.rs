@@ -21,6 +21,10 @@
 //! itself; the agent is told to run the app's bridge to reach them, so it never
 //! sees their command, their variables or their secrets. An agent whose adapter
 //! does not implement it, or that has no adapter, gets no MCP servers.
+//!
+//! Skills (docs/catalog.md) work the same way: [`attach_skills`] gives the
+//! agent a session's skill instructions through its documented per-session
+//! mechanism, or refuses. A skill is text; it changes nothing else.
 
 mod claude_code;
 mod opencode;
@@ -35,6 +39,7 @@ use x8ai_core::model::{
     CredentialState, MODEL_ID_RULE, ModelProviderDefinition, ModelSelection, ProviderAuth,
     ProviderEndpoint, is_model_id,
 };
+use x8ai_core::skill::SkillRef;
 use x8ai_secrets::SecretValue;
 
 pub use claude_code::ClaudeCode;
@@ -84,6 +89,21 @@ pub enum ConfigureError {
     InvalidModel(String),
     #[error("{agent} cannot use MCP servers from the app: {reason}")]
     McpUnsupported { agent: String, reason: String },
+    #[error("{agent} cannot take skills from the app: {reason}")]
+    SkillsUnsupported { agent: String, reason: String },
+    #[error("the skills attached are too long together (at most {MAX_SKILLS_TEXT} bytes)")]
+    SkillsTooLong,
+}
+
+/// Most skill text passed to an agent for one session.
+pub const MAX_SKILLS_TEXT: usize = 64 * 1024;
+
+/// A skill as an agent is given it for one session: exactly as recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSkill {
+    pub reference: SkillRef,
+    pub name: String,
+    pub instructions: String,
 }
 
 /// An MCP server as an agent is told about it for one session.
@@ -181,6 +201,21 @@ pub trait AgentAdapter: Send + Sync {
         let _ = (servers, env);
         McpConfiguration::default()
     }
+    /// Whether the app can give the agent skill instructions for one session,
+    /// and why not. Unsupported unless the adapter implements it.
+    fn skills(&self) -> Result<(), String> {
+        Err(
+            "the app does not know a documented way to give it instructions for one session"
+                .to_owned(),
+        )
+    }
+    /// The variables and arguments that give the agent `text` (the session's
+    /// skills) for this session only. Called only when [`skills`](Self::skills)
+    /// says it is supported.
+    fn configure_skills(&self, text: &str) -> McpConfiguration {
+        let _ = text;
+        McpConfiguration::default()
+    }
 }
 
 static ADAPTERS: [&dyn AgentAdapter; 2] = [&ClaudeCode, &OpenCode];
@@ -261,6 +296,53 @@ pub fn attach_mcp(
     }
     plan.extra_args.extend(configuration.args);
     plan.mcp = servers.iter().map(|s| s.id.clone()).collect();
+    Ok(plan)
+}
+
+/// Whether the agent (by id) can be given skills by the app, and why not.
+pub fn skills_support(agent: &str) -> Result<(), String> {
+    adapter(agent)
+        .ok_or_else(|| {
+            "the app has no adapter for this agent, so it gets no skills from the app".to_owned()
+        })?
+        .skills()
+}
+
+/// Gives the agent of `plan` these skills, for this launch only, through its
+/// adapter, and records exactly which. Refused if the agent cannot take them.
+pub fn attach_skills(
+    mut plan: LaunchPlan,
+    skills: &[AgentSkill],
+) -> Result<LaunchPlan, ConfigureError> {
+    if skills.is_empty() {
+        return Ok(plan);
+    }
+    skills_support(plan.agent.as_str()).map_err(|reason| ConfigureError::SkillsUnsupported {
+        agent: plan.name.clone(),
+        reason,
+    })?;
+    let mut text = String::from(
+        "The user attached these skills to this session in x8ai Workspace. Follow them \
+         together with your other instructions.\n",
+    );
+    for skill in skills {
+        text.push_str(&format!(
+            "\n## Skill: {}\n\n{}\n",
+            skill.name,
+            skill.instructions.trim()
+        ));
+    }
+    if text.len() > MAX_SKILLS_TEXT {
+        return Err(ConfigureError::SkillsTooLong);
+    }
+    let adapter = adapter(plan.agent.as_str()).expect("supported");
+    let configuration = adapter.configure_skills(&text);
+    for (name, value) in configuration.env {
+        plan.env.retain(|(n, _)| *n != name);
+        plan.env.push((name, value));
+    }
+    plan.extra_args.extend(configuration.args);
+    plan.skills = skills.iter().map(|s| s.reference.clone()).collect();
     Ok(plan)
 }
 

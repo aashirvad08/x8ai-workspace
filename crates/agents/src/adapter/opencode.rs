@@ -17,6 +17,9 @@
 //! the configuration the session already has (the app's, or the shell's
 //! `OPENCODE_CONFIG_CONTENT`), for this session only.
 //!
+//! Skills are not supported: OpenCode reads extra instructions only from files
+//! named in its configuration, and the app writes no files for it.
+//!
 //! Not verified against a running OpenCode yet (docs/models.md).
 
 use serde_json::json;
@@ -139,6 +142,13 @@ impl AgentAdapter for OpenCode {
 
     fn mcp(&self) -> Result<(), String> {
         Ok(())
+    }
+
+    fn skills(&self) -> Result<(), String> {
+        Err(
+            "OpenCode reads extra instructions only from files, and the app writes no files for it"
+                .to_owned(),
+        )
     }
 
     fn configure_mcp(

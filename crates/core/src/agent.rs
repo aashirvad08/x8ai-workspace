@@ -113,6 +113,10 @@ pub struct AgentStatus {
     pub providers: Vec<ProviderSupport>,
     /// Whether the app can give this agent MCP servers (docs/mcp.md).
     pub mcp: FeatureSupport,
+    /// Whether the app can give this agent skills (docs/catalog.md).
+    pub skills: FeatureSupport,
+    /// What its definition says it can use.
+    pub capabilities: AgentCapabilities,
 }
 
 /// Whether something is supported, and why not.
@@ -236,6 +240,8 @@ pub struct AgentSessionInfo {
     /// The MCP servers attached when the session was created, and what each is
     /// doing. Fixed for the session: servers enabled later are not added.
     pub mcp: Vec<crate::mcp::SessionMcpServer>,
+    /// The skills attached when the session was created, as recorded then.
+    pub skills: Vec<crate::skill::SessionSkill>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

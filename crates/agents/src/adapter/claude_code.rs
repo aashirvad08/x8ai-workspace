@@ -29,6 +29,11 @@
 //! the project's own MCP servers, which stay as they are; `~/.claude.json` is
 //! never written. The JSON holds only the bridge and a socket path, or a URL: no
 //! secret, nothing to expand.
+//!
+//! Skills (/cli-reference, "System prompt flags"): `--append-system-prompt` with
+//! the session's skill text, which adds to Claude Code's own system prompt for
+//! the session, in interactive mode too. `CLAUDE.md`, output styles and Claude
+//! Code's own skills are left as they are.
 
 use serde_json::{Map, json};
 use x8ai_core::model::{ModelProviderDefinition, ProviderApi, ProviderEndpoint};
@@ -144,6 +149,17 @@ impl AgentAdapter for ClaudeCode {
 
     fn mcp(&self) -> Result<(), String> {
         Ok(())
+    }
+
+    fn skills(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn configure_skills(&self, text: &str) -> McpConfiguration {
+        McpConfiguration {
+            env: Vec::new(),
+            args: vec!["--append-system-prompt".to_owned(), text.to_owned()],
+        }
     }
 
     fn configure_mcp(

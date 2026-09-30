@@ -244,7 +244,11 @@ built-in definitions).
 - **MCP** [built: Phase 7, docs/mcp.md]: the adapter gives the agent its
   session's MCP servers through its documented per-session mechanism; stdio
   servers are started by the app when the agent connects, and stop with it.
-- **More agents:** a definition in `builtin.json`, later from the catalog
-  (Phase 8), whose approvals pin the definition's hash.
+- **Skills** [built: Phase 8, docs/catalog.md]: the adapter gives the agent its
+  session's skills (instructions only): `--append-system-prompt` for Claude Code.
+  OpenCode and Codex are unsupported.
+- **More agents:** a definition in `builtin.json` (Codex was added in Phase 8,
+  without an adapter). A future signed remote catalog could deliver more, through
+  the runtime and its approvals (ADR 0018).
 - **Structured agents:** a second runtime kind for agents with machine interfaces
   (ACP, headless JSON), reusing definitions, trust and approvals.

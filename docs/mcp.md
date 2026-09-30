@@ -37,8 +37,9 @@ docs/models.md).
 | UI | `src/mcp/` (the MCP tab, ⇧⌘U), `src/agents/` (launch choices, session card) |
 
 The Phase 0 `McpServerDefinition` (a catalog definition with a `LaunchSpec`) is
-unchanged; it is what the catalog (Phase 8) will distribute. A registry entry is
-what the user configured.
+unchanged. The Phase 8 catalog lists the registry's servers and distributes no
+definitions (docs/catalog.md, ADR 0018). A registry entry is what the user
+configured.
 
 ## Servers
 
@@ -334,11 +335,13 @@ supplies a command, a path, a socket or a value.
   check it. A server is exercised only by an approved session.
 - **OpenCode** support is implemented from its documentation and unit-tested, not
   verified against a running OpenCode.
-- **Codex** is not a built-in agent and has no adapter.
+- **Codex** is a built-in agent definition since Phase 8, with no adapter: it
+  gets no servers.
 - Duplicate-server resolution inside an agent (the user's own server with the
   same command) follows the agent's rules; the app's are named `x8ai-<id>`.
-- SSE servers, header secrets, and servers from a catalog (Phase 8) are not
-  supported.
+- SSE servers, header secrets, and server definitions from a catalog are not
+  supported. The Phase 8 catalog shows the servers configured here, and can
+  enable, disable or attach them to the next launch through the same commands.
 
 ## Tests
 

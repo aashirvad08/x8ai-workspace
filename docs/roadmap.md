@@ -14,8 +14,8 @@ are part of every phase, not a final pass (`docs/security.md`).
 | 5 | Multi-agent workspaces | **Complete** |
 | 6 | Model providers, secrets and local models | **Complete** |
 | 7 | MCP layer | **Complete** |
-| 8 | Catalog | Next |
-| 9 | Review and merge | Planned |
+| 8 | Catalog and skills | **Complete** |
+| 9 | Review and merge | Next |
 | 10 | Editor intelligence | Planned |
 | 11 | Skills, templates and presets | Planned |
 | 12 | Hardening, distribution and Linux | Planned |
@@ -250,8 +250,8 @@ agent use them.
 - An ADR decides whether an MCP gateway is needed. **ADR 0017**: not now.
 
 **Deferred from Phase 7**, deliberately:
-- Built-in and catalog server definitions (GitHub, Playwright, databases):
-  Phase 8, pinned and reviewed.
+- Built-in and catalog server definitions (GitHub, Playwright, databases): these
+  need a signed, pinned remote catalog. Phase 8 deferred them (ADR 0018).
 - An inspection client (`initialize`, list tools) and a "test" action: they would
   start servers or contact URLs outside a session; they need their own approval
   design.
@@ -259,23 +259,56 @@ agent use them.
   authenticate themselves today.
 - SSE, an MCP gateway, and OS sandboxing of servers (Phase 12).
 
-## Phase 8 — Catalog
+## Phase 8 — Catalog and skills
 
-**Objective.** Discover, install and connect agents, providers and MCP servers from
-one place.
+**Objective.** One place to discover the agents, models, MCP servers and skills
+the app knows, see what each needs, and bring them into a session, without a
+second way to configure or run anything.
 
-**Major components.** A `catalog` crate. A catalog entry format (a definition plus
-version, source, integrity and license) with a `schemaVersion`. A signed remote
-index. Built-in and user-defined sources. Browse and search UI. Install and
-Connect flows. Update notifications.
+**Delivered** (docs/catalog.md; ADR 0018).
+- An `x8ai-catalog` crate. It assembles items (agents, providers and models, MCP
+  servers, skills), with stable ids, statuses, requirements and capabilities,
+  from what each owning system reports. It adds presentation metadata of its own
+  (publisher when known, tags, a version) that cannot configure anything. It is
+  pure: no process, network, Keychain, trust or approval access (tested).
+- A Catalog tab (⇧⌘K). Categories, local instant search, a status filter, and
+  per-item actions that go to the owning system: open Agents, set up in Models,
+  enable, disable or configure an MCP server, add or edit a skill, and choose a
+  model, a server or a skill for the next launch.
+- Skills: an `x8ai-skills` crate with three built-in skills and the user's own
+  (`skills.json`). They are text only and refuse anything that looks like a key.
+  They are scoped to every session, one folder, or chosen at launch. Claude Code
+  gets them through `--append-system-prompt`. OpenCode and Codex are unsupported,
+  with the reason.
+- Sessions record their skills by id, version and fingerprint, alongside the
+  agent, model and MCP servers, in worktree metadata too. A removed or changed
+  skill stops the session with the reason. Nothing is silently upgraded or
+  substituted.
+- Codex as a built-in agent definition (no adapter), so its installed state comes
+  from the runtime.
+- Seams for a future signed remote catalog (`MetadataSource`, `SignedMetadata`,
+  `Verifier`), with nothing remote implemented.
 
 **Acceptance criteria.**
-- "Install" shows the exact commands, runs them in a visible session after
-  approval, and registers the definition. "Connect" detects existing installs.
-- The index signature is verified, and tampered entries are rejected (tests).
-- Approved definitions are pinned by hash. A changed definition requires
-  re-approval.
-- User-defined entries are labelled untrusted.
+- Every item's status comes from the system that owns it, and nothing is shown
+  as installed because metadata describes it. **Met** (tests; live check with the
+  real Claude Code and Codex).
+- Opening the catalog starts no process or server, probes nothing and makes no
+  network connection. **Met** (tests; live check).
+- A launch from catalog choices goes through the existing approval dialog, and
+  the session shows its agent, model, MCP servers and skills. This holds after a
+  restart. **Met** (tests; live check).
+- Skills cannot hold secrets or change any other configuration. **Met** (tests).
+
+**Deferred from Phase 8**, deliberately:
+- Installation of any kind ("Install" and "Connect" flows), update
+  notifications, and installed-software versions beyond what a system already
+  reports. The app runs nothing to find a version.
+- A signed remote index, pinned and reviewed MCP server definitions (GitHub,
+  Playwright), and user-labelled untrusted remote entries: for a remote catalog
+  phase, behind the seams above (ADR 0018).
+- Skills for OpenCode (it reads instructions only from files) and Codex (no
+  adapter).
 
 ## Phase 9 — Review and merge
 
@@ -312,15 +345,15 @@ processes. Diagnostics, completion and go-to-definition.
 
 **Objective.** Share reusable capabilities and ready-made setups.
 
-**Major components.** Skill definitions (for example instruction and resource
-bundles that agents can load) as a catalog kind. Project templates. Workspace
-presets that bundle agent, provider, model and MCP servers into one-click stacks.
+**Major components.** Resource bundles for skills, beyond the instruction skills
+of Phase 8. Project templates. Workspace presets that bundle agent, provider,
+model, MCP servers and skills into one-click stacks.
 
 **Acceptance criteria.**
 - A preset configures a workspace end to end (agent, provider, MCP) in one step and
   shows everything it will run and every secret it needs.
-- Skills install into the agent-specific locations through adapters, with no
-  agent-specific UI code.
+- Skills reach more agents through adapters, with no agent-specific UI code, and
+  never through the user's global agent configuration.
 - Templates never execute scaffolding scripts without approval.
 
 ## Phase 12 — Hardening, distribution and Linux

@@ -1,0 +1,10 @@
+[
+  { "id": "agent.claude-code", "publisher": "Anthropic", "version": "1", "source": "builtin", "tags": ["coding agent", "terminal"] },
+  { "id": "agent.opencode", "version": "1", "source": "builtin", "tags": ["coding agent", "terminal", "open source"] },
+  { "id": "agent.codex", "publisher": "OpenAI", "version": "1", "source": "builtin", "tags": ["coding agent", "terminal"] },
+  { "id": "provider.anthropic", "publisher": "Anthropic", "version": "1", "source": "builtin", "tags": ["hosted", "claude"] },
+  { "id": "provider.openai", "publisher": "OpenAI", "version": "1", "source": "builtin", "tags": ["hosted"] },
+  { "id": "provider.google", "publisher": "Google", "version": "1", "source": "builtin", "tags": ["hosted", "gemini"] },
+  { "id": "provider.openrouter", "publisher": "OpenRouter", "version": "1", "source": "builtin", "tags": ["gateway"] },
+  { "id": "provider.ollama", "publisher": "Ollama", "version": "1", "source": "builtin", "tags": ["local", "open models"] }
+]

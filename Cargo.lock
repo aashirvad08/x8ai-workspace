@@ -5002,6 +5002,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "x8ai-catalog"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "x8ai-agents",
+ "x8ai-core",
+ "x8ai-mcp",
+ "x8ai-providers",
+ "x8ai-skills",
+]
+
+[[package]]
 name = "x8ai-core"
 version = "0.1.0"
 dependencies = [
@@ -5022,12 +5037,14 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "x8ai-agents",
+ "x8ai-catalog",
  "x8ai-core",
  "x8ai-git",
  "x8ai-mcp",
  "x8ai-providers",
  "x8ai-pty",
  "x8ai-secrets",
+ "x8ai-skills",
  "x8ai-workspace",
 ]
 
@@ -5087,6 +5104,17 @@ version = "0.1.0"
 dependencies = [
  "security-framework",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "x8ai-skills"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "x8ai-core",
 ]
 
 [[package]]

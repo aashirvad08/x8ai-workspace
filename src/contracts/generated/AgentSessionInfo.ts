@@ -6,6 +6,7 @@ import type { IntegrationId } from "./IntegrationId";
 import type { SessionConfiguration } from "./SessionConfiguration";
 import type { SessionId } from "./SessionId";
 import type { SessionMcpServer } from "./SessionMcpServer";
+import type { SessionSkill } from "./SessionSkill";
 
 /**
  * One agent session: where it works and what it is doing.
@@ -36,4 +37,8 @@ terminal: SessionId | null, configuration: SessionConfiguration,
  * The MCP servers attached when the session was created, and what each is
  * doing. Fixed for the session: servers enabled later are not added.
  */
-mcp: Array<SessionMcpServer>, };
+mcp: Array<SessionMcpServer>, 
+/**
+ * The skills attached when the session was created, as recorded then.
+ */
+skills: Array<SessionSkill>, };

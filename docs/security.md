@@ -12,14 +12,14 @@ protection. Do not rely on it.
 
 ---
 
-## 1. What is enforced today (Phases 0–7)
+## 1. What is enforced today (Phases 0–8)
 
 These protections exist and are verified:
 
 | Control | Where | Verified by |
 | --- | --- | --- |
 | Every native command needs an explicit grant to a window. Tauri rejects ungranted calls before the command's code runs. | `src-tauri/build.rs`, `src-tauri/capabilities/` | Manual: revoking the grant yields `Command get_app_info not allowed by ACL` in the UI |
-| The webview's commands are `get_app_info`, `app_*` (quit guard, startup warnings), `terminal_*`, `workspace_*` (files, recent folders, trust, search), `agent_*`, `provider_*` (keys, model ids) and `mcp_*` (MCP servers and their secrets), each granted explicitly. No shell, fs, HTTP or opener plugins are installed. `tauri-plugin-dialog` is used only from Rust, and none of its webview commands are granted. | `src-tauri/Cargo.toml`, `capabilities/main-window.json` | Code review, `tauri-build` ACL output; `src/architecture.test.ts` checks that the grants are exactly the commands the client calls |
+| The webview's commands are `get_app_info`, `app_*` (quit guard, startup warnings), `terminal_*`, `workspace_*` (files, recent folders, trust, search), `agent_*`, `provider_*` (keys, model ids), `mcp_*` (MCP servers and their secrets), `skill_*` (the user's skills) and `catalog_list`, each granted explicitly. No shell, fs, HTTP or opener plugins are installed. `tauri-plugin-dialog` is used only from Rust, and none of its webview commands are granted. | `src-tauri/Cargo.toml`, `capabilities/main-window.json` | Code review, `tauri-build` ACL output; `src/architecture.test.ts` checks that the grants are exactly the commands the client calls |
 | **The webview cannot choose what a terminal runs, or where.** `terminal_create` always starts the user's login shell, in the open workspace's root or the home directory, and accepts only a size. | `src-tauri/src/terminal.rs` | Code review; manual `pwd` |
 | **The webview cannot name a new folder to open.** A workspace is whatever the user picks in the native folder picker, or a folder from the recent list, which only ever holds folders picked that way. Reopening also requires the path to still lead to the same folder, so replacing it with a symlink does not redirect it. | `src-tauri/src/workspace.rs`, `crates/workspace` | Code review; test `reopening_refuses_a_path_that_now_leads_elsewhere` |
 | **Only the user can trust a folder.** Trust is granted only in a native confirmation dialog the webview cannot answer, applies to exactly one folder (not its parent or subfolders), and is stored outside the folder, so a repository cannot declare itself trusted (ADR 0010). | `src-tauri/src/workspace.rs`, `crates/workspace/src/store.rs` | Store tests (`trust_is_explicit_exact_and_persistent`); code review |
@@ -43,6 +43,10 @@ These protections exist and are verified:
 | **An MCP server runs only for an agent session, in a trusted folder, once approved there exactly as it runs.** Approval pins the resolved executable, every argument, the URL, and the variables by name and source; any change asks again. Nothing starts at startup or because a server exists; a stdio server starts when the session's agent connects, and only a process of that agent may connect. | `crates/mcp`, `src-tauri/src/agents.rs` | Tests (`a_server_runs_only_in_a_trusted_workspace_once_approved_there`, `a_changed_command_arguments_endpoint_or_variables_need_a_new_approval`, `a_server_starts_only_when_the_sessions_agent_connects`, `a_connection_from_outside_the_session_starts_nothing`, `only_exactly_what_was_approved_can_be_started`); live test with the real Claude Code |
 | **MCP servers are never run through a shell, and get only their own variables.** A command is one program (absolute or on the login `PATH`, never relative, never a shell); arguments are structured. The environment is a base (`PATH`, `HOME`, locale…), the server's listed inherited variables and its Keychain secrets: no provider key, no other server's secret. | `crates/core/src/mcp.rs`, `crates/mcp/src/environment.rs` | Tests (`a_stdio_command_is_one_program_never_a_command_line`, `a_servers_environment_is_the_base_its_variables_and_nothing_else`); live test (decoy provider keys absent from the server) |
 | **MCP server processes do not outlive their session.** Startup timeout, bounded restarts and error output (redacted); process group killed when the agent ends, the folder loses trust, the page reloads or the app quits; stale sockets swept at startup. | `crates/mcp/src/runtime.rs` | Tests (`stopping_the_session_ends_the_server_and_everything_it_started`, `a_crash_is_reported_redacted_and_restarts_are_bounded`, `a_server_that_never_answers_is_stopped_after_the_startup_timeout`, `sessions_and_servers_are_isolated_and_quitting_leaves_nothing_running`) |
+| **The catalog is data, and cannot act.** `x8ai-catalog` depends only on the contracts: no PTY, agent or MCP runtime, Keychain, trust or approval store, HTTP client or Tauri. Its source has no process, socket or file-writing API. `catalog_list` gathers the statuses each system already reports, starts no server and never probes Ollama. Its metadata has closed fields (no command, URL or setting), and metadata claiming a remote source is refused (ADR 0018). | `crates/catalog`, `src-tauri/src/catalog.rs` | Tests (`the_catalog_cannot_run_install_fetch_unlock_trust_or_approve_anything`, `listing_the_catalog_starts_probes_unlocks_and_approves_nothing`, `damaged_or_unsafe_metadata_is_refused`, `ollama_stays_unchecked_until_the_models_view_checks_it`, workbench: opening the catalog lists and probes nothing); live test |
+| **Nothing is "installed" because metadata says so.** An agent is installed only when the runtime finds its program; metadata matching nothing the app has is not shown. The app installs nothing. | `crates/catalog/src/assemble.rs` | Tests (`an_agent_is_installed_when_the_runtime_finds_it_and_only_then`, `metadata_for_something_the_app_does_not_have_is_not_shown`) |
+| **Skills are text for one session, and hold no secret.** A skill has instructions, suggested tools (never granted), a source and a scope; nothing that could change a provider, server, agent, trust or approval. Validation refuses control characters and anything that looks like a key. User skills are in `skills.json` (0600), apart from provider and MCP data. Claude Code gets them through `--append-system-prompt` for that session; OpenCode and Codex are refused. | `crates/core/src/skill.rs`, `crates/skills`, `crates/agents/src/adapter/` | Tests (`a_skill_can_never_hold_a_secret_and_the_file_holds_none`, `a_damaged_or_forged_file_loads_nothing_it_should_not`, `claude_code_gets_the_sessions_skills_through_append_system_prompt`, `agents_that_cannot_take_skills_are_refused_with_the_reason`) |
+| **A session never runs with something other than what it recorded.** Its agent, model, MCP servers and skills (id, version, fingerprint) are recorded, in worktree metadata outside the worktree too. A removed or changed skill stops it with the reason; nothing is silently substituted or upgraded. | `crates/agents/src/runtime.rs`, `crates/skills/src/lib.rs`, `src-tauri/src/agents.rs` | Tests (`a_session_runs_only_with_the_skills_it_recorded`, `a_session_runs_only_with_exactly_the_skills_it_recorded`, `a_worktree_remembers_its_sessions_skills_by_reference_only`, `a_session_says_whether_each_skill_is_still_the_one_it_recorded`) |
 | **No network access at startup, none to hosted providers.** Ollama is probed on the loopback address only when the user opens Models or refreshes. | `crates/providers/src/ollama.rs`, `src/models/` | Workbench test (`looks for local providers when Models opens, not when Agents opens`); review |
 | **A running program is not ended by accident.** Closing a terminal pane or tab, or quitting, asks first when a program other than the shell is in the terminal's foreground (read from the PTY with `tcgetpgrp`). | `crates/pty`, `src/workbench/workbench.ts` | Tests (`knows_when_a_job_is_in_the_foreground`, workbench tests) |
 | Terminal command arguments are validated in Rust: sizes (1–4096 × 1–2048), session ids (`notFound` otherwise), and raw input only to an existing session | `crates/core/src/terminal.rs`, `crates/pty` | Unit and integration tests |
@@ -150,8 +154,10 @@ weaken it.
   tool lists at enable time needs the app to act as an MCP client, which Phase 7
   deliberately does not; **not yet enforced** (deferred with the inspection
   client).
-- **Rug pulls.** Record a content hash of each approved definition and require
-  re-approval when it changes. **Phase 8.**
+- **Rug pulls.** **Enforced (Phase 7)** for what the app starts: an approval pins
+  the executable, every argument, the URL and the variables, and any change asks
+  again. What a package manager fetches for an approved command (`npx pkg`) is
+  not pinned by the app. The catalog (Phase 8) distributes no server definitions.
 - **Remote MCP servers** receive workspace content through tool calls. HTTPS is
   required for non-loopback hosts, and URLs cannot carry credentials or
   environment references (enforced in validation, Phase 7). Authentication is the
@@ -249,13 +255,21 @@ weaken it.
 
 ### 3.7 Malicious integrations and the catalog
 
-- **Supply chain:** typosquatted packages, compromised npm or PyPI releases with
-  install scripts, and a compromised catalog index. **Phase 8:** a signed catalog
-  index, pinned versions and checksums, provenance display, reviewed built-ins,
-  and user-defined entries labelled untrusted.
-- **Installation executes code.** "Install" shows the exact commands (for example
-  `npm i -g …`) and runs them only after approval, in a visible terminal session,
-  never silently.
+- **The catalog is untrusted metadata.** It cannot execute, start a server,
+  change trust, grant approval or read a secret. It asks the system that owns an
+  item, which applies its own checks (ADR 0018). **Enforced (Phase 8).**
+- **Installation executes code.** The app installs nothing: no package managers,
+  downloads or URLs. An agent that is not installed is shown as such.
+  **Enforced (Phase 8).**
+- **Supply chain of a future remote catalog:** typosquatting, compromised
+  packages with install scripts, a compromised index. **Future:** signed metadata
+  verified against keys the user trusts, pinned versions and checksums,
+  provenance display, and installation only through the owning system's approval.
+  Only the interfaces exist.
+- **Skills steer agents, as any prompt does.** A user skill is as trusted as its
+  author, and built-in skills are reviewed. A skill can grant nothing, and the
+  agent's own permission prompts still apply. The approval dialog lists a
+  session's skills.
 - **No in-process plugins.** Third-party code never loads into the app process or
   the webview (architecture §14).
 

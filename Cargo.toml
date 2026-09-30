@@ -8,6 +8,8 @@ members = [
     "crates/secrets",
     "crates/providers",
     "crates/mcp",
+    "crates/skills",
+    "crates/catalog",
     "crates/agents",
     "src-tauri",
 ]
@@ -27,6 +29,8 @@ x8ai-git = { path = "crates/git" }
 x8ai-secrets = { path = "crates/secrets" }
 x8ai-providers = { path = "crates/providers" }
 x8ai-mcp = { path = "crates/mcp" }
+x8ai-skills = { path = "crates/skills" }
+x8ai-catalog = { path = "crates/catalog" }
 x8ai-agents = { path = "crates/agents" }
 
 # Tauri (desktop host). Tauri 3 is alpha; stay on the 2.x stable line.

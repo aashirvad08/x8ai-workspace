@@ -1,4 +1,5 @@
 import { AgentsView } from "../agents/AgentsView";
+import { CatalogView } from "../catalog/CatalogView";
 import { useStore } from "../lib/useStore";
 import { McpView } from "../mcp/McpView";
 import { ModelsView } from "../models/ModelsView";
@@ -13,9 +14,10 @@ const VIEWS: readonly { view: SidebarView; label: string; shortcut: string }[] =
   { view: "agents", label: "Agents", shortcut: "⇧⌘A" },
   { view: "models", label: "Models", shortcut: "⇧⌘M" },
   { view: "mcp", label: "MCP", shortcut: "⇧⌘U" },
+  { view: "catalog", label: "Catalog", shortcut: "⇧⌘K" },
 ];
 
-/** The left column: the file explorer, search, agents, models or MCP servers, switched by tabs at the top. */
+/** The left column: the file explorer, search, agents, models, MCP servers or the catalog, switched by tabs at the top. */
 export function Sidebar({ workbench }: { workbench: Workbench }) {
   const { sidebar } = useStore(workbench.layout);
   return (
@@ -34,6 +36,7 @@ export function Sidebar({ workbench }: { workbench: Workbench }) {
               else if (view === "agents") workbench.showAgents();
               else if (view === "models") workbench.showModels();
               else if (view === "mcp") workbench.showMcp();
+              else if (view === "catalog") workbench.showCatalog();
               else workbench.layout.showSidebar(view);
             }}
           >
@@ -55,10 +58,17 @@ export function Sidebar({ workbench }: { workbench: Workbench }) {
             agents={workbench.agents}
             providers={workbench.providers}
             mcp={workbench.mcp}
+            skills={workbench.skills}
+            drafts={workbench.drafts}
             terminals={workbench.terminals}
             workspace={workbench.workspace}
             actions={workbench}
           />
+        </aside>
+      )}
+      {sidebar === "catalog" && (
+        <aside className="explorer" aria-label="Catalog">
+          <CatalogView catalog={workbench.catalog} skills={workbench.skills} actions={workbench} />
         </aside>
       )}
       {sidebar === "mcp" && (

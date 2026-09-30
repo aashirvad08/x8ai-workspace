@@ -1,0 +1,32 @@
+[
+  {
+    "id": "explain-before-editing",
+    "name": "Explain before editing",
+    "description": "States the plan before changing files, and summarizes what changed after.",
+    "version": 1,
+    "instructions": "Before you change any file, say in a few lines what you are going to change and why, then wait for the user to agree if the change is large or touches many files. After changing files, summarize what changed, file by file, and anything you could not verify.",
+    "allowedTools": [],
+    "source": "builtin",
+    "scope": { "kind": "session" }
+  },
+  {
+    "id": "tests-first",
+    "name": "Tests first",
+    "description": "Writes or updates a failing test before fixing a bug, and runs the tests after.",
+    "version": 1,
+    "instructions": "When fixing a bug, first write or update a test that fails because of it, and run it to see it fail. Then make the smallest change that makes it pass. Run the relevant tests again at the end and report the result honestly, including any failure you could not fix.",
+    "allowedTools": ["Bash", "Read", "Edit"],
+    "source": "builtin",
+    "scope": { "kind": "session" }
+  },
+  {
+    "id": "python-debugging",
+    "name": "Python debugging",
+    "description": "A careful routine for Python failures: reproduce, read the traceback, fix the cause.",
+    "version": 1,
+    "instructions": "For a Python failure: reproduce it with the smallest command first. Read the whole traceback from the bottom up and name the line and the value that is wrong. Check the Python version and the virtual environment in use before blaming a library. Fix the cause, not the symptom, and do not silence exceptions. Show the command you ran to confirm the fix.",
+    "allowedTools": ["Bash", "Read", "Edit"],
+    "source": "builtin",
+    "scope": { "kind": "session" }
+  }
+]

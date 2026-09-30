@@ -23,20 +23,21 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use x8ai_agents::adapter::{self, AgentMcpServer, AgentMcpTransport, ConfigureError};
+use x8ai_agents::adapter::{self, AgentMcpServer, AgentMcpTransport, AgentSkill, ConfigureError};
 use x8ai_agents::discovery::find_executable;
 use x8ai_agents::environment::{RESOLVE_TIMEOUT, resolve, var};
 use x8ai_agents::isolation::{self, Isolation};
 use x8ai_agents::{AgentRuntime, AgentSession, Denied, LaunchPlan, RunError, SessionState, plan};
 use x8ai_core::agent::{
-    AgentAvailability, AgentChangedFile, AgentChanges, AgentDefinition, AgentList, AgentRemoval,
-    AgentSessionId, AgentSessionInfo, AgentSessionState, AgentStatus, AgentWorktree, ChangeKind,
-    ProviderSupport, SessionConfiguration, WorkspaceIsolation,
+    AgentChangedFile, AgentChanges, AgentDefinition, AgentList, AgentRemoval, AgentSessionId,
+    AgentSessionInfo, AgentSessionState, AgentStatus, AgentWorktree, ChangeKind,
+    SessionConfiguration, WorkspaceIsolation,
 };
 use x8ai_core::error::{CommandError, ErrorCode};
 use x8ai_core::id::IntegrationId;
 use x8ai_core::mcp::{McpEnvSource, McpServerTransport};
 use x8ai_core::model::{CredentialState, ModelSelection};
+use x8ai_core::skill::{Skill, SkillRef};
 use x8ai_core::terminal::TerminalExit;
 use x8ai_core::terminal::{TerminalInfo, TerminalSize};
 use x8ai_core::workspace::FileContent;
@@ -47,6 +48,7 @@ use x8ai_workspace::Workspace;
 
 use crate::mcp::{Mcp, RunServer};
 use crate::providers::Providers;
+use crate::skills::Skills;
 use crate::terminal::{ChannelEvents, Terminals, info};
 use crate::workspace::Workspaces;
 
@@ -60,8 +62,8 @@ pub struct Agents {
 }
 
 /// The environment agents are found and started with.
-struct Resolved {
-    vars: Vec<(String, String)>,
+pub(crate) struct Resolved {
+    pub(crate) vars: Vec<(String, String)>,
     /// Why the login environment could not be read, if it could not.
     problem: Option<String>,
 }
@@ -424,6 +426,7 @@ fn ask_approval(
     plan: &LaunchPlan,
     agent_needed: bool,
     servers: &[&Prepared],
+    skills: &[String],
 ) -> Result<bool, CommandError> {
     let workspaces = app.state::<Workspaces>();
     let root = plan.workspace.clone();
@@ -431,11 +434,19 @@ fn ask_approval(
         || root.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
-    let mcp_text = if servers.is_empty() {
+    let skills_text = if skills.is_empty() {
         String::new()
     } else {
         format!(
-            "MCP servers for {name}'s sessions here:\n{}\n",
+            "Skills for this session: {} (instructions only: they run nothing and need no approval)\n\n",
+            skills.join(", ")
+        )
+    };
+    let mcp_text = if servers.is_empty() {
+        skills_text
+    } else {
+        format!(
+            "MCP servers for {name}'s sessions here:\n{}\n{skills_text}",
             describe_servers(&plan.name, servers),
             name = plan.name
         )
@@ -549,6 +560,58 @@ fn mcp_denied(reason: x8ai_mcp::Denied) -> CommandError {
     CommandError::new(ErrorCode::PermissionDenied, format!("MCP: {reason}"))
 }
 
+/// The login environment, as the runtime reads it (once, kept).
+pub(crate) async fn login_environment(app: &AppHandle) -> Result<Arc<Resolved>, CommandError> {
+    resolved(app, false).await
+}
+
+/// The skills a new session of `definition` in `root` gets: global and
+/// workspace skills, and the session skills `chosen`. For an agent that cannot
+/// take skills, choosing one is refused and the others are not attached.
+fn skills_for_new_session(
+    skills: &Skills,
+    definition: &AgentDefinition,
+    root: &Path,
+    chosen: &[String],
+) -> Result<Vec<Skill>, CommandError> {
+    let chosen: Vec<IntegrationId> = chosen
+        .iter()
+        .map(|c| {
+            IntegrationId::new(c.clone())
+                .map_err(|e| CommandError::new(ErrorCode::InvalidInput, e.to_string()))
+        })
+        .collect::<Result<_, _>>()?;
+    if let Err(reason) = adapter::skills_support(definition.id.as_str()) {
+        if chosen.is_empty() {
+            return Ok(Vec::new());
+        }
+        return Err(configure_error(ConfigureError::SkillsUnsupported {
+            agent: definition.name.clone(),
+            reason,
+        }));
+    }
+    let all = skills.skills();
+    let attached = x8ai_skills::attach(&all, root, &chosen)
+        .map_err(|e| CommandError::new(ErrorCode::InvalidInput, e.to_string()))?;
+    Ok(attached.into_iter().cloned().collect())
+}
+
+/// The skills exactly as a session recorded them, for the agent; refused, with
+/// the reason, when one was removed or changed since.
+fn skills_for_run(skills: &Skills, recorded: &[SkillRef]) -> Result<Vec<AgentSkill>, CommandError> {
+    let all = skills.skills();
+    let resolved = x8ai_skills::resolve(&all, recorded)
+        .map_err(|e| CommandError::new(ErrorCode::Conflict, format!("Skills: {e}")))?;
+    Ok(resolved
+        .into_iter()
+        .map(|s| AgentSkill {
+            reference: s.reference(),
+            name: s.name.clone(),
+            instructions: s.instructions.clone(),
+        })
+        .collect())
+}
+
 /// The `PATH` of the user's login environment, to look for local providers.
 pub async fn login_path(app: &AppHandle) -> Result<Option<String>, CommandError> {
     let environment = resolved(app, false).await?;
@@ -600,57 +663,7 @@ pub async fn agent_list(refresh: bool, app: AppHandle) -> Result<AgentList, Comm
     let workspaces = app.state::<Workspaces>();
     let providers = app.state::<Providers>();
     let root = workspaces.root();
-    // Without a workspace, agents are still looked up; they are just not approved.
-    let lookup_in = root.clone().unwrap_or_else(|| PathBuf::from("/"));
-    let statuses = agents
-        .definitions
-        .iter()
-        .map(|definition| {
-            let planned = plan(definition, &environment.vars, &lookup_in);
-            let approved = match (&planned, &root) {
-                (Ok(plan), Some(_)) => workspaces.is_approved_for_any_provider(plan),
-                _ => false,
-            };
-            let availability = match planned {
-                Ok(plan) => AgentAvailability::Installed {
-                    executable: plan.program.display().to_string(),
-                },
-                Err(Denied::NotInstalled { program, .. }) => {
-                    AgentAvailability::NotInstalled { program }
-                }
-                Err(_) => AgentAvailability::Unsupported,
-            };
-            AgentStatus {
-                id: definition.id.clone(),
-                name: definition.name.clone(),
-                description: definition.description.clone(),
-                availability,
-                approved,
-                mcp: {
-                    let support = adapter::mcp_support(
-                        definition.id.as_str(),
-                        &definition.capabilities.mcp_transports,
-                    );
-                    x8ai_core::agent::FeatureSupport {
-                        supported: support.is_ok(),
-                        reason: support.err(),
-                    }
-                },
-                providers: providers
-                    .definitions()
-                    .iter()
-                    .map(|provider| {
-                        let support = adapter::support(definition.id.as_str(), provider);
-                        ProviderSupport {
-                            provider: provider.id.clone(),
-                            supported: support.is_ok(),
-                            reason: support.err(),
-                        }
-                    })
-                    .collect(),
-            }
-        })
-        .collect();
+    let statuses = agent_statuses(&agents, &environment, &workspaces, &providers);
     let isolation = root
         .as_ref()
         .map(|root| isolation_of(git_in(&environment).as_ref(), root));
@@ -659,6 +672,32 @@ pub async fn agent_list(refresh: bool, app: AppHandle) -> Result<AgentList, Comm
         environment_problem: environment.problem.clone(),
         isolation,
     })
+}
+
+/// Every built-in agent's status, as the runtime reports it (for the Agents view
+/// and the catalog). Finding a program runs nothing.
+pub(crate) fn agent_statuses(
+    agents: &Agents,
+    environment: &Resolved,
+    workspaces: &Workspaces,
+    providers: &Providers,
+) -> Vec<AgentStatus> {
+    let root = workspaces.root();
+    // Without a workspace, agents are still looked up; they are just not approved.
+    let lookup_in = root.clone().unwrap_or_else(|| PathBuf::from("/"));
+    agents
+        .definitions
+        .iter()
+        .map(|definition| {
+            x8ai_agents::status(
+                definition,
+                &environment.vars,
+                &lookup_in,
+                providers.definitions(),
+                |plan| root.is_some() && workspaces.is_approved_for_any_provider(plan),
+            )
+        })
+        .collect()
 }
 
 /// How agents would run in `root`.
@@ -695,6 +734,7 @@ pub async fn agent_request_approval(
     agent: String,
     model: Option<ModelSelection>,
     mcp: Option<Vec<String>>,
+    skills: Option<Vec<String>>,
     window: WebviewWindow,
     app: AppHandle,
 ) -> Result<bool, CommandError> {
@@ -719,7 +759,14 @@ pub async fn agent_request_approval(
             &mcp.unwrap_or_default(),
             var(&environment.vars, "PATH"),
         )?;
-        request_approval(&window, &task_app, &plan, &selection)
+        let skills = skills_for_new_session(
+            &task_app.state::<Skills>(),
+            definition,
+            &root,
+            &skills.unwrap_or_default(),
+        )?;
+        let names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+        request_approval(&window, &task_app, &plan, &selection, &names)
     })
     .await
     .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
@@ -765,7 +812,13 @@ pub async fn agent_request_session_approval(
             &record.mcp,
             var(&environment.vars, "PATH"),
         );
-        request_approval(&window, &task_app, &plan, &selection)
+        let names: Vec<String> = task_app
+            .state::<Skills>()
+            .session_skills(&record.skills)
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        request_approval(&window, &task_app, &plan, &selection, &names)
     })
     .await
     .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
@@ -776,6 +829,7 @@ fn request_approval(
     app: &AppHandle,
     plan: &LaunchPlan,
     selection: &McpSelection,
+    skills: &[String],
 ) -> Result<bool, CommandError> {
     let workspaces = app.state::<Workspaces>();
     if !workspaces.is_trusted(&plan.workspace) {
@@ -788,7 +842,7 @@ fn request_approval(
     if !agent_needed && servers.is_empty() {
         return Ok(true);
     }
-    ask_approval(window, app, plan, agent_needed, &servers)
+    ask_approval(window, app, plan, agent_needed, &servers, skills)
 }
 
 /// Forgets `agent`'s approval in the open workspace. Running sessions continue.
@@ -815,6 +869,7 @@ pub async fn agent_create_session(
     agent: String,
     model: Option<ModelSelection>,
     mcp: Option<Vec<String>>,
+    skills: Option<Vec<String>>,
     app: AppHandle,
 ) -> Result<AgentSessionInfo, CommandError> {
     let environment = resolved(&app, false).await?;
@@ -842,6 +897,16 @@ pub async fn agent_create_session(
         workspaces.authorize(&plan).map_err(denied)?;
         check_mcp(&task_app, &root, &selection)?;
         plan.mcp = selection.attached;
+        // Skills are recorded exactly as they are now.
+        plan.skills = skills_for_new_session(
+            &task_app.state::<Skills>(),
+            definition,
+            &root,
+            &skills.unwrap_or_default(),
+        )?
+        .iter()
+        .map(Skill::reference)
+        .collect();
         // 3. Git, 4. a worktree of its own.
         let git = git_in(&environment);
         let repo = match &git {
@@ -852,7 +917,14 @@ pub async fn agent_create_session(
             (Some(git), Some(repo)) => {
                 let worktree = agents
                     .isolation
-                    .create(git, &repo, &definition.id, plan.model.as_ref(), &plan.mcp)
+                    .create(
+                        git,
+                        &repo,
+                        &definition.id,
+                        plan.model.as_ref(),
+                        &plan.mcp,
+                        &plan.skills,
+                    )
                     .map_err(isolation_error)?;
                 (cwd_in(&worktree.path, &repo), Some(worktree))
             }
@@ -865,6 +937,7 @@ pub async fn agent_create_session(
         session_info(
             &agents.runtime.get(id).expect("just created"),
             &task_app.state::<Mcp>(),
+            &task_app.state::<Skills>(),
         )
     })
     .await
@@ -932,6 +1005,9 @@ pub async fn agent_run(
             var(&environment.vars, "PATH"),
         );
         check_mcp(&task_app, &root, &selection).map_err(fail)?;
+        // Its skills exactly as recorded: a removed or changed one stops it here.
+        let session_skills =
+            skills_for_run(&task_app.state::<Skills>(), &record.skills).map_err(fail)?;
         let plan = start_mcp(
             &task_app,
             session,
@@ -942,6 +1018,10 @@ pub async fn agent_run(
             &selection,
         )
         .map_err(fail)?;
+        let plan = adapter::attach_skills(plan, &session_skills).map_err(|error| {
+            mcp.stop(session.0);
+            fail(configure_error(error))
+        })?;
         let authorized = workspaces.authorize(&plan).map_err(|reason| {
             mcp.stop(session.0);
             fail(denied(reason))
@@ -1107,7 +1187,7 @@ pub async fn agent_sessions(app: AppHandle) -> Result<Vec<AgentSessionInfo>, Com
                 &environment.vars,
             )
             .iter()
-            .map(|s| session_info(s, &task_app.state::<Mcp>()))
+            .map(|s| session_info(s, &task_app.state::<Mcp>(), &task_app.state::<Skills>()))
             .collect()
     })
     .await
@@ -1262,7 +1342,11 @@ fn worktree_of(
     })
 }
 
-fn session_info(session: &AgentSession, mcp: &Mcp) -> Result<AgentSessionInfo, CommandError> {
+fn session_info(
+    session: &AgentSession,
+    mcp: &Mcp,
+    skills: &Skills,
+) -> Result<AgentSessionInfo, CommandError> {
     Ok(AgentSessionInfo {
         id: session.id,
         agent: session.agent.clone(),
@@ -1290,6 +1374,7 @@ fn session_info(session: &AgentSession, mcp: &Mcp) -> Result<AgentSessionInfo, C
             &session.mcp,
             session.state == SessionState::Running,
         ),
+        skills: skills.session_skills(&session.skills),
     })
 }
 
@@ -1323,7 +1408,9 @@ fn configure_error(error: ConfigureError) -> CommandError {
         ConfigureError::Unsupported { .. }
         | ConfigureError::NoAdapter(_)
         | ConfigureError::InvalidModel(_)
-        | ConfigureError::McpUnsupported { .. } => ErrorCode::InvalidInput,
+        | ConfigureError::McpUnsupported { .. }
+        | ConfigureError::SkillsUnsupported { .. }
+        | ConfigureError::SkillsTooLong => ErrorCode::InvalidInput,
     };
     CommandError::new(code, error.to_string())
 }

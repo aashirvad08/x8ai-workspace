@@ -12,6 +12,8 @@ const claude: AgentStatus = {
   approved: false,
   providers: [],
   mcp: { supported: true, reason: null },
+  skills: { supported: true, reason: null },
+  capabilities: { modelApis: ["anthropicMessages"], mcpTransports: ["stdio"] },
 };
 
 function server(id: string, scope: McpServerStatus["server"]["scope"], enabled = true, supported = true): McpServerStatus {

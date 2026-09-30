@@ -3,13 +3,16 @@ import { describe, expect, it } from "vitest";
 import type { AgentChanges } from "../contracts/generated/AgentChanges";
 import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
 import type { AppEvent } from "../contracts/generated/AppEvent";
+import type { CatalogItem } from "../contracts/generated/CatalogItem";
 import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { FileVersion } from "../contracts/generated/FileVersion";
 import type { McpServerStatus } from "../contracts/generated/McpServerStatus";
+import type { ModelSelection } from "../contracts/generated/ModelSelection";
 import type { ProviderStatus } from "../contracts/generated/ProviderStatus";
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchEvent } from "../contracts/generated/SearchEvent";
 import type { SessionId } from "../contracts/generated/SessionId";
+import type { SkillStatus } from "../contracts/generated/SkillStatus";
 import type { WorkspaceEvent } from "../contracts/generated/WorkspaceEvent";
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
 import { basename, dirname, isWithin } from "../lib/paths";
@@ -60,6 +63,22 @@ function fakeNative() {
       { id: "ollama", name: "Ollama", description: "", hosting: "local", credential: "notNeeded", local: null, models: [] },
     ] as ProviderStatus[],
     mcp: [] as McpServerStatus[],
+    skills: [
+      {
+        skill: {
+          id: "tests-first",
+          name: "Tests first",
+          description: "",
+          version: 1,
+          instructions: "Write the test first.",
+          allowedTools: [],
+          source: "builtin",
+          scope: { kind: "session" },
+        },
+        agents: [{ agent: "claude-code", supported: true, reason: null }],
+      },
+    ] as SkillStatus[],
+    catalog: [] as CatalogItem[],
     appListener: null as ((event: AppEvent) => void) | null,
     diskListener: null as ((event: WorkspaceEvent) => void) | null,
     unsaved: false,
@@ -175,6 +194,8 @@ function fakeNative() {
             { provider: "ollama", supported: true, reason: null },
           ],
           mcp: { supported: true, reason: null },
+          skills: { supported: true, reason: null },
+          capabilities: { modelApis: ["anthropicMessages"], mcpTransports: ["stdio"] },
         },
       ],
       environmentProblem: null,
@@ -182,8 +203,8 @@ function fakeNative() {
         ? { kind: "worktrees", branch: "main", head: "a".repeat(40) }
         : { kind: "unavailable", reason: "This folder is not a Git repository." },
     }),
-    requestAgentApproval: async (agent, model, mcp) => {
-      calls.push(`approve ${agent}${model ? ` ${model.provider}/${model.model}` : ""}${mcp.length ? ` mcp:${mcp.join(",")}` : ""}`);
+    requestAgentApproval: async (agent, model, mcp, skills) => {
+      calls.push(`approve ${agent}${describeLaunch(model, mcp, skills)}`);
       const open = state.open!;
       if (!state.trusted.has(open.root)) throw new NativeError("x", "permissionDenied", "not trusted");
       const key = `${open.root}:${agent}${model ? `@${model.provider}` : ""}`;
@@ -195,8 +216,8 @@ function fakeNative() {
       calls.push(`approveSession ${session}`);
       return state.allowAgent;
     },
-    createAgentSession: async (agent, model, mcp) => {
-      calls.push(`createSession ${agent}${model ? ` ${model.provider}/${model.model}` : ""}${mcp.length ? ` mcp:${mcp.join(",")}` : ""}`);
+    createAgentSession: async (agent, model, mcp, skills) => {
+      calls.push(`createSession ${agent}${describeLaunch(model, mcp, skills)}`);
       const open = state.open!;
       if (!state.git && state.agentSessions.some((s) => !s.worktree && s.state.state === "running")) {
         throw new NativeError("x", "conflict", "this folder is not a Git repository, so agents cannot get workspaces of their own");
@@ -225,6 +246,7 @@ function fakeNative() {
             }
           : { source: "agent", shellVariables: [] },
         mcp: mcp.map((id) => ({ id, name: id, transport: "stdio", state: { state: "idle" } })),
+        skills: skills.map((id) => ({ id, name: id, version: 1, state: { state: "attached" } })),
       };
       state.agentSessions.push(session);
       return session;
@@ -294,6 +316,39 @@ function fakeNative() {
     },
     removeMcpSecret: async (id, name) =>
       changeMcp(id, (s) => ({ ...s, secrets: s.secrets.map((x) => (x.name === name ? { ...x, state: "missing" } : x)), configured: false })),
+    listSkills: async () => {
+      calls.push("listSkills");
+      return { skills: state.skills.map((s) => ({ ...s })) };
+    },
+    addSkill: async (input) => {
+      if (/(^|\s)sk-\S{8,}/.test(input.instructions)) {
+        throw new NativeError("skill_add", "invalidInput", "instructions: looks like it contains a credential; skills must not hold secrets");
+      }
+      const skill = {
+        ...input,
+        id: input.name.toLowerCase().replaceAll(" ", "-"),
+        version: 1,
+        source: "user" as const,
+        scope: input.scope === "workspace" ? { kind: "workspace" as const, root: state.open?.root ?? "" } : { kind: input.scope },
+      } as SkillStatus["skill"];
+      calls.push(`addSkill ${skill.id}`);
+      state.skills.push({ skill, agents: [{ agent: "claude-code", supported: true, reason: null }] });
+      return skill;
+    },
+    updateSkill: async (id, input) => {
+      calls.push(`updateSkill ${id}`);
+      const found = state.skills.find((s) => s.skill.id === id)!;
+      found.skill = { ...found.skill, name: input.name, instructions: input.instructions, version: found.skill.version + 1 };
+      return found.skill;
+    },
+    removeSkill: async (id) => {
+      calls.push(`removeSkill ${id}`);
+      state.skills = state.skills.filter((s) => s.skill.id !== id);
+    },
+    listCatalog: async () => {
+      calls.push("listCatalog");
+      return { items: state.catalog.map((i) => ({ ...i })), warnings: [] };
+    },
   };
   function changeMcp(id: string, change: (s: McpServerStatus) => McpServerStatus): McpServerStatus {
     state.mcp = state.mcp.map((s) => (s.server.id === id ? change(s) : s));
@@ -304,6 +359,10 @@ function fakeNative() {
     return state.providers.find((p) => p.id === id)!;
   }
   return { native, state };
+}
+
+function describeLaunch(model: ModelSelection | null, mcp: readonly string[], skills: readonly string[]): string {
+  return `${model ? ` ${model.provider}/${model.model}` : ""}${mcp.length ? ` mcp:${mcp.join(",")}` : ""}${skills.length ? ` skills:${skills.join(",")}` : ""}`;
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -1074,5 +1133,114 @@ describe("Workbench MCP servers", () => {
     workbench.openAgentTerminal(1);
     await settle();
     expect(workbench.terminals.agentPanes("claude-code")).toHaveLength(1);
+  });
+});
+
+describe("Workbench catalog", () => {
+  const launches = (calls: readonly string[]) => calls.filter((c) => /^(approve|createSession)/.test(c));
+
+  it("opens by listing, with nothing started, probed or approved", async () => {
+    const { workbench, state } = await opened();
+    // Starting the app and opening a folder neither lists the catalog nor looks for Ollama.
+    expect(state.calls).not.toContain("listCatalog");
+    expect(state.calls).not.toContain("listProviders true");
+    state.calls.length = 0;
+    workbench.showCatalog();
+    await settle();
+    expect(workbench.layout.get().sidebar).toBe("catalog");
+    expect(state.calls).toContain("listCatalog");
+    // The Ollama probe stays with Models, where the user asks for it.
+    expect(state.calls).not.toContain("listProviders true");
+    expect(launches(state.calls)).toEqual([]);
+    workbench.refreshCatalog();
+    await settle();
+    expect(state.calls.filter((c) => c === "listCatalog")).toHaveLength(2);
+    expect(workbench.commands().find((c) => c.id === "view.catalog")?.shortcut).toMatchObject({ key: "k", meta: true, shift: true });
+  });
+
+  it("chooses a model for the next launch without launching, and only a usable one", async () => {
+    const { workbench, state } = await opened();
+    workbench.chooseModel("anthropic", "claude-sonnet-5");
+    await settle();
+    expect(workbench.drafts.of("claude-code").model).toBeNull();
+    expect(workbench.notifications.get().at(-1)?.message).toContain("No installed agent");
+
+    state.providers[0] = { ...state.providers[0]!, credential: "inKeychain" };
+    workbench.chooseModel("anthropic", "claude-sonnet-5");
+    await settle();
+    expect(workbench.drafts.of("claude-code").model).toEqual({ provider: "anthropic", model: "claude-sonnet-5" });
+    expect(workbench.layout.get().sidebar).toBe("agents");
+    expect(workbench.notifications.get().at(-1)?.message).toContain("Press Launch");
+    expect(launches(state.calls)).toEqual([]);
+  });
+
+  it("attaches a session MCP server and a skill to the next launch, then launches only when asked", async () => {
+    const { workbench, state } = await opened();
+    await workbench.addMcpServer({
+      name: "Echo",
+      description: "",
+      transport: { kind: "stdio", command: "python3", args: ["echo.py"] },
+      env: [],
+      enabled: true,
+      scope: "session",
+    });
+    workbench.attachMcp("echo");
+    workbench.attachSkill("tests-first");
+    await settle();
+    expect(workbench.drafts.of("claude-code")).toMatchObject({ mcp: ["echo"], skills: ["tests-first"] });
+    expect(launches(state.calls)).toEqual([]);
+
+    // A server that is not the user's to choose per session is not attached.
+    workbench.attachMcp("missing");
+    await settle();
+    expect(workbench.drafts.of("claude-code").mcp).toEqual(["echo"]);
+
+    await workbench.setTrust(true);
+    const draft = workbench.drafts.of("claude-code");
+    workbench.launchAgent("claude-code", draft.model, draft.mcp, draft.skills);
+    await settle();
+    await settle();
+    expect(state.calls).toContain("approve claude-code mcp:echo skills:tests-first");
+    expect(state.calls).toContain("createSession claude-code mcp:echo skills:tests-first");
+    await workbench.agents.loadSessions();
+    expect(workbench.agents.session(1)?.skills.map((s) => s.id)).toEqual(["tests-first"]);
+  });
+
+  it("adds, edits and removes the user's skills through the skill registry, asking before removing", async () => {
+    const { workbench, state } = await opened();
+    await expect(
+      workbench.addSkill({ name: "Keys", description: "", instructions: "Use api_key sk-x8ai-test", allowedTools: [], scope: "session" }),
+    ).resolves.toBe(false);
+    expect(workbench.notifications.get().at(-1)?.message).toContain("must not hold secrets");
+    expect(JSON.stringify(workbench.notifications.get())).not.toContain("sk-x8ai-test");
+
+    const input = { name: "HEP analysis", description: "", instructions: "Use ROOT conventions.", allowedTools: [], scope: "session" as const };
+    await expect(workbench.addSkill(input)).resolves.toBe(true);
+    await settle();
+    expect(workbench.skills.find("hep-analysis")?.skill.version).toBe(1);
+    expect(state.calls).toContain("listCatalog");
+    await expect(workbench.updateSkill("hep-analysis", { ...input, instructions: "Use ROOT 6 conventions." })).resolves.toBe(true);
+    await settle();
+    expect(workbench.skills.find("hep-analysis")?.skill.version).toBe(2);
+
+    workbench.removeSkill("hep-analysis");
+    await answer(workbench, "cancel");
+    expect(state.calls).not.toContain("removeSkill hep-analysis");
+    workbench.removeSkill("hep-analysis");
+    await answer(workbench, "remove");
+    await settle();
+    expect(state.calls).toContain("removeSkill hep-analysis");
+    expect(workbench.skills.find("hep-analysis")).toBeUndefined();
+  });
+});
+
+describe("Workbench shortcuts", () => {
+  it("gives every shortcut to one command", async () => {
+    const { workbench } = await opened();
+    const keys = workbench
+      .commands()
+      .filter((c) => c.shortcut)
+      .map((c) => `${c.when ?? "any"} ${JSON.stringify(c.shortcut)}`);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });
