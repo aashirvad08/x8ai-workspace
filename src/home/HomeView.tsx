@@ -172,7 +172,6 @@ function Headline({ name }: { name: string | null }) {
         <span className="home-greeting-sir">Sir</span>
         <span className="home-cursor" />
       </span>
-      <span className="home-rule" aria-hidden />
       {name && (
         <span className="home-name" aria-hidden>
           {name}
