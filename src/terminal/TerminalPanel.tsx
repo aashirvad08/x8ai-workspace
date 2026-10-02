@@ -15,14 +15,15 @@ interface Props {
   native: PanelNative;
   terminals: Terminals;
   actions: TerminalActions;
-  /** Hidden panels keep their sessions running. */
-  hidden: boolean;
+  /** Collapsed to its tab bar; its sessions keep running. */
+  collapsed: boolean;
   onHide: () => void;
+  onShow: () => void;
 }
 
 const KEY_STEP = 0.05;
 
-export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Props) {
+export function TerminalPanel({ native, terminals, actions, collapsed, onHide, onShow }: Props) {
   const { tabs, panes, active, focusRequest } = useStore(terminals);
   const body = useRef<HTMLDivElement>(null);
   const layouts = new Map<number, PaneLayout>(tabs.map((tab) => [tab.key, layoutPanes(tab.tree)]));
@@ -50,9 +51,8 @@ export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Pr
 
   return (
     <section
-      className="terminal-panel"
+      className={collapsed ? "terminal-panel terminal-panel-collapsed" : "terminal-panel"}
       aria-label="Terminal"
-      hidden={hidden}
       onDragEnterCapture={overModel}
       onDragOverCapture={overModel}
       onDragLeave={(e) => {
@@ -80,6 +80,7 @@ export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Pr
                   className={running ? "panel-tab-title" : "panel-tab-title panel-tab-ended"}
                   onClick={() => {
                     terminals.activate(tab.key);
+                    if (collapsed) onShow();
                     terminals.requestFocus();
                   }}
                 >
@@ -101,29 +102,40 @@ export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Pr
             +
           </button>
         </div>
-        <button
-          type="button"
-          className="icon-button"
-          title="Split Right (⌘D in a terminal)"
-          aria-label="Split terminal right"
-          onClick={() => actions.splitTerminal("right")}
-        >
-          <SplitIcon direction="right" />
-        </button>
-        <button
-          type="button"
-          className="icon-button"
-          title="Split Down (⇧⌘D in a terminal)"
-          aria-label="Split terminal down"
-          onClick={() => actions.splitTerminal("down")}
-        >
-          <SplitIcon direction="down" />
-        </button>
-        <button type="button" className="icon-button" title="Hide Terminal (⌃`)" aria-label="Hide terminal" onClick={onHide}>
-          ⌄
-        </button>
+        {!collapsed && (
+          <>
+            <button
+              type="button"
+              className="icon-button"
+              title="Split Right (⌘D in a terminal)"
+              aria-label="Split terminal right"
+              onClick={() => actions.splitTerminal("right")}
+            >
+              <SplitIcon direction="right" />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              title="Split Down (⇧⌘D in a terminal)"
+              aria-label="Split terminal down"
+              onClick={() => actions.splitTerminal("down")}
+            >
+              <SplitIcon direction="down" />
+            </button>
+          </>
+        )}
+        {collapsed ? (
+          <button type="button" className="icon-button" title="Show Terminal (⌃`)" aria-label="Show terminal" onClick={onShow}>
+            ⌃
+          </button>
+        ) : (
+          <button type="button" className="icon-button" title="Hide Terminal (⌃`)" aria-label="Hide terminal" onClick={onHide}>
+            ⌄
+          </button>
+        )}
       </header>
-      <div className="panel-body" ref={body}>
+      {/* Collapsed, the terminals stay mounted and running, out of sight. */}
+      <div className="panel-body" ref={body} hidden={collapsed}>
         {placed.map(({ key, rect, tab }) => {
           const split = paneKeys(tab.tree).length > 1;
           const focused = tab.focused === key;
@@ -142,7 +154,7 @@ export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Pr
               <PaneTerminal
                 native={native}
                 pane={panes.get(key)}
-                visible={tab.key === active}
+                visible={tab.key === active && !collapsed}
                 focused={focused}
                 focusRequest={focusRequest}
                 terminals={terminals}

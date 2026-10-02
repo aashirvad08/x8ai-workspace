@@ -235,6 +235,7 @@ kbd {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background: var(--bg-raised);
 }
 
@@ -242,15 +243,19 @@ kbd {
   flex: 1;
 }
 
+/* The tabs wrap onto a second row when the sidebar is too narrow for them,
+   rather than running past its edge. */
 .sidebar-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 6px 8px 0;
   flex-shrink: 0;
 }
 
 .sidebar-tab {
-  padding: 3px 10px;
+  padding: 3px 8px;
+  white-space: nowrap;
   border: none;
   border-radius: 5px;
   background: transparent;
@@ -1889,6 +1894,12 @@ kbd {
 
 .terminal-panel {
   position: relative;
+}
+
+/* Collapsed: the tab bar alone, along the bottom. */
+.terminal-panel-collapsed .panel-header {
+  border-top: 1px solid var(--border);
+  border-bottom: none;
 }
 
 .terminal-drop {

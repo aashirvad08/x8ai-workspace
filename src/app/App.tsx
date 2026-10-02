@@ -40,7 +40,8 @@ export function App({ workbench, native }: { workbench: Workbench; native: Nativ
         className="workbench"
         inert={homeVisible}
         style={{
-          gridTemplateRows: layout.terminalVisible ? `minmax(0, 1fr) auto ${terminalHeight}px` : "minmax(0, 1fr)",
+          // Hidden, the terminal collapses to its tab bar, which shows it again.
+          gridTemplateRows: layout.terminalVisible ? `minmax(0, 1fr) auto ${terminalHeight}px` : "minmax(0, 1fr) auto",
         }}
       >
         <div
@@ -75,8 +76,9 @@ export function App({ workbench, native }: { workbench: Workbench; native: Nativ
           native={native}
           terminals={workbench.terminals}
           actions={workbench}
-          hidden={!layout.terminalVisible}
+          collapsed={!layout.terminalVisible}
           onHide={() => workbench.layout.setTerminalVisible(false)}
+          onShow={() => workbench.toggleTerminal()}
         />
       </div>
       {homeVisible && <HomeView home={workbench.home} recent={workbench.recent} workspace={workbench.workspace} actions={workbench} />}
