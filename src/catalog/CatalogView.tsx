@@ -65,14 +65,14 @@ export const CatalogView = memo(function CatalogView({ catalog, skills, actions 
     <div className="agents catalog">
       <header className="explorer-header">
         <span className="explorer-title">Catalog</span>
+        <button type="button" className="icon-button" title="New skill" aria-label="New skill" disabled={editing !== null} onClick={() => setEditing("new")}>
+          +
+        </button>
         <button type="button" className="icon-button" title="Look again" aria-label="Refresh the catalog" onClick={() => actions.refreshCatalog()}>
           ↻
         </button>
       </header>
-      <p className="agents-note">
-        What the app knows and what each part needs. Nothing here installs, runs or goes online; setting up and allowing
-        stay with each part.
-      </p>
+
       <div className="search-field catalog-search">
         <input
           className="search-input"
@@ -83,6 +83,12 @@ export const CatalogView = memo(function CatalogView({ catalog, skills, actions 
           value={text}
           onChange={(e) => setText(e.target.value)}
         />
+        <select className="catalog-status" value={status} aria-label="Status filter" onChange={(e) => setStatus(e.target.value as StatusFilter)}>
+          <option value="any">Any status</option>
+          <option value="usable">Ready to use</option>
+          <option value="installed">Installed</option>
+          <option value="configured">Configured</option>
+        </select>
       </div>
       <div className="catalog-filters" role="group" aria-label="Category">
         {CATEGORIES.map((c) => (
@@ -96,12 +102,6 @@ export const CatalogView = memo(function CatalogView({ catalog, skills, actions 
             {c.label}
           </button>
         ))}
-        <select className="model-select catalog-status" value={status} aria-label="Status filter" onChange={(e) => setStatus(e.target.value as StatusFilter)}>
-          <option value="any">Any status</option>
-          <option value="usable">Installed or configured</option>
-          <option value="installed">Installed</option>
-          <option value="configured">Configured</option>
-        </select>
       </div>
       {error && (
         <p className="agents-note agents-error" role="alert">
@@ -113,11 +113,6 @@ export const CatalogView = memo(function CatalogView({ catalog, skills, actions 
           {w}
         </p>
       ))}
-      {(category === "skill" || category === "all") && editing === null && (
-        <button type="button" className="link-button catalog-new-skill" onClick={() => setEditing("new")}>
-          New skill…
-        </button>
-      )}
       {editing !== null && (
         <SkillForm
           initial={editingSkill ?? null}
@@ -184,12 +179,15 @@ function CatalogRow({
           <span className="agent-name">{item.displayName}</span>
           <span className={statusClass(item.status)}>{STATUS_LABELS[item.status]}</span>
         </span>
-        <span className="agent-approval">
+        {item.description && (
+          <span className="agent-description catalog-description" title={item.description}>
+            {item.description}
+          </span>
+        )}
+        <span className="agent-hint">
           {TYPE_LABELS[item.type]}
           {by && ` · ${by}`}
-          {item.catalogVersion && ` · catalog v${item.catalogVersion}`}
         </span>
-        {item.description && <span className="agent-description">{item.description}</span>}
       </button>
       {open && <CatalogDetails item={item} onEditSkill={onEditSkill} actions={actions} />}
     </li>
@@ -201,11 +199,7 @@ function CatalogDetails({ item, onEditSkill, actions }: { item: CatalogItem; onE
   return (
     <div className="agent-changes catalog-details">
       {item.statusDetail && <p className="agent-approval">{item.statusDetail}</p>}
-      <dl className="catalog-facts">
-        <dt>Id</dt>
-        <dd>
-          <code>{item.id}</code>
-        </dd>
+      <dl className="catalog-facts" title={item.id}>
         <dt>Source</dt>
         <dd>{SOURCE_LABELS[item.source]}</dd>
         {item.publisher && (
@@ -232,10 +226,18 @@ function CatalogDetails({ item, onEditSkill, actions }: { item: CatalogItem; onE
             </dd>
           </>
         )}
-        <dt>Catalog version</dt>
-        <dd>{item.catalogVersion ?? "—"}</dd>
-        <dt>Installed version</dt>
-        <dd>{item.softwareVersion ?? "not checked (the app runs nothing to find out)"}</dd>
+        {item.catalogVersion && (
+          <>
+            <dt>Catalog version</dt>
+            <dd>{item.catalogVersion}</dd>
+          </>
+        )}
+        {item.softwareVersion && (
+          <>
+            <dt>Version</dt>
+            <dd>{item.softwareVersion}</dd>
+          </>
+        )}
       </dl>
       {item.capabilities.length > 0 && <p className="agent-approval">Can: {item.capabilities.join(" · ")}</p>}
       {item.requirements.length > 0 && <p className="agent-approval">Needs: {item.requirements.join(" · ")}</p>}
@@ -243,23 +245,21 @@ function CatalogDetails({ item, onEditSkill, actions }: { item: CatalogItem; onE
       <div className="agent-actions">
         {d.kind === "agent" &&
           (item.status === "installed" ? (
-            <button type="button" onClick={() => actions.openAgent(d.agent)}>
+            <button type="button" className="agent-action-main" onClick={() => actions.openAgent(d.agent)}>
               Open in Agents
             </button>
           ) : (
-            <span className="agent-approval">
-              Not installed. The app does not install programs: install it yourself, then refresh.
-            </span>
+            <span className="agent-hint">Not installed · install it yourself, then refresh</span>
           ))}
         {d.kind === "provider" && (
-          <button type="button" onClick={() => actions.configureProvider(d.provider)}>
+          <button type="button" className="agent-action-main" onClick={() => actions.configureProvider(d.provider)}>
             Set up in Models
           </button>
         )}
         {d.kind === "model" &&
           (item.status === "configured" ? (
             <>
-              <button type="button" onClick={() => actions.launchModel(d.provider, d.model)}>
+              <button type="button" className="agent-action-main" onClick={() => actions.launchModel(d.provider, d.model)}>
                 Open in a terminal
               </button>
               <button type="button" onClick={() => actions.chooseModel(d.provider, d.model)}>
@@ -267,7 +267,7 @@ function CatalogDetails({ item, onEditSkill, actions }: { item: CatalogItem; onE
               </button>
             </>
           ) : (
-            <button type="button" onClick={() => actions.configureProvider(d.provider)}>
+            <button type="button" className="agent-action-main" onClick={() => actions.configureProvider(d.provider)}>
               Set up {d.providerName}
             </button>
           ))}

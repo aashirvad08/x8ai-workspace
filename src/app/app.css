@@ -839,9 +839,9 @@ kbd {
   flex: 1;
   min-width: 0;
   height: 24px;
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
   color: var(--text);
   font: inherit;
   font-size: 12px;
@@ -858,9 +858,9 @@ kbd {
   min-width: 0;
   height: 24px;
   padding: 0 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
   color: var(--text);
   font: inherit;
   font-size: 12px;
@@ -875,16 +875,21 @@ kbd {
 
 .model-form button {
   padding: 2px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  background: var(--bg-raised);
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--accent);
   font-size: 12px;
   cursor: pointer;
 }
 
+.model-form button:hover:not(:disabled) {
+  background: var(--bg-raised);
+}
+
+/* Nothing to save or add yet: the button waits out of sight. */
 .model-form button:disabled {
-  opacity: 0.45;
-  cursor: default;
+  visibility: hidden;
 }
 
 .model-list {
@@ -927,24 +932,46 @@ kbd {
 
 .catalog-filters {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   margin: 0 8px 8px;
 }
 
 .catalog-status {
-  flex: 1 0 100%;
+  flex: none;
+  height: 20px;
+  padding: 0 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
 }
 
-.catalog-new-skill {
-  align-self: flex-start;
-  margin: 0 12px 8px;
-  font-size: 12px;
+.catalog-status:hover {
+  background: var(--bg-hover);
 }
 
+.catalog-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A list, not a stack of cards: an item gets a surface only when opened. */
 .catalog-item {
   padding: 0;
+  background: none;
+}
+
+.catalog-item + .catalog-item {
+  margin-top: 2px;
+}
+
+.catalog-item:has(.catalog-row[aria-expanded="true"]) {
+  background: var(--bg);
 }
 
 .catalog-row {

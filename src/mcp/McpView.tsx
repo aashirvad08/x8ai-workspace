@@ -43,9 +43,11 @@ export const McpView = memo(function McpView({ mcp, agents, workspace, actions }
           ↻
         </button>
       </header>
-      <p className="agents-note">
-        The app gives these servers to agent sessions, in folders you trust, once you allow them there. Stdio servers are
-        started by the app for a running session and stopped with it. Secrets are kept in your macOS Keychain.
+      <p
+        className="agents-hint"
+        title="The app gives these servers to agent sessions, in folders you trust, once you allow them there. Stdio servers are started by the app for a running session and stopped with it. Secrets are kept in your macOS Keychain."
+      >
+        Given to agent sessions once you allow them.
       </p>
       {error && (
         <p className="agents-note agents-error" role="alert">
@@ -112,50 +114,54 @@ function ServerCard({
 }) {
   const { server } = status;
   const transport = server.transport;
+  const target = transport.kind === "stdio" ? [transport.command, ...transport.args].join(" ") : transport.url;
+  const supported = status.agents.filter((a) => a.supported).map((a) => agentName(a.agent));
+  const unsupported = status.agents
+    .filter((a) => !a.supported)
+    .map((a) => `${agentName(a.agent)}: not supported${a.reason ? ` (${a.reason})` : ""}`);
+  const inherited = server.env.filter((v) => v.source === "inherit").map((v) => v.name);
   return (
-    <li className="agent" aria-label={`${server.name} MCP server`}>
+    <li className={server.enabled ? "agent" : "agent agent-disabled"} aria-label={`${server.name} MCP server`}>
       <div className="agent-heading">
-        <span className="agent-name">{server.name}</span>
-        <span className={status.configured ? "agent-status agent-status-running" : "agent-status"}>
-          {!server.enabled ? "Disabled" : status.configured ? "Ready" : "Not configured"}
+        <span className="agent-name" title={server.description || undefined}>
+          {server.name}
+        </span>
+        <span className={server.enabled && status.configured ? "agent-status agent-status-running" : "agent-status"}>
+          {!server.enabled ? "Off" : status.configured ? "Ready" : "Not configured"}
         </span>
       </div>
-      {server.description && <p className="agent-description">{server.description}</p>}
-      <p className="agent-approval">
-        {transport.kind === "stdio" ? "stdio" : "HTTP"} · {scopeLabel(server.scope)}
+      <p className="agent-path" title={target}>
+        {target}
       </p>
-      <p className="agent-path" title={transport.kind === "stdio" ? [transport.command, ...transport.args].join(" ") : transport.url}>
-        {transport.kind === "stdio" ? [transport.command, ...transport.args].join(" ") : transport.url}
+      <p className="agent-hint" title={unsupported.join("\n") || undefined}>
+        {transport.kind === "stdio" ? "stdio" : "HTTP"} · {scopeLabel(server.scope)}
+        {supported.length > 0 ? ` · ${supported.join(", ")}` : " · no agent supports it yet"}
       </p>
       {status.problem && <p className="agent-approval agents-error">{status.problem}</p>}
-      <p className="agent-approval">
-        {status.agents.map((a, i) => (
-          <span key={a.agent} title={a.reason ?? undefined}>
-            {i > 0 && " · "}
-            {agentName(a.agent)}: {a.supported ? "supported" : "not supported"}
-          </span>
-        ))}
-      </p>
-      {server.env
-        .filter((v) => v.source === "inherit")
-        .map((v) => (
-          <p key={v.name} className="agent-approval">
-            <code>{v.name}</code> from your shell
-          </p>
-        ))}
+      {inherited.length > 0 && (
+        <p className="agent-hint">
+          {inherited.map((name, i) => (
+            <span key={name}>
+              {i > 0 && ", "}
+              <code>{name}</code>
+            </span>
+          ))}{" "}
+          from your shell
+        </p>
+      )}
       {status.secrets.map((secret) => (
         <SecretRow key={secret.name} id={server.id} name={secret.name} saved={secret.state === "inKeychain"} actions={actions} />
       ))}
-      <label className="agent-model">
-        <input
-          type="checkbox"
-          checked={server.enabled}
-          onChange={(e) => actions.setMcpServerEnabled(server.id, e.target.checked)}
-          aria-label={`Enable ${server.name}`}
-        />
-        <span>Enabled</span>
-      </label>
       <div className="agent-actions">
+        <label className="agent-check agent-toggle">
+          <input
+            type="checkbox"
+            checked={server.enabled}
+            onChange={(e) => actions.setMcpServerEnabled(server.id, e.target.checked)}
+            aria-label={`Enable ${server.name}`}
+          />
+          <span>On</span>
+        </label>
         <button type="button" onClick={onEdit}>
           Edit
         </button>
@@ -181,8 +187,8 @@ function SecretRow({ id, name, saved, actions }: { id: string; name: string; sav
   };
   if (saved) {
     return (
-      <p className="agent-approval">
-        <code>{name}</code> saved in your Keychain ·{" "}
+      <p className="agent-hint">
+        <code>{name}</code> in your Keychain ·{" "}
         <button type="button" className="link-button" onClick={() => actions.removeMcpSecret(id, name)}>
           Remove
         </button>

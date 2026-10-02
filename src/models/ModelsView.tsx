@@ -42,9 +42,11 @@ export const ModelsView = memo(function ModelsView({ providers, actions }: Props
           ↻
         </button>
       </header>
-      <p className="agents-note">
-        API keys are kept in your macOS Keychain and given only to agents you start with that provider. A saved key is never
-        shown again. Choose a model when you launch an agent.
+      <p
+        className="agents-hint"
+        title="API keys are kept in your macOS Keychain and given only to agents you start with that provider. A saved key is never shown again. Choose a model when you launch an agent."
+      >
+        Keys stay in your Keychain, never shown again.
       </p>
       {error && (
         <p className="agents-note agents-error" role="alert">
@@ -85,15 +87,18 @@ function ProviderCard({ provider, actions }: { provider: ProviderStatus; actions
   return (
     <li className="agent" aria-label={`${provider.name} provider`}>
       <div className="agent-heading">
-        <span className="agent-name">{provider.name}</span>
+        <span
+          className="agent-name"
+          title={[provider.description, HOSTING[provider.hosting]].filter(Boolean).join("\n")}
+        >
+          {provider.name}
+        </span>
         <span className={good ? "agent-status agent-status-running" : "agent-status"}>{status}</span>
       </div>
-      {provider.description && <p className="agent-description">{provider.description}</p>}
-      <p className="agent-approval">{HOSTING[provider.hosting]}</p>
       <LocalNote provider={provider} />
       {provider.credential === "inKeychain" && (
-        <p className="agent-approval">
-          API key saved in your Keychain ·{" "}
+        <p className="agent-hint">
+          In your Keychain ·{" "}
           <button type="button" className="link-button" onClick={() => actions.removeProviderKey(provider.id)}>
             Remove
           </button>
@@ -140,10 +145,14 @@ function ProviderCard({ provider, actions }: { provider: ProviderStatus; actions
 function ModelList({ provider, actions }: { provider: ProviderStatus; actions: ModelActions }) {
   if (provider.models.length === 0) {
     return (
-      <p className="agent-approval">
-        {provider.hosting === "local"
-          ? "No models found here. Pull one with Ollama yourself (ollama pull <model>), then refresh."
-          : `The app lists no ${provider.name} models; add the ids you use.`}
+      <p className="agent-hint">
+        {provider.hosting === "local" ? (
+          <>
+            No models yet · <code>ollama pull &lt;model&gt;</code>, then refresh
+          </>
+        ) : (
+          "No models listed · add the ids you use"
+        )}
       </p>
     );
   }
@@ -177,13 +186,13 @@ function LocalNote({ provider }: { provider: ProviderStatus }) {
   if (provider.hosting !== "local") return null;
   switch (provider.local?.state) {
     case undefined:
-      return <p className="agent-approval">Not checked yet. Refresh to look for it.</p>;
+      return <p className="agent-hint">Refresh to look for it on this machine</p>;
     case "available":
-      return <p className="agent-approval">Running{provider.local.version && ` (version ${provider.local.version})`}.</p>;
+      return <p className="agent-hint">Running{provider.local.version && ` · ${provider.local.version}`}</p>;
     case "installed":
-      return <p className="agent-approval">Installed, but not running. Start Ollama, then refresh.</p>;
+      return <p className="agent-hint">Not running · start Ollama, then refresh</p>;
     case "unavailable":
-      return <p className="agent-approval">Not found on this machine. Install it yourself if you want local models.</p>;
+      return <p className="agent-hint">Not on this machine · install it for local models</p>;
   }
 }
 
