@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 
 import type { AgentChanges } from "../contracts/generated/AgentChanges";
 import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
@@ -7,7 +7,7 @@ import type { SessionConfiguration } from "../contracts/generated/SessionConfigu
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
 import type { WorkspaceIsolation } from "../contracts/generated/WorkspaceIsolation";
 import type { Store } from "../lib/store";
-import { useStore } from "../lib/useStore";
+import { sameItems, useSelected, useStore } from "../lib/useStore";
 import type { SessionMcpServer } from "../contracts/generated/SessionMcpServer";
 import type { SessionSkill } from "../contracts/generated/SessionSkill";
 import type { SkillStatus } from "../contracts/generated/SkillStatus";
@@ -43,15 +43,19 @@ const LABELS: Record<Shown, string> = {
   failed: "Failed",
 };
 
-/** The agents the app can run, and the sessions they work in (⇧⌘A). */
-export function AgentsView({ agents, providers, mcp, skills, drafts, terminals, workspace, actions }: Props) {
+/**
+ * The agents the app can run, and the sessions they work in (⇧⌘A). Its props are
+ * the workbench's stores, so it renders only when they change, not with the
+ * sidebar; of the terminals it follows only the agent panes.
+ */
+export const AgentsView = memo(function AgentsView({ agents, providers, mcp, skills, drafts, terminals, workspace, actions }: Props) {
   const { agents: list, loading, environmentProblem, isolation, sessions, changes, error } = useStore(agents);
   const { providers: providerList } = useStore(providers);
   const { servers: mcpList } = useStore(mcp);
   const { skills: skillList } = useStore(skills);
   useStore(drafts);
   const info = useStore(workspace);
-  const { panes } = useStore(terminals);
+  const agentPanes = useSelected(terminals, () => terminals.agentPanes(), sameItems);
 
   useEffect(() => {
     if (agents.get().agents === null) void agents.load();
@@ -109,7 +113,7 @@ export function AgentsView({ agents, providers, mcp, skills, drafts, terminals, 
           <h2 className="recent-title agents-heading">Sessions</h2>
           <ul className="agents-list" aria-label="Agent sessions">
             {[...sessions].reverse().map((session) => {
-              const pane = [...panes.values()].find((p) => p.kind.type === "agent" && p.kind.session === session.id);
+              const pane = agentPanes.find((p) => p.kind.type === "agent" && p.kind.session === session.id);
               return (
                 <SessionCard
                   key={session.id}
@@ -125,7 +129,7 @@ export function AgentsView({ agents, providers, mcp, skills, drafts, terminals, 
       )}
     </div>
   );
-}
+});
 
 function IsolationNote({ isolation }: { isolation: WorkspaceIsolation }) {
   if (isolation.kind === "worktrees") {

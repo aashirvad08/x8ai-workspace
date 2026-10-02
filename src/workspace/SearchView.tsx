@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { memo, type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { SearchMatch } from "../contracts/generated/SearchMatch";
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
@@ -15,7 +15,7 @@ interface Props {
 }
 
 /** Plain-text search across the open folder (⇧⌘F). */
-export function SearchView({ search, workspace, actions }: Props) {
+export const SearchView = memo(function SearchView({ search, workspace, actions }: Props) {
   const info = useStore(workspace);
   const snapshot = useStore(search);
   const input = useRef<HTMLInputElement>(null);
@@ -66,7 +66,7 @@ export function SearchView({ search, workspace, actions }: Props) {
       <Results key={snapshot.run} results={snapshot.results} actions={actions} />
     </div>
   );
-}
+});
 
 function Results({ results, actions }: { results: readonly FileMatches[]; actions: SearchActions }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());

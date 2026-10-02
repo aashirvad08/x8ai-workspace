@@ -1,4 +1,4 @@
-import { type DragEvent, type KeyboardEvent, type PointerEvent, type RefObject, useMemo, useRef, useState } from "react";
+import { type DragEvent, type KeyboardEvent, memo, type PointerEvent, type RefObject, useMemo, useRef, useState } from "react";
 
 import { carriesModel, readModelDrag } from "../lib/modelDrag";
 import { useStore } from "../lib/useStore";
@@ -185,9 +185,10 @@ export function TerminalPanel({ native, terminals, actions, hidden, onHide }: Pr
 /**
  * A pane's terminal. For an agent pane, the session is started with `agent_run`
  * for that agent session instead of `terminal_create`; everything after that is
- * the same.
+ * the same. Memoized: the panel re-renders with every layout change (a splitter
+ * drag), and an unchanged pane need not.
  */
-function PaneTerminal({
+const PaneTerminal = memo(function PaneTerminal({
   native,
   pane,
   visible,
@@ -224,7 +225,7 @@ function PaneTerminal({
       onEnd={(ending) => terminals.ended(pane.key, ending)}
     />
   );
-}
+});
 
 /** The draggable line between the two halves of a split. */
 function PaneDivider({

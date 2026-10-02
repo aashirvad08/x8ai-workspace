@@ -1,9 +1,11 @@
+import { memo } from "react";
+
 import { useStore } from "../lib/useStore";
 import type { EditorActions } from "./actions";
 import type { EditorStore, TabInfo } from "./editor-store";
 import { EditorPane } from "./EditorPane";
 
-export function EditorArea({ editor, actions }: { editor: EditorStore; actions: EditorActions }) {
+export const EditorArea = memo(function EditorArea({ editor, actions }: { editor: EditorStore; actions: EditorActions }) {
   const { tabs, active } = useStore(editor);
   const current = tabs.find((tab) => tab.path === active);
 
@@ -46,7 +48,7 @@ export function EditorArea({ editor, actions }: { editor: EditorStore; actions: 
       )}
     </section>
   );
-}
+});
 
 function Tab({
   tab,

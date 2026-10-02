@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 
 import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
@@ -25,7 +25,7 @@ interface Menu {
 
 const INDENT = 14;
 
-export function FileExplorer({ explorer, workspace, recent, actions }: Props) {
+export const FileExplorer = memo(function FileExplorer({ explorer, workspace, recent, actions }: Props) {
   const info = useStore(workspace);
   const recentList = useStore(recent);
   const snapshot = useStore(explorer);
@@ -157,7 +157,7 @@ export function FileExplorer({ explorer, workspace, recent, actions }: Props) {
       )}
     </aside>
   );
-}
+});
 
 /** Recently opened folders. Missing ones stay listed, marked, until removed. */
 function RecentList({ workspaces, actions }: { workspaces: readonly RecentWorkspace[]; actions: ExplorerActions }) {

@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { memo, type FormEvent, useEffect, useState } from "react";
 
 import type { McpEnvSource } from "../contracts/generated/McpEnvSource";
 import type { McpScope } from "../contracts/generated/McpScope";
@@ -20,7 +20,7 @@ interface Props {
 }
 
 /** MCP servers: what the app may give agent sessions (⇧⌘U). */
-export function McpView({ mcp, agents, workspace, actions }: Props) {
+export const McpView = memo(function McpView({ mcp, agents, workspace, actions }: Props) {
   const { servers, loading, error } = useStore(mcp);
   const { agents: agentList } = useStore(agents);
   const info = useStore(workspace);
@@ -86,7 +86,7 @@ export function McpView({ mcp, agents, workspace, actions }: Props) {
       </ul>
     </div>
   );
-}
+});
 
 function scopeLabel(scope: McpScope): string {
   switch (scope.kind) {
