@@ -558,6 +558,83 @@ kbd {
   color: var(--error);
 }
 
+.agents-hint,
+.agent-hint {
+  margin: 0 12px 8px;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.agent-hint code {
+  font-family: var(--font-code);
+  font-size: 11px;
+}
+
+.agent .agents-hint,
+.agent-hint {
+  margin: 0;
+}
+
+.agent-options summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.agent-options summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A drawn chevron: the ▸ glyph shrinks to a dot at this size. */
+.agent-options summary::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  margin: 0 2px 0 1px;
+  border-right: 1.5px solid var(--text-faint);
+  border-bottom: 1.5px solid var(--text-faint);
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.agent-options[open] summary::before {
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
+.agent-options summary:hover {
+  color: var(--text);
+}
+
+.agent-attached {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-options-count {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.agent-options[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .agents-list {
   margin: 0;
   padding: 0 8px 16px;
@@ -567,15 +644,24 @@ kbd {
 .agent {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
+  gap: 6px;
+  padding: 10px 10px 10px 12px;
+  border-radius: 8px;
   background: var(--bg);
 }
 
 .agent + .agent {
-  margin-top: 8px;
+  margin-top: 6px;
+}
+
+.agent-disabled > :not(.agent-heading, .agent-actions) {
+  opacity: 0.55;
+}
+
+.agent-unavailable {
+  padding-block: 8px;
+  background: none;
+  opacity: 0.55;
 }
 
 .agent-heading {
@@ -590,17 +676,13 @@ kbd {
 }
 
 .agent-status {
-  padding: 1px 7px;
-  border-radius: 9px;
-  background: var(--bg-active);
-  color: var(--text-muted);
+  color: var(--text-faint);
   font-size: 11px;
 }
 
 .agent-status-running,
 .agent-status-starting {
-  background: var(--selection);
-  color: var(--text);
+  color: var(--ok);
 }
 
 .agent-status-failed {
@@ -629,8 +711,9 @@ kbd {
 }
 
 .agent-launch {
-  align-self: flex-start;
-  margin-top: 4px;
+  padding: 2px 12px;
+  border-radius: 6px;
+  font-size: 12px;
 }
 
 .agent-launch:disabled {
@@ -654,17 +737,32 @@ kbd {
 .agent-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
+  gap: 2px;
+  margin: 0 0 0 -6px;
 }
 
+/* Quiet until pointed at; the first is what you most likely want. */
 .agent-actions button {
-  padding: 2px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  background: var(--bg-raised);
+  padding: 2px 6px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-muted);
   font-size: 12px;
   cursor: pointer;
+}
+
+.agent-actions button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.agent-actions .agent-toggle {
+  padding: 2px 6px 2px 4px;
+}
+
+.agent-actions .agent-action-main {
+  color: var(--accent);
 }
 
 .agent-actions button:disabled {

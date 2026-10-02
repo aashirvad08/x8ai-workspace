@@ -3,7 +3,6 @@ import { memo, useEffect } from "react";
 import type { AgentChanges } from "../contracts/generated/AgentChanges";
 import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
 import type { AgentStatus } from "../contracts/generated/AgentStatus";
-import type { SessionConfiguration } from "../contracts/generated/SessionConfiguration";
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
 import type { WorkspaceIsolation } from "../contracts/generated/WorkspaceIsolation";
 import type { Store } from "../lib/store";
@@ -119,6 +118,7 @@ export const AgentsView = memo(function AgentsView({ agents, providers, mcp, ski
                   key={session.id}
                   session={session}
                   shown={shownOf(session, pane ? agentRunStatus(pane) : null)}
+                  open={pane !== undefined}
                   changes={changes.get(session.id)}
                   actions={actions}
                 />
@@ -135,9 +135,11 @@ function IsolationNote({ isolation }: { isolation: WorkspaceIsolation }) {
   if (isolation.kind === "worktrees") {
     const from = `${isolation.branch ?? "a detached HEAD"} at ${isolation.head.slice(0, 7)}`;
     return (
-      <p className="agents-note">
-        Each agent works in a Git worktree of its own, starting from {from}. Your working tree is not changed; changes you have
-        not committed are not included.
+      <p
+        className="agents-hint"
+        title={`Each agent works in a Git worktree of its own, starting from ${from}. Your working tree is not changed; changes you have not committed are not included.`}
+      >
+        A worktree per session, from {isolation.branch ?? "HEAD"}@{isolation.head.slice(0, 7)}
       </p>
     );
   }
@@ -169,33 +171,45 @@ function AgentCard({
   const chosen = choices.findIndex(
     (c) => c.selection.provider === draft.model?.provider && c.selection.model === draft.model?.model,
   );
-  const shown: Shown = agent.availability.state === "installed" ? "installed" : agent.availability.state;
-  const installed = agent.availability.state === "installed";
   const choice = choices[chosen];
   const supported = agent.providers.filter((p) => p.supported).length;
+  if (agent.availability.state !== "installed") {
+    // Nothing to do with it here: one quiet line, the reason on hover.
+    const shown: Shown = agent.availability.state;
+    return (
+      <li className="agent agent-unavailable" title={unavailableReason(agent)}>
+        <div className="agent-heading">
+          <span className="agent-name">{agent.name}</span>
+          <span className="agent-status">{LABELS[shown]}</span>
+        </div>
+      </li>
+    );
+  }
+  const executable = agent.availability.executable;
   return (
     <li className="agent">
       <div className="agent-heading">
-        <span className="agent-name">{agent.name}</span>
-        <span className={`agent-status agent-status-${shown}`}>{LABELS[shown]}</span>
+        <span className="agent-name" title={[agent.description, executable].filter(Boolean).join("\n")}>
+          {agent.name}
+        </span>
+        <button
+          type="button"
+          className="button-primary agent-launch"
+          disabled={!canLaunch}
+          title={canLaunch ? `Start ${agent.name} in a session of its own` : "Open a folder first"}
+          onClick={() =>
+            actions.launchAgent(
+              agent.id,
+              choice?.selection ?? null,
+              draft.mcp.filter((id) => mcpChoices.optional.some((s) => s.server.id === id)),
+              draft.skills.filter((id) => skillChoices.optional.some((s) => s.skill.id === id)),
+            )
+          }
+        >
+          Launch
+        </button>
       </div>
-      {agent.description && <p className="agent-description">{agent.description}</p>}
-      <AgentDetails agent={agent} />
-      {canLaunch && agent.availability.state === "installed" && (
-        <p className="agent-approval">
-          {agent.approved ? (
-            <>
-              Allowed in this folder ·{" "}
-              <button type="button" className="link-button" onClick={() => actions.revokeAgent(agent.id)}>
-                Revoke
-              </button>
-            </>
-          ) : (
-            "Not yet allowed in this folder"
-          )}
-        </p>
-      )}
-      {installed && supported > 0 && (
+      {supported > 0 && choices.length > 0 && (
         <label className="agent-model">
           <span>Model</span>
           <select
@@ -204,7 +218,7 @@ function AgentCard({
             onChange={(e) => drafts.setModel(agent.id, choices[Number(e.target.value)]?.selection ?? null)}
             aria-label={`Model for ${agent.name}`}
           >
-            <option value={-1}>{agent.name}'s own configuration</option>
+            <option value={-1}>Its own configuration</option>
             {choices.map((c, i) => (
               <option key={`${c.selection.provider}/${c.selection.model}`} value={i}>
                 {c.provider} · {c.model}
@@ -213,57 +227,129 @@ function AgentCard({
           </select>
         </label>
       )}
-      {installed && supported > 0 && choices.length === 0 && (
-        <p className="agent-approval">To choose a model here, add a provider key or model in Models.</p>
+      {supported > 0 && choices.length === 0 && <p className="agent-hint">No models yet · add a key in Models</p>}
+      <LaunchOptions
+        agent={agent}
+        mcp={mcpChoices}
+        skills={skillChoices}
+        chosenMcp={draft.mcp}
+        chosenSkills={draft.skills}
+        onMcp={(id, on) => drafts.setMcp(agent.id, id, on)}
+        onSkill={(id, on) => drafts.setSkill(agent.id, id, on)}
+      />
+      {canLaunch && agent.approved && (
+        <p className="agent-hint">
+          Allowed here ·{" "}
+          <button type="button" className="link-button" onClick={() => actions.revokeAgent(agent.id)}>
+            Revoke
+          </button>
+        </p>
       )}
-      {installed && (
-        <McpLaunchChoices
-          agent={agent}
-          choices={mcpChoices}
-          chosen={draft.mcp}
-          onChange={(id, on) => drafts.setMcp(agent.id, id, on)}
-        />
-      )}
-      {installed && (
-        <SkillLaunchChoices
-          agent={agent}
-          choices={skillChoices}
-          chosen={draft.skills}
-          onChange={(id, on) => drafts.setSkill(agent.id, id, on)}
-        />
-      )}
-      <button
-        type="button"
-        className="button-primary agent-launch"
-        disabled={!canLaunch || !installed}
-        onClick={() =>
-          actions.launchAgent(
-            agent.id,
-            choice?.selection ?? null,
-            draft.mcp.filter((id) => mcpChoices.optional.some((s) => s.server.id === id)),
-            draft.skills.filter((id) => skillChoices.optional.some((s) => s.skill.id === id)),
-          )
-        }
-      >
-        Launch
-      </button>
     </li>
+  );
+}
+
+function unavailableReason(agent: AgentStatus): string {
+  switch (agent.availability.state) {
+    case "notInstalled":
+      return `${agent.availability.program} was not found on your PATH. Install it yourself, then refresh.`;
+    case "unsupported":
+      return "Does not run on this operating system.";
+    case "installed":
+      return "";
+  }
+}
+
+/**
+ * The MCP servers and skills a launch gets, folded away: the ones every session
+ * gets, and checkboxes for the ones chosen per launch. Nothing for what the
+ * agent cannot take.
+ */
+function LaunchOptions({
+  agent,
+  mcp,
+  skills,
+  chosenMcp,
+  chosenSkills,
+  onMcp,
+  onSkill,
+}: {
+  agent: AgentStatus;
+  mcp: McpChoices;
+  skills: { always: readonly SkillStatus[]; optional: readonly SkillStatus[] };
+  chosenMcp: readonly string[];
+  chosenSkills: readonly string[];
+  onMcp: (id: string, on: boolean) => void;
+  onSkill: (id: string, on: boolean) => void;
+}) {
+  const mcpOn = agent.mcp.supported;
+  const skillsOn = agent.skills.supported;
+  const always = [
+    ...(mcpOn ? mcp.always.map((s) => `MCP ${s.server.name}`) : []),
+    ...(skillsOn ? skills.always.map((s) => s.skill.name) : []),
+  ];
+  const optionalMcp = mcpOn ? mcp.optional : [];
+  const optionalSkills = skillsOn ? skills.optional : [];
+  if (always.length + optionalMcp.length + optionalSkills.length === 0) return null;
+  const on =
+    optionalMcp.filter((s) => chosenMcp.includes(s.server.id)).length +
+    optionalSkills.filter((s) => chosenSkills.includes(s.skill.id)).length;
+  return (
+    <details className="agent-options">
+      <summary>
+        Options
+        {on > 0 && <span className="agent-options-count">{on} on</span>}
+      </summary>
+      {always.length > 0 && <p className="agents-hint">Always: {always.join(", ")}</p>}
+      {optionalMcp.map((s) => (
+        <label key={s.server.id} className="agent-check">
+          <input
+            type="checkbox"
+            checked={chosenMcp.includes(s.server.id)}
+            aria-label={`Attach ${s.server.name}`}
+            onChange={(e) => onMcp(s.server.id, e.target.checked)}
+          />
+          <span>MCP · {s.server.name}</span>
+        </label>
+      ))}
+      {optionalSkills.map((s) => (
+        <label key={s.skill.id} className="agent-check" title={s.skill.description}>
+          <input
+            type="checkbox"
+            checked={chosenSkills.includes(s.skill.id)}
+            aria-label={`Attach the skill ${s.skill.name}`}
+            onChange={(e) => onSkill(s.skill.id, e.target.checked)}
+          />
+          <span>{s.skill.name}</span>
+        </label>
+      ))}
+    </details>
   );
 }
 
 function SessionCard({
   session,
   shown,
+  open,
   changes,
   actions,
 }: {
   session: AgentSessionInfo;
   shown: Shown;
+  /** It has a terminal pane, which the main action shows rather than starting it again. */
+  open: boolean;
   changes: AgentChanges | undefined;
   actions: AgentActions;
 }) {
   const running = session.state.state === "running";
   const started = new Date(session.startedAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+  const configuration = session.configuration;
+  const model =
+    configuration.source === "app"
+      ? `${configuration.providerName} · ${configuration.model}${configuration.credential === "missing" ? " · no key saved" : ""}`
+      : "own configuration";
+  const replaced =
+    configuration.source === "app" ? configuration.overriddenShellVariables : configuration.shellVariables;
   return (
     <li className="agent agent-session" aria-label={`${session.name} session`}>
       <div className="agent-heading">
@@ -274,43 +360,52 @@ function SessionCard({
       <p className="agent-path" title={session.cwd}>
         {session.worktree ? session.worktree.branch : "In your folder (not isolated)"}
       </p>
-      <p className="agent-approval">
-        Started {started}
+      <p
+        className="agent-hint"
+        title={[
+          `Started ${started}`,
+          configuration.source === "app" ? configuration.endpoint : "",
+          replaced.length > 0 ? `${configuration.source === "app" ? "Replaces" : "From your shell"}: ${replaced.join(", ")}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n")}
+      >
+        {model} · {ago(session.startedAt)}
         {session.state.state === "exited" && ` · exit ${session.state.exit.signal ?? session.state.exit.code}`}
       </p>
-      <ConfigurationNote name={session.name} configuration={session.configuration} />
       {session.mcp.length > 0 && <SessionMcp servers={session.mcp} />}
       {session.skills.length > 0 && <SessionSkills skills={session.skills} />}
       {session.state.state === "failed" && <p className="agent-approval agents-error">{session.state.message}</p>}
       <div className="agent-actions">
-        <button type="button" onClick={() => actions.openAgentTerminal(session.id)}>
-          Terminal
+        <button type="button" className="agent-action-main" onClick={() => actions.openAgentTerminal(session.id)}>
+          {running || open ? "Show" : "Start"}
         </button>
-        <button type="button" disabled={!running} onClick={() => actions.stopAgent(session.id)}>
-          Stop
-        </button>
-        <button type="button" onClick={() => actions.restartAgent(session.id)}>
-          Restart
-        </button>
+        {running && (
+          <button type="button" onClick={() => actions.stopAgent(session.id)}>
+            Stop
+          </button>
+        )}
+        {running && (
+          <button type="button" onClick={() => actions.restartAgent(session.id)}>
+            Restart
+          </button>
+        )}
         {session.worktree && (
-          <button type="button" onClick={() => actions.showAgentChanges(session.id)}>
+          <button type="button" title="What it changed, read-only" onClick={() => actions.showAgentChanges(session.id)}>
             Changes
           </button>
         )}
         <button type="button" title="Give this agent what other sessions did" onClick={() => actions.shareContext("get", session.id)}>
-          Get context…
+          Get
         </button>
         <button type="button" title="Pass this session's work to another one" onClick={() => actions.shareContext("give", session.id)}>
-          Give context…
+          Give
         </button>
-        <button
-          type="button"
-          disabled={running}
-          title={running ? "Stop the agent first" : "Remove this session and its worktree"}
-          onClick={() => actions.removeAgentSession(session.id)}
-        >
-          Remove
-        </button>
+        {!running && (
+          <button type="button" title="Remove this session and its worktree" onClick={() => actions.removeAgentSession(session.id)}>
+            Remove
+          </button>
+        )}
       </div>
       {changes && (
         <div className="agent-changes">
@@ -343,82 +438,14 @@ function SessionCard({
   );
 }
 
-/** Which MCP servers a new session gets, and the per-session ones to choose. */
-function McpLaunchChoices({
-  agent,
-  choices,
-  chosen,
-  onChange,
-}: {
-  agent: AgentStatus;
-  choices: McpChoices;
-  chosen: readonly string[];
-  onChange: (id: string, on: boolean) => void;
-}) {
-  if (!agent.mcp.supported) {
-    return (
-      <p className="agent-approval" title={agent.mcp.reason ?? undefined}>
-        MCP: not supported for {agent.name}
-      </p>
-    );
-  }
-  if (choices.always.length === 0 && choices.optional.length === 0) return null;
-  return (
-    <div className="agent-mcp">
-      {choices.always.length > 0 && (
-        <p className="agent-approval">MCP: {choices.always.map((s) => s.server.name).join(", ")}</p>
-      )}
-      {choices.optional.map((s) => (
-        <label key={s.server.id} className="agent-model">
-          <input
-            type="checkbox"
-            checked={chosen.includes(s.server.id)}
-            aria-label={`Attach ${s.server.name}`}
-            onChange={(e) => onChange(s.server.id, e.target.checked)}
-          />
-          <span>MCP: {s.server.name}</span>
-        </label>
-      ))}
-    </div>
-  );
-}
-
-/** Which skills a new session gets, and the per-session ones to choose. */
-function SkillLaunchChoices({
-  agent,
-  choices,
-  chosen,
-  onChange,
-}: {
-  agent: AgentStatus;
-  choices: { always: readonly SkillStatus[]; optional: readonly SkillStatus[] };
-  chosen: readonly string[];
-  onChange: (id: string, on: boolean) => void;
-}) {
-  if (!agent.skills.supported) {
-    return (
-      <p className="agent-approval" title={agent.skills.reason ?? undefined}>
-        Skills: not supported for {agent.name}
-      </p>
-    );
-  }
-  if (choices.always.length === 0 && choices.optional.length === 0) return null;
-  return (
-    <div className="agent-mcp">
-      {choices.always.length > 0 && <p className="agent-approval">Skills: {choices.always.map((s) => s.skill.name).join(", ")}</p>}
-      {choices.optional.map((s) => (
-        <label key={s.skill.id} className="agent-model">
-          <input
-            type="checkbox"
-            checked={chosen.includes(s.skill.id)}
-            aria-label={`Attach the skill ${s.skill.name}`}
-            onChange={(e) => onChange(s.skill.id, e.target.checked)}
-          />
-          <span>Skill: {s.skill.name}</span>
-        </label>
-      ))}
-    </div>
-  );
+/** "just now", "5m ago", "3h ago", "2d ago". */
+export function ago(at: number, now = Date.now()): string {
+  const minutes = Math.floor((now - at) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 const SKILL_STATES = { attached: "attached", changed: "changed", removed: "removed" } as const;
@@ -426,10 +453,10 @@ const SKILL_STATES = { attached: "attached", changed: "changed", removed: "remov
 /** The session's skills, as recorded; a changed or removed one stops it running. */
 function SessionSkills({ skills }: { skills: readonly SessionSkill[] }) {
   return (
-    <ul className="agent-files" aria-label="Skills">
+    <ul className="agent-attached" aria-label="Skills">
       {skills.map((s) => (
-        <li key={s.id} className={s.state.state === "attached" ? "agent-approval" : "agent-approval agents-error"}>
-          Skill: {s.name} (v{s.version}) · {SKILL_STATES[s.state.state]}
+        <li key={s.id} className={s.state.state === "attached" ? "agent-hint" : "agent-hint agents-error"}>
+          Skill: {s.name} v{s.version} · {SKILL_STATES[s.state.state]}
           {s.state.state === "changed" && ` (now v${s.state.currentVersion}): start a new session to use it`}
           {s.state.state === "removed" && ": start a new session without it"}
         </li>
@@ -451,11 +478,11 @@ const MCP_STATES = {
 /** The session's MCP servers and what each is doing; never a secret. */
 function SessionMcp({ servers }: { servers: readonly SessionMcpServer[] }) {
   return (
-    <ul className="agent-files" aria-label="MCP servers">
+    <ul className="agent-attached" aria-label="MCP servers">
       {servers.map((s) => {
         const detail = s.state.state === "failed" ? s.state.message : s.state.state === "skipped" ? s.state.reason : undefined;
         return (
-          <li key={s.id} className="agent-approval" title={detail}>
+          <li key={s.id} className={s.state.state === "failed" ? "agent-hint agents-error" : "agent-hint"} title={detail}>
             MCP: {s.name} · {MCP_STATES[s.state.state]}
             {s.state.state === "running" && ` (pid ${s.state.pid})`}
             {detail && ` · ${detail}`}
@@ -466,52 +493,7 @@ function SessionMcp({ servers }: { servers: readonly SessionMcpServer[] }) {
   );
 }
 
-/** Where the session's model configuration comes from; variable names only. */
-function ConfigurationNote({ name, configuration }: { name: string; configuration: SessionConfiguration }) {
-  if (configuration.source === "agent") {
-    return (
-      <p className="agent-approval" title={configuration.shellVariables.join(", ")}>
-        Model: {name}'s own configuration
-        {configuration.shellVariables.length > 0 && ` · from your shell: ${configuration.shellVariables.join(", ")}`}
-      </p>
-    );
-  }
-  const replaced = configuration.overriddenShellVariables;
-  return (
-    <>
-      <p className="agent-approval" title={configuration.endpoint}>
-        Model: {configuration.providerName} · {configuration.model}
-        {configuration.credential === "missing" && " · no key saved"}
-      </p>
-      {replaced.length > 0 && (
-        <p className="agent-approval" title={replaced.join(", ")}>
-          Replaces from your shell: {replaced.join(", ")}
-        </p>
-      )}
-    </>
-  );
-}
-
 const CHANGE_LETTERS = { added: "A", modified: "M", deleted: "D", renamed: "R", untracked: "U", other: "·" } as const;
-
-function AgentDetails({ agent }: { agent: AgentStatus }) {
-  switch (agent.availability.state) {
-    case "installed":
-      return (
-        <p className="agent-path" title={agent.availability.executable}>
-          {agent.availability.executable}
-        </p>
-      );
-    case "notInstalled":
-      return (
-        <p className="agent-path">
-          <code>{agent.availability.program}</code> was not found on your PATH. Install it yourself, then refresh.
-        </p>
-      );
-    case "unsupported":
-      return <p className="agent-path">Does not run on this operating system.</p>;
-  }
-}
 
 /** The pane knows best while it exists (it sees "starting"); otherwise the native state. */
 function shownOf(session: AgentSessionInfo, pane: AgentRunStatus | null): Shown {
