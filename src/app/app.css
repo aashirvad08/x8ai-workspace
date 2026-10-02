@@ -1905,3 +1905,84 @@ kbd {
   font-size: 13px;
   pointer-events: none;
 }
+
+/* Context composer (/get, /give) */
+
+.share {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.share p {
+  margin: 0;
+}
+
+.share-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.share-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.share-group legend,
+.share-sublegend {
+  padding: 0 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.share-sublegend {
+  margin-top: 6px;
+  padding: 0;
+}
+
+.share-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-empty {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.share-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.share-text {
+  min-height: 180px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  resize: vertical;
+}
+
+.share-warning {
+  color: var(--highlight);
+  font-size: 12px;
+}

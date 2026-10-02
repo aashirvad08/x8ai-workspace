@@ -14,6 +14,22 @@ export type PaneKind =
 
 export const SHELL: PaneKind = { type: "shell" };
 
+/**
+ * What the rest of the app may do with a pane's terminal, without touching the
+ * emulator (only src/terminal uses xterm.js): read what it shows, and paste
+ * into it as the user would.
+ */
+export interface TerminalReader {
+  /** The last `lines` lines it shows, as plain text. */
+  read(lines: number): string;
+  /** Whether the program in it takes a bracketed paste now, so a newline in the text cannot press Enter. */
+  acceptsPaste(): boolean;
+  /** Pastes `text` as the user would, only as a bracketed paste. Whether it did. */
+  paste(text: string): boolean;
+  /** Milliseconds since it last showed output. */
+  quietFor(): number;
+}
+
 /** One terminal: a view and the native session it owns. */
 export interface TerminalPane {
   /** Identifies the pane in the UI; the native session changes on restart. */
@@ -63,6 +79,8 @@ export interface TerminalsSnapshot {
  */
 export class Terminals extends Store<TerminalsSnapshot> {
   #nextKey = 1;
+  /** Each pane's terminal, while its view lives. Not state: nothing renders from it. */
+  readonly #readers = new Map<number, TerminalReader>();
 
   constructor() {
     super({ tabs: [], panes: new Map(), active: null, focusRequest: 0 });
@@ -167,6 +185,17 @@ export class Terminals extends Store<TerminalsSnapshot> {
   }
 
   /** Panes running an agent, optionally only one agent. */
+  /** Registered by a pane's view when its terminal opens; `null` when it closes. */
+  setReader(key: number, reader: TerminalReader | null): void {
+    if (reader) this.#readers.set(key, reader);
+    else this.#readers.delete(key);
+  }
+
+  /** The pane's terminal, if its view is open. */
+  reader(key: number): TerminalReader | undefined {
+    return this.#readers.get(key);
+  }
+
   agentPanes(agent?: string): TerminalPane[] {
     return [...this.get().panes.values()].filter((p) => p.kind.type === "agent" && (agent === undefined || p.kind.agent === agent));
   }

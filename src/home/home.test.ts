@@ -17,13 +17,16 @@ describe("welcome commands", () => {
     expect(parseCommand("/home")).toEqual({ kind: "command", name: "/home", arg: "" });
     expect(parseCommand("  /cd   ~/My Projects/app  ")).toEqual({ kind: "command", name: "/cd", arg: "~/My Projects/app" });
     expect(parseCommand("/name Ada Lovelace")).toEqual({ kind: "command", name: "/name", arg: "Ada Lovelace" });
+    expect(parseCommand("/get codex")).toEqual({ kind: "command", name: "/get", arg: "codex" });
+    expect(parseCommand("/give")).toEqual({ kind: "command", name: "/give", arg: "" });
     expect(parseCommand("cd ~/x")).toEqual({ kind: "unknown", word: "cd" });
     expect(parseCommand("/cdx")).toEqual({ kind: "unknown", word: "/cdx" });
   });
 
   it("suggests commands, then recent spaces for /cd", () => {
     expect(suggestionsFor("", recent)).toEqual([]);
-    expect(suggestionsFor("/", recent).map((s) => s.completion)).toEqual(["/cd ", "/home", "/name "]);
+    expect(suggestionsFor("/", recent).map((s) => s.completion)).toEqual(["/cd ", "/home", "/name ", "/get", "/give"]);
+    expect(suggestionsFor("/g", recent).map((s) => s.label)).toEqual(["/get [agent]", "/give [agent]"]);
     expect(suggestionsFor("/h", recent).map((s) => s.label)).toEqual(["/home"]);
     expect(suggestionsFor("/cd ", recent).map((s) => s.detail)).toEqual([
       "/Users/me/gymRL",

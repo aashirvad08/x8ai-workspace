@@ -1,5 +1,7 @@
-import type { AgentActions } from "../agents/actions";
+import type { AgentActions, ContextActions } from "../agents/actions";
 import { Agents } from "../agents/agents";
+import { composeContext, MAX_OUTPUT_LINES, matchSessions, pasteable, sessionWhere } from "../agents/context";
+import { ContextShare, DEFAULT_PARTS, type ShareMode, type ShareParts } from "../agents/share";
 import { LaunchDrafts } from "../agents/draft";
 import type { CatalogActions } from "../catalog/actions";
 import { Catalog } from "../catalog/catalog";
@@ -28,7 +30,7 @@ import { Skills, skillChoices } from "../skills/skills";
 import { type NativeClient, NativeError } from "../native";
 import type { TerminalActions } from "../terminal/actions";
 import type { SplitDirection } from "../terminal/panes";
-import { type TerminalPane, Terminals } from "../terminal/terminals";
+import { type TerminalPane, type TerminalReader, Terminals } from "../terminal/terminals";
 import type { ExplorerActions, SearchActions } from "../workspace/actions";
 import { Explorer } from "../workspace/explorer";
 import { Search } from "../workspace/search";
@@ -37,6 +39,11 @@ import { Dialogs } from "./dialogs";
 import { Layout } from "./layout";
 import { messageOf, Notifications } from "./notifications";
 import { Picker } from "./picker";
+
+/** How long a starting agent may take to get ready for the context. */
+const PASTE_READY_MS = 45_000;
+/** How long its terminal must be quiet: it has drawn its prompt. */
+const QUIET_MS = 600;
 
 /**
  * The workspace as the user works with it: the open folder, its file tree, editor
@@ -54,7 +61,8 @@ export class Workbench
     ModelActions,
     McpActions,
     CatalogActions,
-    HomeActions
+    HomeActions,
+    ContextActions
 {
   readonly workspace = new Value<WorkspaceInfo | null>(null);
   /** Recently opened folders, most recent first. */
@@ -69,6 +77,10 @@ export class Workbench
   readonly catalog: Catalog;
   /** The welcome screen, the app's head. */
   readonly home: Home;
+  /** The context composer: handing context from agent sessions to another. */
+  readonly share = new ContextShare();
+  /** Each source's changes while the composer is open: read once, or why not. */
+  readonly #shareChanges = new Map<number, AgentChanges | string>();
   /** What the next launch of each agent asks for, from its card or the catalog. */
   readonly drafts = new LaunchDrafts();
   readonly terminals = new Terminals();
@@ -191,13 +203,36 @@ export class Workbench
       return;
     }
     if (command.kind === "unknown") {
-      this.home.say(`“${command.word}” is not a command here. Try /cd <folder>, /home or /name <your name>.`, "error");
+      this.home.say(`“${command.word}” is not a command here. Try /cd <folder>, /home, /get, /give or /name <your name>.`, "error");
       return;
     }
     switch (command.name) {
       case "/home":
         if (await this.closeFolder()) this.leaveHome();
         return;
+      case "/get":
+      case "/give": {
+        let session: number | null = null;
+        if (command.arg) {
+          await this.agents.loadSessions();
+          const found = matchSessions(command.arg, this.agents.get().sessions);
+          const running = found.filter((s) => this.terminals.paneOfSession(s.id)?.running);
+          const pick = found.length === 1 ? found[0] : running.length === 1 ? running[0] : undefined;
+          if (!pick) {
+            this.home.say(
+              found.length === 0
+                ? `No agent session matches “${command.arg}”.`
+                : `Several sessions match “${command.arg}”; open the composer with ${command.name} and choose.`,
+              "error",
+            );
+            return;
+          }
+          session = pick.id;
+        }
+        this.leaveHome();
+        await this.#shareContext(command.name === "/get" ? "get" : "give", session);
+        return;
+      }
       case "/name": {
         const name = command.arg.slice(0, MAX_NAME_LENGTH);
         this.home.setName(name || null);
@@ -537,6 +572,8 @@ export class Workbench
       { id: "workspace.openRecent", title: "Open Recent Folder…", shortcut: { key: "r", ctrl: true }, run: () => void this.showRecent() },
       { id: "workspace.close", title: "Close Folder", run: () => void this.closeFolder() },
       { id: "view.home", title: "Show Welcome", shortcut: { key: "h", meta: true, shift: true }, run: () => this.showHome() },
+      { id: "context.get", title: "Get Context for an Agent…", run: () => this.shareContext("get") },
+      { id: "context.give", title: "Give Context to Another Agent…", run: () => this.shareContext("give") },
       { id: "workspace.trust", title: "Trust This Folder…", run: () => void this.setTrust(true) },
       { id: "workspace.untrust", title: "Remove Trust from This Folder…", run: () => void this.setTrust(false) },
       { id: "file.quickOpen", title: "Go to File…", shortcut: { key: "p", meta: true }, run: () => void this.quickOpen() },
@@ -708,6 +745,203 @@ export class Workbench
       .removeProviderModel(provider, model)
       .then((status) => this.providers.replace(status))
       .catch((error: unknown) => this.notifications.error(`Could not remove the model: ${messageOf(error)}`));
+  }
+
+  // Context between sessions (docs/multi-agent.md)
+
+  /** The agent session of the focused terminal pane, if it is one. */
+  #focusedSession(): number | null {
+    const tab = this.terminals.activeTab();
+    const pane = tab ? this.terminals.get().panes.get(tab.focused) : undefined;
+    return pane?.kind.type === "agent" ? pane.kind.session : null;
+  }
+
+  shareContext(mode: ShareMode, session: number | null = null): void {
+    void this.#shareContext(mode, session);
+  }
+
+  async #shareContext(mode: ShareMode, session: number | null): Promise<void> {
+    await this.agents.loadSessions();
+    const sessions = this.agents.get().sessions;
+    if (sessions.length < 2) {
+      this.notifications.info(
+        "Context goes from one agent session to another: start a second session first (Agents, or drag a model from the Catalog onto the terminal).",
+      );
+      return;
+    }
+    const running = (id: number) => this.terminals.paneOfSession(id)?.running ?? false;
+    const chosen = session ?? this.#focusedSession();
+    let sources: number[];
+    let target: number | null;
+    if (mode === "get") {
+      target = chosen ?? (sessions.find((s) => running(s.id)) ?? sessions.at(-1)!).id;
+      sources = sessions.filter((s) => s.id !== target).map((s) => s.id);
+    } else {
+      const from = chosen ?? (sessions.find((s) => running(s.id)) ?? sessions[0]!).id;
+      const others = sessions.filter((s) => s.id !== from);
+      sources = [from];
+      target = (others.find((s) => running(s.id)) ?? others[0])?.id ?? null;
+    }
+    this.#shareChanges.clear();
+    this.share.open({ mode, sources, target, parts: DEFAULT_PARTS, note: "", text: "", edited: false, sending: false });
+    await this.#composeShare();
+  }
+
+  setShareSources(sources: readonly number[]): void {
+    const target = this.share.get()?.target ?? null;
+    this.share.change({ sources: sources.filter((id) => id !== target) });
+    void this.#composeShare();
+  }
+
+  setShareTarget(target: number | null): void {
+    const state = this.share.get();
+    if (!state) return;
+    // A session gives or receives, not both.
+    this.share.change({ target, sources: state.sources.filter((id) => id !== target) });
+    void this.#composeShare();
+  }
+
+  setShareParts(parts: ShareParts): void {
+    this.share.change({ parts });
+    void this.#composeShare();
+  }
+
+  setShareNote(note: string): void {
+    this.share.change({ note });
+    void this.#composeShare();
+  }
+
+  editShareText(text: string): void {
+    this.share.change({ text, edited: true });
+  }
+
+  closeShareContext(): void {
+    this.share.close();
+  }
+
+  /**
+   * The text from the choices: each source's changes (read once per opening of
+   * the composer), its terminal's last lines, and the note. Nothing of an
+   * agent's own files or transcripts.
+   */
+  async #composeShare(): Promise<void> {
+    const state = this.share.get();
+    if (!state) return;
+    const { sources, parts, note } = state;
+    if (parts.changes || parts.diff) {
+      await Promise.all(
+        sources
+          .filter((id) => !this.#shareChanges.has(id))
+          .map(async (id) => {
+            try {
+              this.#shareChanges.set(id, await this.#native.agentChanges(id));
+            } catch (error) {
+              this.#shareChanges.set(id, messageOf(error));
+            }
+          }),
+      );
+    }
+    // Chosen again while the changes were read: that composition wins.
+    const now = this.share.get();
+    if (!now || now.sources !== sources || now.parts !== parts || now.note !== note) return;
+    const text = composeContext(
+      sources.flatMap((id) => {
+        const session = this.agents.session(id);
+        if (!session) return [];
+        const changes = this.#shareChanges.get(id);
+        const pane = this.terminals.paneOfSession(id);
+        const reader = pane ? this.terminals.reader(pane.key) : undefined;
+        return [
+          {
+            name: session.name,
+            where: sessionWhere(session),
+            changes: typeof changes === "object" ? changes : null,
+            changesProblem: typeof changes === "string" ? changes : null,
+            includeChanges: parts.changes,
+            includeDiff: parts.diff,
+            output: parts.output ? (reader?.read(MAX_OUTPUT_LINES * 3) ?? "(its terminal is not open in this window)") : null,
+          },
+        ];
+      }),
+      note,
+    );
+    this.share.change({ text, edited: false });
+  }
+
+  sendShareContext(): void {
+    void this.#sendShare();
+  }
+
+  /**
+   * Pastes the text into the receiving agent's input, as a bracketed paste, so
+   * nothing runs and nothing is sent until the user presses Enter there. A
+   * stopped agent is started first if the user agrees, through the usual
+   * approval.
+   */
+  async #sendShare(): Promise<void> {
+    const state = this.share.get();
+    if (!state || state.target === null || state.sending) return;
+    const target = this.agents.session(state.target);
+    const text = pasteable(state.text);
+    if (!target || text === "") return;
+    const pane = this.terminals.paneOfSession(target.id);
+    if (!pane?.running) {
+      const choice = await this.dialogs.ask({
+        title: `${target.name} is not running`,
+        message: "Start it? The context goes into its input once it is ready, and nothing is sent until you press Enter there.",
+        buttons: [
+          { label: "Start and Send", value: "start", role: "primary" },
+          { label: "Cancel", value: "cancel" },
+        ],
+        cancel: "cancel",
+      });
+      if (choice !== "start") return;
+      this.share.change({ sending: true });
+      if (pane) await this.#restartAgent(target.id);
+      else await this.#openAgentTerminal(target.id);
+      // Not allowed, or not started: the user decided, and there is nothing to wait for.
+      if (!this.terminals.paneOfSession(target.id)) {
+        this.share.change({ sending: false });
+        return;
+      }
+    } else {
+      this.share.change({ sending: true });
+    }
+    const reader = await this.#readyForPaste(target.id);
+    if (!this.share.get()) return;
+    if (!reader) {
+      this.share.change({ sending: false });
+      this.notifications.error(
+        `${target.name} did not get ready to take the text, so nothing was sent. Try again once it shows its prompt.`,
+      );
+      return;
+    }
+    reader.paste(text);
+    this.share.close();
+    const shown = this.terminals.paneOfSession(target.id);
+    if (shown) {
+      this.layout.setTerminalVisible(true);
+      this.terminals.focusPane(shown.key);
+      this.terminals.requestFocus();
+    }
+    this.notifications.info(`The context is in ${target.name}'s input: read it there, then press Enter to send it.`);
+  }
+
+  /**
+   * The session's terminal once its agent takes a bracketed paste and has been
+   * quiet for a moment (it shows its prompt), or `null` after a while.
+   */
+  async #readyForPaste(session: number): Promise<TerminalReader | null> {
+    const deadline = Date.now() + PASTE_READY_MS;
+    for (;;) {
+      const pane = this.terminals.paneOfSession(session);
+      // Closed, or ended without starting: nothing will take it.
+      if (!pane || (!pane.running && pane.ending)) return null;
+      const reader = pane.running ? this.terminals.reader(pane.key) : undefined;
+      if (reader?.acceptsPaste() && reader.quietFor() >= QUIET_MS) return reader;
+      if (Date.now() >= deadline) return null;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
   }
 
   // Catalog

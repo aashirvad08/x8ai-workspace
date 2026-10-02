@@ -7,6 +7,7 @@ import { useEffect, useRef } from "react";
 
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
 import { type SessionEnding, type SessionNative, TerminalSession } from "./session";
+import type { TerminalReader } from "./terminals";
 import { terminalTheme } from "./theme";
 
 interface Props {
@@ -22,17 +23,19 @@ interface Props {
   focusRequest: number;
   onStart?: (info: TerminalInfo) => void;
   onEnd?: (ending: SessionEnding) => void;
+  /** Lets the app read the terminal and paste into it; `null` when it closes. */
+  onReader?: (reader: TerminalReader | null) => void;
 }
 
 /**
  * Renders one terminal session with xterm.js. This component only wires the
  * emulator to the DOM; session behaviour lives in `TerminalSession`.
  */
-export function TerminalView({ native, program, visible, focused, focusRequest, onStart, onEnd }: Props) {
+export function TerminalView({ native, program, visible, focused, focusRequest, onStart, onEnd, onReader }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
-  const callbacks = useRef({ onStart, onEnd });
-  callbacks.current = { onStart, onEnd };
+  const callbacks = useRef({ onStart, onEnd, onReader });
+  callbacks.current = { onStart, onEnd, onReader };
 
   useEffect(() => {
     const element = container.current;
@@ -82,7 +85,30 @@ export function TerminalView({ native, program, visible, focused, focusRequest, 
     const applyScheme = () => (terminal.options.theme = terminalTheme(darkScheme.matches));
     darkScheme.addEventListener("change", applyScheme);
 
+    let lastOutput = Date.now();
+    const parsed = terminal.onWriteParsed(() => (lastOutput = Date.now()));
+    callbacks.current.onReader?.({
+      read: (lines) => {
+        const buffer = terminal.buffer.active;
+        const shown: string[] = [];
+        for (let i = Math.max(0, buffer.length - lines); i < buffer.length; i++) {
+          shown.push(buffer.getLine(i)?.translateToString(true) ?? "");
+        }
+        return shown.join("\n");
+      },
+      acceptsPaste: () => terminal.modes.bracketedPasteMode,
+      paste: (text) => {
+        // Without bracketed paste a newline in the text would press Enter.
+        if (!terminal.modes.bracketedPasteMode) return false;
+        terminal.paste(text);
+        return true;
+      },
+      quietFor: () => Date.now() - lastOutput,
+    });
+
     return () => {
+      callbacks.current.onReader?.(null);
+      parsed.dispose();
       darkScheme.removeEventListener("change", applyScheme);
       observer.disconnect();
       cancelAnimationFrame(frame);

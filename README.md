@@ -96,6 +96,8 @@ line. Each folder you work in is a *space*, and one space is open at a time.
 | `/cd <folder>` | Opens a space. A recent one opens at once, by its path or the start of its name (`/cd gymRL`, `/cd gym`, `/cd ~/code/app`). Any other folder opens the macOS folder picker at that place, where you choose it. `/cd` alone opens the picker. |
 | `/home` | The workspace with no folder open, and a new terminal in your home folder. |
 | `/name <your name>` | How the Welcome greets you. `/name` alone goes back to your Mac account's name. |
+| `/get [agent]` | Gives an agent what the other sessions did (see step 8). |
+| `/give [agent]` | Passes an agent's work to another session (see step 8). |
 
 Typing `/` lists the commands; after `/cd `, your recent spaces (Tab completes,
 ↑↓ choose). **Esc** goes to the space as it is, and **⇧⌘H** (or **⌂ Welcome**
@@ -189,13 +191,27 @@ its details and what it needs.
 The Catalog installs nothing, runs nothing and doesn't go online. It shows what
 the app knows and takes you to the right place to set things up.
 
+### 8. Hand work from one agent to another (optional)
+
+Switching agents mid-task, for example from Claude Code to Codex? Type `/get
+codex` on the Welcome screen, or click **Get context…** on Codex's session card.
+Choose which sessions it comes from and what to include: what changed (files and
+line counts), the diff, the last lines of their terminals, and a note. You see
+the exact text before anything is sent. **Put in its input** pastes it into
+Codex's input; you read it there and press Enter. `/give` (or **Give context…**)
+works the other way round, from one session to another.
+
+Everything in the text goes to the receiving agent and its model provider, and
+terminal output can contain secrets, so read it first. The app never reads an
+agent's own history files.
+
 ---
 
 ## Keyboard shortcuts
 
 | | |
 | --- | --- |
-| **Welcome** | ⇧⌘H Show Welcome · on it: `/cd <folder>` · `/home` · `/name <your name>` · Esc back to the space |
+| **Welcome** | ⇧⌘H Show Welcome · on it: `/cd <folder>` · `/home` · `/get [agent]` · `/give [agent]` · `/name <your name>` · Esc back to the space |
 | **Folders and files** | ⌘O Open Folder · ⌃R Open Recent · ⌘P Go to File · ⌘N New File · ⌘S Save · ⌥⌘S Save All · ⌘W Close Editor · ⌘F Find in File |
 | **Panels** | ⇧⌘E Files · ⇧⌘F Search in Folder · ⇧⌘A Agents · ⇧⌘M Models · ⇧⌘U MCP · ⇧⌘K Catalog · ⌘B Toggle Sidebar |
 | **Terminal** | ⌃\` Show or Hide Terminal · ⌃⇧\` New Terminal · ⌘D Split Right · ⇧⌘D Split Down · ⌘] / ⌘[ Next / Previous Pane · ⌘W Close Pane |
