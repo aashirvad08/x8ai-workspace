@@ -20,6 +20,9 @@ const DEFAULTS: LayoutState = {
 };
 const STORAGE_KEY = "x8ai.layout";
 
+/** A drag resizes on every pointer move; the layout is written once it settles. */
+export const SAVE_DELAY_MS = 250;
+
 export const EXPLORER_WIDTH = { min: 160, max: 600 };
 export const TERMINAL_HEIGHT = { min: 100, max: 2000 };
 
@@ -28,8 +31,12 @@ export const TERMINAL_HEIGHT = { min: 100, max: 2000 };
  * convenience only: if storage is unavailable, the defaults apply.
  */
 export class Layout extends Store<LayoutState> {
+  #saving: ReturnType<typeof setTimeout> | null = null;
+
   constructor() {
     super(load());
+    // Whatever is pending is written when the page goes away.
+    globalThis.addEventListener?.("pagehide", () => this.save());
   }
 
   resizeExplorer(width: number): void {
@@ -53,13 +60,21 @@ export class Layout extends Store<LayoutState> {
     this.#change({ terminalVisible });
   }
 
-  #change(change: Partial<LayoutState>): void {
-    this.update((s) => ({ ...s, ...change }));
+  /** Writes the layout now, if a write is pending. */
+  save(): void {
+    if (this.#saving === null) return;
+    clearTimeout(this.#saving);
+    this.#saving = null;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.get()));
     } catch {
       // Storage unavailable (private mode, tests): the layout is just not remembered.
     }
+  }
+
+  #change(change: Partial<LayoutState>): void {
+    this.update((s) => ({ ...s, ...change }));
+    this.#saving ??= setTimeout(() => this.save(), SAVE_DELAY_MS);
   }
 }
 
