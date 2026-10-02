@@ -200,7 +200,7 @@ Nothing else reaches a server:
 | --- | --- |
 | global | every new session of an agent that can use it |
 | workspace | new sessions in that folder |
-| session | a new session it is chosen for at launch (checkboxes on the agent card) |
+| session | a new session it is chosen for at launch (under Options on the agent card) |
 
 - A session's servers are fixed when it is created. They are recorded, by id, in
   the session and in its worktree's metadata (`"mcp": ["github", …]`, never a

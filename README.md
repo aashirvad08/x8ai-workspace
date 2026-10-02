@@ -100,8 +100,8 @@ line. Each folder you work in is a *space*, and one space is open at a time.
 | `/give [agent]` | Passes an agent's work to another session (see step 8). |
 
 Typing `/` lists the commands; after `/cd `, your recent spaces (Tab completes,
-↑↓ choose). **Esc** goes to the space as it is, and **⇧⌘H** (or **⌂ Welcome**
-in the status bar) brings the Welcome back while everything keeps running. The
+↑↓ choose). **Esc** goes to the space as it is, and **⇧⌘H** (or **⌂** in the
+status bar) brings the Welcome back while everything keeps running. The
 app reopens your last space behind the Welcome when it starts. **⌘O** and
 **⌃R** open folders from the workspace too.
 
@@ -133,8 +133,8 @@ In a Git repository, each session works in its own worktree on a branch named
 changed. In the session's card:
 
 - **Changes** lists the changed files and commits; click a file to read it.
-- **Terminal** reopens the agent's terminal. **Stop** and **Restart** do what
-  they say.
+- **Show** brings back the agent's terminal, and **Start** runs an ended
+  session again. **Stop** and **Restart** appear while it runs.
 - **Remove** deletes the session's worktree. It asks first if there is
   uncommitted work. If the agent made commits, its branch is kept.
 
@@ -184,9 +184,9 @@ its details and what it needs.
   be dragged once its provider's key is saved.
 - **Use for the next launch** and **Attach to the next launch** fill in the
   agent's card for you. Nothing starts until you click **Launch**.
-- **New skill…** creates your own skill: a name and instructions, which are plain
-  text and never a secret. Skills are attached to every new session, to sessions
-  in one folder, or only when you choose them.
+- **+** in the Catalog's header creates your own skill: a name and
+  instructions, which are plain text and never a secret. Skills are attached to
+  every new session, to sessions in one folder, or only when you choose them.
 
 The Catalog installs nothing, runs nothing and doesn't go online. It shows what
 the app knows and takes you to the right place to set things up.
