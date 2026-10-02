@@ -10,8 +10,8 @@
   --bg-raised: #1b1b1b;
   --bg-hover: #242424;
   --bg-active: #2d2d2d;
-  --border: #262626;
-  --border-strong: #3a3a3a;
+  --border: #212121;
+  --border-strong: #333333;
   --text: #e8e8e8;
   --text-muted: #9c9c9c;
   --text-faint: #636363;
@@ -55,8 +55,8 @@
     --bg-raised: #ececec;
     --bg-hover: #e2e2e2;
     --bg-active: #d6d6d6;
-    --border: #dcdcdc;
-    --border-strong: #c4c4c4;
+    --border: #e2e2e2;
+    --border-strong: #cdcdcd;
     --text: #1a1a1a;
     --text-muted: #5c5c5c;
     --text-faint: #8c8c8c;
@@ -121,6 +121,10 @@ body.resizing-y {
 button {
   font: inherit;
   color: inherit;
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
 }
 
 kbd {
@@ -254,7 +258,9 @@ kbd {
 }
 
 .sidebar-tab {
-  padding: 3px 8px;
+  display: grid;
+  place-items: center;
+  padding: 5px 7px;
   white-space: nowrap;
   border: none;
   border-radius: 5px;
@@ -266,6 +272,17 @@ kbd {
 
 .sidebar-tab:hover {
   background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-tab-active {
@@ -303,6 +320,7 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-faint);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -963,7 +981,7 @@ kbd {
   gap: 4px;
   margin: 8px 8px 4px;
   padding: 0 4px 0 0;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   border-radius: 5px;
   background: var(--bg);
 }
@@ -997,8 +1015,12 @@ kbd {
   cursor: pointer;
 }
 
+.search-option:hover {
+  color: var(--text);
+}
+
 .search-option-on {
-  border-color: var(--accent);
+  background: var(--bg-hover);
   color: var(--text);
 }
 
@@ -1215,8 +1237,17 @@ kbd {
   display: grid;
   place-content: center;
   gap: 4px;
-  color: var(--text-muted);
+  color: var(--text-faint);
   text-align: center;
+}
+
+.editor-empty kbd {
+  margin: 0 4px 0 14px;
+  border-color: var(--border);
+}
+
+.editor-empty kbd:first-child {
+  margin-left: 0;
 }
 
 /* Terminal */
@@ -1555,18 +1586,32 @@ kbd {
 }
 
 .statusbar-trust {
-  padding: 0 6px;
-  border: 1px solid var(--border-strong);
+  padding: 0 4px;
+  border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-faint);
   font: inherit;
   cursor: pointer;
 }
 
+.statusbar-trust:hover {
+  background: var(--bg-hover);
+}
+
 .statusbar-trusted {
-  border-color: var(--ok);
   color: var(--ok);
+}
+
+.statusbar-folder {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+}
+
+.statusbar-connection {
+  display: inline-flex;
+  align-items: center;
 }
 
 .statusbar-error {
@@ -1872,17 +1917,18 @@ kbd {
 }
 
 .statusbar-home {
-  padding: 0 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 4px;
   background: none;
   color: var(--text-muted);
-  font: inherit;
+  font-size: 13px;
+  line-height: 1;
   cursor: pointer;
 }
 
 .statusbar-home:hover {
-  border-color: var(--accent);
+  background: var(--bg-hover);
   color: var(--text);
 }
 

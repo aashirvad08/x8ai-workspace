@@ -40,9 +40,8 @@ export const EditorArea = memo(function EditorArea({ editor, actions }: { editor
       <EditorPane editor={editor} />
       {tabs.length === 0 && (
         <div className="editor-empty">
-          <p>Open a file from the explorer.</p>
           <p>
-            <kbd>⌘P</kbd> Go to File · <kbd>⇧⌘P</kbd> All Commands · <kbd>⌃`</kbd> Terminal
+            <kbd>⌘P</kbd> Go to File <kbd>⇧⌘P</kbd> Commands <kbd>⌃`</kbd> Terminal
           </p>
         </div>
       )}

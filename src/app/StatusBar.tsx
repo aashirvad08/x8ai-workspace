@@ -11,13 +11,16 @@ interface Props {
 export function StatusBar({ status, workspace, onHome, onTrust }: Props) {
   return (
     <footer className={status.state === "failed" ? "statusbar statusbar-error" : "statusbar"}>
-      <button type="button" className="statusbar-home" title="Welcome (⇧⌘H)" onClick={onHome}>
-        ⌂ Welcome
+      <button type="button" className="statusbar-home" title="Welcome (⇧⌘H)" aria-label="Welcome" onClick={onHome}>
+        ⌂
       </button>
       <Connection status={status} />
       <span className="statusbar-spacer" />
       {workspace && (
         <>
+          <span className="statusbar-folder" title={workspace.root}>
+            {workspace.name}
+          </span>
           <button
             type="button"
             className={workspace.trusted ? "statusbar-trust statusbar-trusted" : "statusbar-trust"}
@@ -30,7 +33,6 @@ export function StatusBar({ status, workspace, onHome, onTrust }: Props) {
           >
             {workspace.trusted ? "Trusted" : "Untrusted"}
           </button>
-          <span title={workspace.root}>{workspace.root}</span>
         </>
       )}
     </footer>
@@ -46,10 +48,11 @@ function Connection({ status }: { status: NativeStatus }) {
         </span>
       );
     case "connected": {
+      // Just a dot while all is well; the details on hover.
       const { name, version, os, arch } = status.info;
       return (
-        <span>
-          <span className="dot dot-ok" /> Native host connected · {name} {version} · {os}/{arch}
+        <span className="statusbar-connection" title={`Connected · ${name} ${version} · ${os}/${arch}`}>
+          <span className="dot dot-ok" />
         </span>
       );
     }
