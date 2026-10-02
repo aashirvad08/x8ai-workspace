@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { memo, type FormEvent, useEffect, useState } from "react";
 
 import type { ProviderKind } from "../contracts/generated/ProviderKind";
 import type { ProviderStatus } from "../contracts/generated/ProviderStatus";
@@ -20,7 +20,7 @@ const HOSTING: Record<ProviderKind, string> = {
 const SOURCES = { builtIn: "", local: "on this machine", custom: "added by you" } as const;
 
 /** Model providers: keys, local availability and models (⇧⌘M). */
-export function ModelsView({ providers, actions }: Props) {
+export const ModelsView = memo(function ModelsView({ providers, actions }: Props) {
   const { providers: list, loading, error } = useStore(providers);
 
   useEffect(() => {
@@ -59,7 +59,7 @@ export function ModelsView({ providers, actions }: Props) {
       </ul>
     </div>
   );
-}
+});
 
 function ProviderCard({ provider, actions }: { provider: ProviderStatus; actions: ModelActions }) {
   const [key, setKey] = useState("");

@@ -1,4 +1,4 @@
-import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
@@ -18,7 +18,7 @@ interface Props {
  * The head of the app (⇧⌘H): a greeting and a command line. `/cd` opens a space,
  * `/home` the workspace with no folder; Esc goes back to the space as it is.
  */
-export function HomeView({ home, recent: recentStore, workspace: workspaceStore, actions }: Props) {
+export const HomeView = memo(function HomeView({ home, recent: recentStore, workspace: workspaceStore, actions }: Props) {
   const { message } = useStore(home);
   const recent = useStore(recentStore);
   const workspace = useStore(workspaceStore);
@@ -153,7 +153,7 @@ export function HomeView({ home, recent: recentStore, workspace: workspaceStore,
       </div>
     </section>
   );
-}
+});
 
 function Hint({ keys, text }: { keys: string; text: string }) {
   return (

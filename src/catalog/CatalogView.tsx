@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { memo, type FormEvent, useEffect, useMemo, useState } from "react";
 
 import type { CatalogItem } from "../contracts/generated/CatalogItem";
 import { setModelDrag } from "../lib/modelDrag";
@@ -42,7 +42,7 @@ const SOURCE_LABELS: Record<CatalogSource, string> = {
 };
 
 /** Discover agents, models, MCP servers and skills (⇧⌘K). Nothing here runs anything. */
-export function CatalogView({ catalog, skills, actions }: Props) {
+export const CatalogView = memo(function CatalogView({ catalog, skills, actions }: Props) {
   const { items, loading, error, warnings } = useStore(catalog);
   const { skills: skillList } = useStore(skills);
   const [text, setText] = useState("");
@@ -144,7 +144,7 @@ export function CatalogView({ catalog, skills, actions }: Props) {
       </ul>
     </div>
   );
-}
+});
 
 function statusClass(status: CatalogStatus): string {
   return status === "installed" || status === "configured" ? "agent-status agent-status-running" : "agent-status";

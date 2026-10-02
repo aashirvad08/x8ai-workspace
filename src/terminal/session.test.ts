@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { SessionId } from "../contracts/generated/SessionId";
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
 import type { TerminalSize } from "../contracts/generated/TerminalSize";
 import type { TerminalListener } from "../native";
-import { type SessionEnding, type SessionNative, type TerminalScreen, TerminalSession } from "./session";
+import { RESIZE_INTERVAL_MS, type SessionEnding, type SessionNative, type TerminalScreen, TerminalSession } from "./session";
 
 /** A screen that renders synchronously and lets the test type into it. */
 class FakeScreen implements TerminalScreen {
@@ -159,6 +159,40 @@ describe("TerminalSession", () => {
       { call: "resize", id: 1, size: { cols: 100, rows: 24 } },
       { call: "resize", id: 1, size: { cols: 120, rows: 40 } },
     ]);
+  });
+
+  it("forwards a burst of size changes as the first and the last of each interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const native = new FakeNative();
+      const screen = new FakeScreen();
+      const session = new TerminalSession(native, screen);
+      session.start();
+      native.created[0]!.resolve(info(1));
+      await vi.advanceTimersByTimeAsync(0);
+      const rows = () => native.calls.flatMap((c) => (c.call === "resize" ? [c.size.rows] : []));
+
+      // A drag: a new size every frame for 160 ms.
+      for (let i = 1; i <= 10; i++) {
+        session.resize(80, 24 + i);
+        await vi.advanceTimersByTimeAsync(16);
+      }
+      expect(rows()).toEqual([25, 31]);
+      await vi.advanceTimersByTimeAsync(RESIZE_INTERVAL_MS);
+      expect(rows()).toEqual([25, 31, 34]);
+      // Quiet again: the next one goes at once.
+      await vi.advanceTimersByTimeAsync(RESIZE_INTERVAL_MS);
+      session.resize(80, 40);
+      expect(rows()).toEqual([25, 31, 34, 40]);
+
+      // One still waiting when the view goes away is dropped.
+      session.resize(80, 41);
+      session.dispose();
+      await vi.advanceTimersByTimeAsync(RESIZE_INTERVAL_MS * 2);
+      expect(rows()).toEqual([25, 31, 34, 40]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports an exit, releases the session and restarts on Enter", async () => {

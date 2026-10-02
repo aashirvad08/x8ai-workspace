@@ -57,6 +57,15 @@ const encoder = new TextEncoder();
 const ENTER = "\r";
 
 /**
+ * At most one PTY resize per this many milliseconds. Dragging a splitter or the
+ * window resizes the screen every frame, and each PTY resize makes the program
+ * redraw (a full-screen agent redraws everything), which floods the terminal
+ * with output for as long as the drag lasts. The first resize goes at once; the
+ * last one of a burst follows within this time.
+ */
+export const RESIZE_INTERVAL_MS = 100;
+
+/**
  * Connects a terminal screen to a native session running the user's login shell.
  * Input goes to the PTY, output is rendered with flow control, resizes are
  * forwarded, and when the shell exits, Enter starts a new one.
@@ -71,6 +80,10 @@ export class TerminalSession {
   readonly #subscriptions: Disposable[];
   #attempt: Attempt | undefined;
   #disposed = false;
+  /** The size the screen last asked for, and when the PTY was last resized. */
+  #wanted: { cols: number; rows: number } | undefined;
+  #lastResize = Number.NEGATIVE_INFINITY;
+  #resizeTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(native: SessionNative, screen: TerminalScreen, callbacks: SessionCallbacks = {}, options: SessionOptions = {}) {
     this.#native = native;
@@ -114,20 +127,39 @@ export class TerminalSession {
     );
   }
 
-  /** Forwards a new screen size to the PTY. */
+  /** Forwards a new screen size to the PTY, at most once per `RESIZE_INTERVAL_MS`. */
   resize(cols: number, rows: number): void {
+    this.#wanted = { cols, rows };
+    if (this.#resizeTimer !== undefined) return;
+    const wait = this.#lastResize + RESIZE_INTERVAL_MS - Date.now();
+    if (wait <= 0) {
+      this.#applyResize();
+      return;
+    }
+    this.#resizeTimer = setTimeout(() => {
+      this.#resizeTimer = undefined;
+      this.#applyResize();
+    }, wait);
+  }
+
+  #applyResize(): void {
     const attempt = this.#attempt;
+    const wanted = this.#wanted;
     // Until the session is ready, the screen's size is checked once it is.
-    if (!attempt?.info || attempt.over || (attempt.cols === cols && attempt.rows === rows)) return;
-    attempt.cols = cols;
-    attempt.rows = rows;
-    this.#send(this.#native.resizeTerminal(attempt.info.id, { cols, rows }));
+    if (!wanted || !attempt?.info || attempt.over || this.#disposed) return;
+    if (attempt.cols === wanted.cols && attempt.rows === wanted.rows) return;
+    attempt.cols = wanted.cols;
+    attempt.rows = wanted.rows;
+    this.#lastResize = Date.now();
+    this.#send(this.#native.resizeTerminal(attempt.info.id, { cols: wanted.cols, rows: wanted.rows }));
   }
 
   /** Hangs up the session and stops listening to the screen. */
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    clearTimeout(this.#resizeTimer);
+    this.#resizeTimer = undefined;
     for (const subscription of this.#subscriptions) subscription.dispose();
     const attempt = this.#attempt;
     this.#attempt = undefined;
