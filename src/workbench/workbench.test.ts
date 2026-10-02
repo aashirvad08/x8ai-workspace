@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AgentChanges } from "../contracts/generated/AgentChanges";
 import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
@@ -1424,5 +1424,184 @@ describe("Workbench model drop", () => {
     await settle();
     expect(state.calls.filter((c) => c.startsWith("approve") || c.startsWith("createSession"))).toEqual([]);
     expect(workbench.notifications.get().at(-1)?.message).toContain("No installed agent here can use gpt-6.1-sol");
+  });
+});
+
+describe("Workbench context between sessions", () => {
+  function info(id: number, agent: string, name: string): AgentSessionInfo {
+    return {
+      id,
+      agent,
+      name,
+      workspace: "/Users/me/project",
+      cwd: `/Users/me/.x8ai/worktrees/project-1/${agent}-${id}`,
+      worktree: { branch: `agent/${agent}/2026100${id}-101500-abcdef`, base: "a".repeat(40), path: `/w/${id}` },
+      startedAt: 0,
+      state: { state: "notRunning" },
+      terminal: null,
+      configuration: { source: "agent", shellVariables: [] },
+      mcp: [],
+      skills: [],
+    };
+  }
+
+  /** A pane's terminal as the composer sees it: what it shows, and what was pasted. */
+  function terminal(shown: string) {
+    return {
+      pasted: [] as string[],
+      accepts: true,
+      read: () => shown,
+      acceptsPaste(): boolean {
+        return this.accepts;
+      },
+      paste(text: string): boolean {
+        if (!this.accepts) return false;
+        this.pasted.push(text);
+        return true;
+      },
+      quietFor: () => 5_000,
+    };
+  }
+
+  /** Claude Code (session 1) and Codex (session 2), each running in its terminal unless `stopped`. */
+  async function twoSessions(stopped: number[] = []) {
+    const opened_ = await opened();
+    const { workbench, state } = opened_;
+    state.agentSessions = [info(1, "claude-code", "Claude Code"), info(2, "codex", "Codex")];
+    state.agentChanges = {
+      branch: "agent/claude-code/20261001-101500-abcdef",
+      base: "a".repeat(40),
+      head: "b".repeat(40),
+      commits: 1,
+      uncommitted: false,
+      files: [{ path: "src/parser.rs", change: "added", from: null }],
+      diff: "diff --git a/src/parser.rs b/src/parser.rs\n+++ b/src/parser.rs\n+fn parse() {}",
+      truncated: false,
+    };
+    await workbench.agents.loadSessions();
+    const terminals = new Map([
+      [1, terminal("claude> wrote the parser\nAll tests pass.")],
+      [2, terminal("codex>")],
+    ]);
+    for (const session of state.agentSessions.filter((s) => !stopped.includes(s.id))) {
+      workbench.terminals.add({ type: "agent", agent: session.agent, name: session.name, session: session.id });
+      const pane = workbench.terminals.paneOfSession(session.id)!;
+      started(workbench, pane.key, 100 + session.id);
+      workbench.terminals.setReader(pane.key, terminals.get(session.id)!);
+    }
+    return { ...opened_, terminals };
+  }
+
+  it("needs two sessions", async () => {
+    const { workbench } = await opened();
+    workbench.shareContext("get");
+    await settle();
+    expect(workbench.share.get()).toBeNull();
+    expect(workbench.notifications.get().at(-1)?.message).toContain("start a second session first");
+  });
+
+  it("gets a session the others' context, and puts it in its input without pressing Enter", async () => {
+    const { workbench, terminals } = await twoSessions();
+    workbench.shareContext("get", 2);
+    await settle();
+    await settle();
+    expect(workbench.share.get()).toMatchObject({ mode: "get", target: 2, sources: [1], edited: false });
+    const text = workbench.share.get()!.text;
+    expect(text).toContain("## Claude Code (agent/claude-code/20261001-101500-abcdef)");
+    expect(text).toContain("- A src/parser.rs (+1 −0)");
+    expect(text).toContain("claude> wrote the parser");
+    expect(text).not.toContain("+fn parse() {}");
+
+    workbench.setShareNote("Write the tests for it.");
+    await settle();
+    workbench.sendShareContext();
+    await settle();
+    await settle();
+    const [pasted] = terminals.get(2)!.pasted;
+    expect(pasted).toContain("Write the tests for it.");
+    expect(pasted!.endsWith("\n")).toBe(false);
+    expect(terminals.get(1)!.pasted).toEqual([]);
+    expect(workbench.share.get()).toBeNull();
+    expect(workbench.notifications.get().at(-1)?.message).toContain("in Codex's input");
+  });
+
+  it("gives a session's context to another, and sends the user's own edit as it is", async () => {
+    const { workbench, terminals } = await twoSessions();
+    workbench.shareContext("give", 1);
+    await settle();
+    await settle();
+    expect(workbench.share.get()).toMatchObject({ mode: "give", sources: [1], target: 2 });
+    workbench.setShareParts({ changes: true, diff: true, output: false });
+    await settle();
+    expect(workbench.share.get()!.text).toContain("+fn parse() {}");
+    expect(workbench.share.get()!.text).not.toContain("wrote the parser");
+    workbench.editShareText("Only this, \x1b[201~please.");
+    expect(workbench.share.get()!.edited).toBe(true);
+    workbench.sendShareContext();
+    await settle();
+    await settle();
+    expect(terminals.get(2)!.pasted).toEqual(["Only this, please."]);
+  });
+
+  it("waits for the agent to take a paste, and sends nothing if it never does", async () => {
+    const { workbench, terminals } = await twoSessions();
+    workbench.shareContext("get", 2);
+    await settle();
+    await settle();
+    terminals.get(2)!.accepts = false;
+    vi.useFakeTimers();
+    try {
+      workbench.sendShareContext();
+      await vi.advanceTimersByTimeAsync(50_000);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(terminals.get(2)!.pasted).toEqual([]);
+    expect(workbench.share.get()).toMatchObject({ sending: false });
+    expect(workbench.notifications.get().at(-1)?.message).toContain("nothing was sent");
+  });
+
+  it("starts a stopped agent only through its approval, then puts the context in", async () => {
+    const { workbench, state, terminals } = await twoSessions([2]);
+    workbench.shareContext("get", 2);
+    await settle();
+    await settle();
+
+    // Refused: nothing starts, nothing is sent, the composer stays.
+    state.allowAgent = false;
+    workbench.sendShareContext();
+    await answer(workbench, "start");
+    await settle();
+    expect(state.calls).toContain("approveSession 2");
+    expect(workbench.terminals.paneOfSession(2)).toBeUndefined();
+    expect(workbench.share.get()).toMatchObject({ sending: false });
+
+    state.allowAgent = true;
+    workbench.sendShareContext();
+    await answer(workbench, "start");
+    await settle();
+    const pane = workbench.terminals.paneOfSession(2)!;
+    expect(pane).toBeDefined();
+    started(workbench, pane.key, 202);
+    workbench.terminals.setReader(pane.key, terminals.get(2)!);
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(terminals.get(2)!.pasted).toHaveLength(1);
+  });
+
+  it("opens from the welcome screen with /get and /give", async () => {
+    const { workbench } = await twoSessions();
+    workbench.showHome();
+    await workbench.runHomeCommand("/get codex");
+    expect(workbench.home.get().visible).toBe(false);
+    expect(workbench.share.get()).toMatchObject({ mode: "get", target: 2 });
+    workbench.closeShareContext();
+
+    workbench.showHome();
+    await workbench.runHomeCommand("/give nobody");
+    expect(workbench.home.get().message?.text).toContain("No agent session matches");
+    expect(workbench.share.get()).toBeNull();
+    await workbench.runHomeCommand("/give");
+    expect(workbench.share.get()).toMatchObject({ mode: "give" });
+    expect(workbench.commands().some((c) => c.id === "context.get")).toBe(true);
   });
 });

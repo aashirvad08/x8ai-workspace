@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { ShareContextView } from "../agents/ShareContextView";
 import { EditorArea } from "../editor/EditorArea";
 import { HomeView } from "../home/HomeView";
 import { useStore } from "../lib/useStore";
@@ -90,6 +91,7 @@ export function App({ workbench, native }: { workbench: Workbench; native: Nativ
       />
       <NotificationList notifications={workbench.notifications} />
       <PickerView picker={workbench.picker} onOpenFile={openFile} onOpenWorkspace={openRecent} />
+      <ShareContextView share={workbench.share} agents={workbench.agents} actions={workbench} />
       <DialogHost dialogs={workbench.dialogs} />
     </div>
   );

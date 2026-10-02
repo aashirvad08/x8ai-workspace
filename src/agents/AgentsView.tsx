@@ -297,6 +297,12 @@ function SessionCard({
             Changes
           </button>
         )}
+        <button type="button" title="Give this agent what other sessions did" onClick={() => actions.shareContext("get", session.id)}>
+          Get context…
+        </button>
+        <button type="button" title="Pass this session's work to another one" onClick={() => actions.shareContext("give", session.id)}>
+          Give context…
+        </button>
         <button
           type="button"
           disabled={running}

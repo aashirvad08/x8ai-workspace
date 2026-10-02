@@ -147,6 +147,38 @@ the worktree through a `cap-std` handle on it, with the same path checks as
 workspace files. The primary workspace, its explorer and its editor tabs are
 never switched to a worktree.
 
+## Handing context between sessions
+
+When the user moves work from one agent to another (Claude Code did the
+parser; Codex should write its tests), the new agent should not have to look
+through every file to learn what happened. The context composer hands it over:
+
+- **Open it** with `/get [agent]` or `/give [agent]` on the Welcome screen, with
+  **Get context…** or **Give context…** on a session card, or from the command
+  palette. `get` is for a session to receive: the other sessions give. `give` is
+  for a session to give: to a running session by default. Without an agent
+  named, the focused agent's session is meant.
+- **Choose** the sessions it comes from, the one that receives it, and what of
+  each: **What changed** (the branch, the files with lines added and removed,
+  the number of commits, from Git, as `agent_changes` reports them), **The
+  diff** (cut at 40 KB, and said so), **Recent terminal output** (the last 150
+  lines its terminal shows, as text), and a note.
+- **Read it** first: the composer shows the exact text, which the user can edit
+  (choosing again composes it anew), its size, and that all of it goes to the
+  receiving agent and its model provider.
+- **Send** puts it into the receiving agent's input as a bracketed paste, and
+  focuses it. Nothing is submitted until the user presses Enter there. A stopped
+  agent is started first if the user agrees, through its approval as always;
+  the text waits until it takes a bracketed paste and has drawn its prompt.
+
+What it never does: read an agent's own transcripts or files (`~/.claude`,
+`~/.codex`), send anything by itself, or paste into a program that has not
+turned on bracketed paste (a shell would run each line). The text has every
+escape character removed, so nothing in it can end the paste early, and no
+trailing newline. Pure functions in `src/agents/context.ts` compose and clean
+it; the terminal's text is read through `TerminalReader`
+(`src/terminal/terminals.ts`), so only `src/terminal/` touches the emulator.
+
 ## Security boundaries
 
 | Rule | How |

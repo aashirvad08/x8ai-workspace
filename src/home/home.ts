@@ -84,12 +84,14 @@ function loadName(): string | null {
 
 // Commands
 
-export type HomeCommandName = "/cd" | "/home" | "/name";
+export type HomeCommandName = "/cd" | "/home" | "/name" | "/get" | "/give";
 
 export const HOME_COMMANDS: readonly { name: HomeCommandName; usage: string; description: string }[] = [
   { name: "/cd", usage: "/cd <folder>", description: "open a folder as your space" },
   { name: "/home", usage: "/home", description: "the workspace with no folder open" },
   { name: "/name", usage: "/name <your name>", description: "how the welcome greets you" },
+  { name: "/get", usage: "/get [agent]", description: "give an agent what other sessions did" },
+  { name: "/give", usage: "/give [agent]", description: "pass an agent's work to another session" },
 ];
 
 export type ParsedCommand =
@@ -122,7 +124,7 @@ export function suggestionsFor(text: string, recent: readonly RecentWorkspace[])
     return HOME_COMMANDS.filter((c) => c.name.startsWith(text)).map((c) => ({
       label: c.usage,
       detail: c.description,
-      completion: c.name === "/home" ? c.name : `${c.name} `,
+      completion: c.name === "/home" || c.name === "/get" || c.name === "/give" ? c.name : `${c.name} `,
     }));
   }
   if (text.slice(0, space) !== "/cd") return [];

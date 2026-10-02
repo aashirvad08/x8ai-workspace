@@ -235,6 +235,7 @@ const PaneTerminal = memo(function PaneTerminal({
       focusRequest={focusRequest}
       onStart={(info) => terminals.started(pane.key, info)}
       onEnd={(ending) => terminals.ended(pane.key, ending)}
+      onReader={(reader) => terminals.setReader(pane.key, reader)}
     />
   );
 });
