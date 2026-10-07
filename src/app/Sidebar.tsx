@@ -1,3 +1,4 @@
+import { AddonsView } from "../addons/AddonsView";
 import { AgentsView } from "../agents/AgentsView";
 import { CatalogView } from "../catalog/CatalogView";
 import { useStore } from "../lib/useStore";
@@ -20,9 +21,10 @@ const VIEWS: readonly { view: SidebarView; label: string; shortcut: string; icon
   },
   { view: "mcp", label: "MCP", shortcut: "⇧⌘U", icon: "M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11v3" },
   { view: "catalog", label: "Catalog", shortcut: "⇧⌘K", icon: "M2.5 2.5h4v4h-4zM9.5 2.5h4v4h-4zM2.5 9.5h4v4h-4zM9.5 9.5h4v4h-4z" },
+  { view: "addons", label: "Add-ons", shortcut: "⇧⌘X", icon: "M3 5.5h3.2a1.8 1.8 0 1 1 3.6 0H13v3.2a1.8 1.8 0 1 1 0 3.6V14H3z" },
 ];
 
-/** The left column: the file explorer, search, agents, models, MCP servers or the catalog, switched by tabs at the top. */
+/** The left column: the file explorer, search, agents, models, MCP servers, the catalog or add-ons, switched by tabs at the top. */
 export function Sidebar({ workbench }: { workbench: Workbench }) {
   const { sidebar } = useStore(workbench.layout);
   return (
@@ -43,6 +45,7 @@ export function Sidebar({ workbench }: { workbench: Workbench }) {
               else if (view === "models") workbench.showModels();
               else if (view === "mcp") workbench.showMcp();
               else if (view === "catalog") workbench.showCatalog();
+              else if (view === "addons") workbench.showAddons();
               else workbench.layout.showSidebar(view);
             }}
           >
@@ -77,6 +80,11 @@ export function Sidebar({ workbench }: { workbench: Workbench }) {
       {sidebar === "catalog" && (
         <aside className="explorer" aria-label="Catalog">
           <CatalogView catalog={workbench.catalog} skills={workbench.skills} actions={workbench} />
+        </aside>
+      )}
+      {sidebar === "addons" && (
+        <aside className="explorer" aria-label="Add-ons">
+          <AddonsView addons={workbench.addons} actions={workbench} />
         </aside>
       )}
       {sidebar === "mcp" && (

@@ -10,11 +10,18 @@ import { type SessionEnding, type SessionNative, TerminalSession } from "./sessi
 import type { TerminalReader } from "./terminals";
 import { terminalTheme } from "./theme";
 
+/** The app's own terminal font. */
+export const DEFAULT_FONT = '"SF Mono", Menlo, Monaco, monospace';
+
 interface Props {
   /** Starts the session (a shell, or an agent) and drives it. Must be stable. */
   native: SessionNative;
   /** An agent's name, for messages; the user's shell if unset. */
   program?: string | undefined;
+  /** Runs once: Enter does not start it again when it ends (an add-on install). */
+  once?: boolean;
+  /** The font family; changing it re-renders the terminal in place. */
+  fontFamily?: string;
   /** Hidden views (in other tabs) keep running. */
   visible: boolean;
   /** The pane that should have keyboard focus in its tab. */
@@ -31,9 +38,24 @@ interface Props {
  * Renders one terminal session with xterm.js. This component only wires the
  * emulator to the DOM; session behaviour lives in `TerminalSession`.
  */
-export function TerminalView({ native, program, visible, focused, focusRequest, onStart, onEnd, onReader }: Props) {
+export function TerminalView({
+  native,
+  program,
+  once = false,
+  fontFamily = DEFAULT_FONT,
+  visible,
+  focused,
+  focusRequest,
+  onStart,
+  onEnd,
+  onReader,
+}: Props) {
   const container = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  // Read when the terminal is made; later changes go through the effect below.
+  const font = useRef(fontFamily);
+  font.current = fontFamily;
   const callbacks = useRef({ onStart, onEnd, onReader });
   callbacks.current = { onStart, onEnd, onReader };
 
@@ -47,7 +69,7 @@ export function TerminalView({ native, program, visible, focused, focusRequest, 
       // modern shells assume, so the cursor stays aligned while editing.
       allowProposedApi: true,
       cursorBlink: true,
-      fontFamily: '"SF Mono", Menlo, Monaco, monospace',
+      fontFamily: font.current,
       fontSize: 13,
       // Bounded, so a long-running process cannot grow memory without limit.
       scrollback: 10_000,
@@ -55,6 +77,7 @@ export function TerminalView({ native, program, visible, focused, focusRequest, 
     });
     terminalRef.current = terminal;
     const fit = new FitAddon();
+    fitRef.current = fit;
     terminal.loadAddon(fit);
     terminal.loadAddon(new Unicode11Addon());
     terminal.unicode.activeVersion = "11";
@@ -69,7 +92,7 @@ export function TerminalView({ native, program, visible, focused, focusRequest, 
         onStart: (info) => callbacks.current.onStart?.(info),
         onEnd: (ending) => callbacks.current.onEnd?.(ending),
       },
-      program === undefined ? {} : { program },
+      { ...(program === undefined ? {} : { program }), once },
     );
     const resized = terminal.onResize(({ cols, rows }) => session.resize(cols, rows));
     session.start();
@@ -116,8 +139,17 @@ export function TerminalView({ native, program, visible, focused, focusRequest, 
       session.dispose();
       terminal.dispose();
       terminalRef.current = null;
+      fitRef.current = null;
     };
-  }, [native, program]);
+  }, [native, program, once]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal || terminal.options.fontFamily === fontFamily) return;
+    terminal.options.fontFamily = fontFamily;
+    // The cells change size with the font.
+    fitRef.current?.fit();
+  }, [fontFamily]);
 
   useEffect(() => {
     if (visible && focused) terminalRef.current?.focus();

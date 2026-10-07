@@ -36,6 +36,8 @@ export interface SessionCallbacks {
 export interface SessionOptions {
   /** What runs in the session, for messages: an agent's name. The user's shell if unset. */
   readonly program?: string;
+  /** Runs once: when it ends, Enter does not start it again (an add-on install). */
+  readonly once?: boolean;
 }
 
 /** One native session: from creation until it exits or is replaced. */
@@ -77,6 +79,7 @@ export class TerminalSession {
   readonly #screen: TerminalScreen;
   readonly #callbacks: SessionCallbacks;
   readonly #program: string | undefined;
+  readonly #once: boolean;
   readonly #subscriptions: Disposable[];
   #attempt: Attempt | undefined;
   #disposed = false;
@@ -90,6 +93,7 @@ export class TerminalSession {
     this.#screen = screen;
     this.#callbacks = callbacks;
     this.#program = options.program;
+    this.#once = options.once ?? false;
     this.#subscriptions = [
       screen.onData((data) => this.#input(data, encoder.encode(data))),
       // Binary data is a string of byte values, used by some mouse reports.
@@ -122,7 +126,7 @@ export class TerminalSession {
         attempt.over = true;
         this.#callbacks.onEnd?.({ type: "failed", message: error instanceof Error ? error.message : String(error) });
         this.#report(`Could not start ${this.#program ?? "the shell"}`, error);
-        this.#notice("press Enter to try again");
+        if (!this.#once) this.#notice("press Enter to try again");
       },
     );
   }
@@ -196,7 +200,7 @@ export class TerminalSession {
     const attempt = this.#attempt;
     if (!attempt || this.#disposed) return;
     if (attempt.over) {
-      if (text.includes(ENTER)) this.start();
+      if (text.includes(ENTER) && !this.#once) this.start();
       return;
     }
     if (attempt.info) {
@@ -235,7 +239,9 @@ export class TerminalSession {
         // The process is gone; closing releases the native session.
         if (attempt.info) this.#close(attempt.info);
         this.#notice(
-          `${describeExit(event)}, press Enter to ${this.#program === undefined ? "start a new shell" : `restart ${this.#program}`}`,
+          this.#once
+            ? describeExit(event)
+            : `${describeExit(event)}, press Enter to ${this.#program === undefined ? "start a new shell" : `restart ${this.#program}`}`,
         );
         break;
       default:

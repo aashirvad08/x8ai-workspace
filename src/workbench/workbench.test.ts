@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { NERD_FONT } from "../addons/addons";
 import type { AddonList } from "../contracts/generated/AddonList";
 import type { AgentChanges } from "../contracts/generated/AgentChanges";
 import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
@@ -1689,5 +1690,130 @@ describe("Workbench context between sessions", () => {
     await workbench.runHomeCommand("/give");
     expect(workbench.share.get()).toMatchObject({ mode: "give" });
     expect(workbench.commands().some((c) => c.id === "context.get")).toBe(true);
+  });
+});
+
+describe("Workbench add-ons and spaces", () => {
+  it("adds an installed add-on to the open space; the font add-on sets its terminals' font", async () => {
+    const { workbench, state } = await opened();
+    state.installed.add("nerd-font");
+    workbench.showAddons();
+    await settle();
+    expect(workbench.layout.get().sidebar).toBe("addons");
+    expect(workbench.commands().find((c) => c.id === "view.addons")?.shortcut).toMatchObject({ key: "x", meta: true, shift: true });
+    expect(workbench.terminals.get().font).toBeNull();
+
+    workbench.addAddon("nerd-font");
+    await settle();
+    expect(state.spaces.find((s) => s.root === "/Users/me/project")?.addons).toEqual(["nerd-font"]);
+    expect(workbench.terminals.get().font).toBe(NERD_FONT);
+    expect(workbench.notifications.get().at(-1)?.message).toContain("is on in project");
+
+    // Another space has its own add-ons: no font there.
+    state.recent.push({ id: null, root: "/Users/me/other", name: "other", available: true });
+    workbench.openRecent("/Users/me/other");
+    await settle();
+    await settle();
+    expect(workbench.terminals.get().font).toBeNull();
+
+    workbench.removeAddon("nerd-font");
+    await settle();
+    expect(state.calls).toContain("removeAddon nerd-font");
+  });
+
+  it("installs what is missing in a tab of its own once confirmed, and says when it is on", async () => {
+    const { workbench, state } = await opened();
+    state.trusted.add("/Users/me/project");
+    workbench.addAddon("starship");
+    await settle();
+    const install = [...workbench.terminals.get().panes.values()].find((p) => p.kind.type === "install");
+    expect(install?.kind).toEqual({ type: "install", token: 7, addon: "starship", name: "Starship" });
+    expect(install?.title).toBe("Installing Starship");
+    expect(workbench.layout.get().terminalVisible).toBe(true);
+
+    // The native side added it when the install ended well.
+    state.installed.add("starship");
+    state.spaces.find((s) => s.root === "/Users/me/project")!.addons.push("starship");
+    workbench.terminals.ended(install!.key, { type: "exited", exit: { code: 0, signal: null } });
+    await settle();
+    await settle();
+    expect(workbench.notifications.get().at(-1)?.message).toContain("Starship is installed and on in project");
+    // Said once, however often the panes change afterwards.
+    workbench.terminals.requestFocus();
+    await settle();
+    expect(workbench.notifications.get().filter((n) => n.message.includes("Starship is installed"))).toHaveLength(1);
+  });
+
+  it("a declined install opens nothing, and a failed one says so", async () => {
+    const { workbench, state } = await opened();
+    state.confirmInstall = false;
+    const tabs = workbench.terminals.get().tabs.length;
+    workbench.addAddon("starship");
+    await settle();
+    expect(workbench.terminals.get().tabs).toHaveLength(tabs);
+
+    state.confirmInstall = true;
+    workbench.addAddon("starship");
+    await settle();
+    const install = [...workbench.terminals.get().panes.values()].find((p) => p.kind.type === "install")!;
+    workbench.terminals.ended(install.key, { type: "exited", exit: { code: 1, signal: null } });
+    await settle();
+    await settle();
+    expect(workbench.notifications.get().at(-1)).toMatchObject({ tone: "error", message: expect.stringContaining("Starship was not installed") });
+  });
+
+  it("/share gives another space the add-ons chosen, by its name or id", async () => {
+    const { workbench, state } = await opened();
+    state.installed.add("nerd-font");
+    workbench.addAddon("neovim");
+    await settle();
+    workbench.addAddon("nerd-font");
+    await settle();
+    state.spaces.push({ id: "ws-otherb", name: "other", root: "/Users/me/other", addons: [] });
+
+    workbench.showHome();
+    await workbench.runHomeCommand("/share other");
+    expect(state.calls).toContain("shareSpace ws-otherb neovim,nerd-font");
+    expect(workbench.home.get().message?.text).toContain("other (ws-otherb) now has Neovim, JetBrains Mono Nerd Font");
+
+    // Only some of them, as the welcome screen's checklist gives them.
+    expect(await workbench.shareSpace("ws-homeaa", ["neovim"])).toBe(true);
+    expect(state.spaces[0]!.addons).toEqual(["neovim"]);
+
+    await workbench.runHomeCommand("/share nowhere");
+    expect(workbench.home.get().message).toMatchObject({ tone: "error", text: expect.stringContaining("No other space") });
+  });
+
+  it("/share without add-ons, or without a space, explains instead", async () => {
+    const { workbench, state } = await opened();
+    state.spaces.push({ id: "ws-otherb", name: "other", root: "/Users/me/other", addons: [] });
+    await workbench.runHomeCommand("/share");
+    expect(workbench.home.get().message?.text).toContain("Name the space");
+    await workbench.runHomeCommand("/share ws-otherb");
+    expect(workbench.home.get().message?.text).toContain("no add-ons to share yet");
+    expect(state.calls.some((c) => c.startsWith("shareSpace"))).toBe(false);
+  });
+
+  it("/new makes an empty space in ~/Workspaces and opens it", async () => {
+    const { workbench, state } = await opened();
+    workbench.showHome();
+    await workbench.runHomeCommand("/new demo");
+    expect(state.calls).toContain("createWorkspace demo");
+    expect(workbench.workspace.get()).toMatchObject({ id: "ws-newone", name: "demo" });
+    expect(workbench.home.get().message?.text).toContain("demo is a new space (ws-newone)");
+
+    await workbench.runHomeCommand("/new demo");
+    expect(workbench.notifications.get().at(-1)?.message).toContain("already exists");
+    await workbench.runHomeCommand("/new");
+    expect(workbench.home.get().message?.text).toContain("Name the new space");
+  });
+
+  it("the Add-ons view's Share opens the welcome screen with /share typed", async () => {
+    const { workbench } = await opened();
+    workbench.leaveHome();
+    workbench.shareAddons();
+    expect(workbench.home.get()).toMatchObject({ visible: true, draft: "/share " });
+    expect(workbench.home.takeDraft()).toBe("/share ");
+    expect(workbench.home.takeDraft()).toBeNull();
   });
 });

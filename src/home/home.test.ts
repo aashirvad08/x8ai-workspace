@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { matchSpaces, shareName } from "../addons/addons";
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
+import type { SpaceInfo } from "../contracts/generated/SpaceInfo";
 import { Home, matchRecent, parseCommand, suggestionsFor } from "./home";
 
 const recent: RecentWorkspace[] = [
@@ -25,7 +27,7 @@ describe("welcome commands", () => {
 
   it("suggests commands, then recent spaces for /cd", () => {
     expect(suggestionsFor("", recent)).toEqual([]);
-    expect(suggestionsFor("/", recent).map((s) => s.completion)).toEqual(["/cd ", "/home", "/name ", "/get", "/give"]);
+    expect(suggestionsFor("/", recent).map((s) => s.completion)).toEqual(["/cd ", "/new ", "/share ", "/home", "/name ", "/get", "/give"]);
     expect(suggestionsFor("/g", recent).map((s) => s.label)).toEqual(["/get [agent]", "/give [agent]"]);
     expect(suggestionsFor("/h", recent).map((s) => s.label)).toEqual(["/home"]);
     expect(suggestionsFor("/cd ", recent).map((s) => s.detail)).toEqual([
@@ -71,5 +73,35 @@ describe("Home", () => {
     home.say("hi");
     home.hide();
     expect(home.get()).toMatchObject({ visible: false, message: null });
+  });
+});
+
+const spaces: SpaceInfo[] = [
+  { id: "ws-homeaa", name: "Home", root: null, addons: [] },
+  { id: "ws-gymaaa", name: "gymRL", root: "/Users/me/gymRL", addons: ["starship"] },
+  { id: "ws-labapp", name: "app", root: "/Users/me/labs/app", addons: [] },
+  { id: "ws-webapp", name: "app", root: "/Users/me/web/app", addons: [] },
+];
+
+describe("/share", () => {
+  it("names another space by id, folder, name or the start of its name, never the open one", () => {
+    expect(matchSpaces("ws-gymaaa", spaces, "ws-homeaa").map((s) => s.id)).toEqual(["ws-gymaaa"]);
+    expect(matchSpaces("GYM", spaces, "ws-homeaa").map((s) => s.id)).toEqual(["ws-gymaaa"]);
+    expect(matchSpaces("/Users/me/web/app", spaces, null).map((s) => s.id)).toEqual(["ws-webapp"]);
+    expect(matchSpaces("app", spaces, null).map((s) => s.id)).toEqual(["ws-labapp", "ws-webapp"]);
+    expect(matchSpaces("gymRL", spaces, "ws-gymaaa")).toEqual([]);
+    expect(matchSpaces("  ", spaces, null)).toEqual([]);
+  });
+
+  it("suggests the other spaces, by name unless two share it", () => {
+    expect(suggestionsFor("/share ", recent, spaces, "ws-gymaaa").map((s) => s.completion)).toEqual([
+      "/share Home",
+      "/share ws-labapp",
+      "/share ws-webapp",
+    ]);
+    expect(suggestionsFor("/share gy", recent, spaces, "ws-homeaa")).toEqual([
+      { label: "gymRL", detail: "ws-gymaaa · /Users/me/gymRL", completion: "/share gymRL" },
+    ]);
+    expect(shareName(spaces[1]!, spaces)).toBe("gymRL");
   });
 });

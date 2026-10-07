@@ -1,3 +1,5 @@
+import type { AddonActions } from "../addons/actions";
+import { Addons, matchSpaces } from "../addons/addons";
 import type { AgentActions, ContextActions } from "../agents/actions";
 import { Agents } from "../agents/agents";
 import { composeContext, MAX_OUTPUT_LINES, matchSessions, pasteable, sessionWhere } from "../agents/context";
@@ -11,6 +13,7 @@ import type { AgentStatus } from "../contracts/generated/AgentStatus";
 import type { DirEntry } from "../contracts/generated/DirEntry";
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchMatch } from "../contracts/generated/SearchMatch";
+import type { SpaceInfo } from "../contracts/generated/SpaceInfo";
 import type { WorkspaceEvent } from "../contracts/generated/WorkspaceEvent";
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
 import type { McpServerInput } from "../contracts/generated/McpServerInput";
@@ -62,7 +65,8 @@ export class Workbench
     McpActions,
     CatalogActions,
     HomeActions,
-    ContextActions
+    ContextActions,
+    AddonActions
 {
   readonly workspace = new Value<WorkspaceInfo | null>(null);
   /** Recently opened folders, most recent first. */
@@ -75,6 +79,10 @@ export class Workbench
   readonly mcp: McpServers;
   readonly skills: Skills;
   readonly catalog: Catalog;
+  /** Add-ons of the open space: tools its terminals use. */
+  readonly addons: Addons;
+  /** Every space with an id, for `/share`. */
+  readonly spaces = new Value<readonly SpaceInfo[]>([]);
   /** The welcome screen, the app's head. */
   readonly home: Home;
   /** The context composer: handing context from agent sessions to another. */
@@ -95,6 +103,8 @@ export class Workbench
   /** Which agent panes run, as last seen, to refresh sessions when that changes. */
   #agentPanesSeen = "";
   #files: { paths: readonly string[]; truncated: boolean } | null = null;
+  /** Install panes whose end has been handled. */
+  readonly #installsEnded = new Set<number>();
   #reportedUnsaved = false;
 
   constructor(native: NativeClient) {
@@ -107,9 +117,13 @@ export class Workbench
     this.mcp = new McpServers(native);
     this.skills = new Skills(native);
     this.catalog = new Catalog(native);
+    this.addons = new Addons(native);
     this.home = new Home(native);
     this.editor.subscribe(() => this.#reportUnsaved());
     this.terminals.subscribe(() => this.#agentPanesChanged());
+    this.terminals.subscribe(() => this.#installsChanged());
+    // The open space's font add-on sets its terminals' font.
+    this.addons.subscribe(() => this.terminals.setFont(this.addons.font()));
   }
 
   /**
@@ -126,6 +140,8 @@ export class Workbench
     const last = this.recent.get()[0];
     if (last?.available) await this.#open((listener) => this.#native.openRecentWorkspace(last.root, listener), true);
     if (this.terminals.get().tabs.length === 0) this.terminals.add();
+    void this.addons.load();
+    void this.#refreshSpaces();
     await this.#showWarnings();
   }
 
@@ -174,6 +190,7 @@ export class Workbench
     this.terminals.closeAgents();
     this.terminals.add();
     this.#reloadAgents();
+    void this.addons.load();
     await this.#refreshRecent();
     return true;
   }
@@ -183,6 +200,7 @@ export class Workbench
   /** ⇧⌘H: the welcome screen over the workspace, which keeps running. */
   showHome(): void {
     this.home.show();
+    void this.#refreshSpaces();
   }
 
   leaveHome(): void {
@@ -203,10 +221,38 @@ export class Workbench
       return;
     }
     if (command.kind === "unknown") {
-      this.home.say(`“${command.word}” is not a command here. Try /cd <folder>, /home, /get, /give or /name <your name>.`, "error");
+      this.home.say(`“${command.word}” is not a command here. Try /cd <folder>, /new <name>, /share <space>, /home or /name <your name>.`, "error");
       return;
     }
     switch (command.name) {
+      case "/new": {
+        if (!command.arg) {
+          this.home.say("Name the new space: /new <name>. It is made in ~/Workspaces.", "error");
+          return;
+        }
+        await this.newSpace(command.arg);
+        return;
+      }
+      case "/share": {
+        const added = this.addons.added().map((a) => a.id);
+        if (!command.arg) {
+          this.home.say("Name the space to share with: /share <space>.", "error");
+          return;
+        }
+        await this.#refreshSpaces();
+        const matches = matchSpaces(command.arg, this.spaces.get(), this.addons.get().list?.space.id ?? null);
+        if (matches.length !== 1) {
+          this.home.say(
+            matches.length === 0
+              ? `No other space is “${command.arg}”. Spaces get an id when first opened.`
+              : `Several spaces match “${command.arg}”: ${matches.map((m) => `${m.name} (${m.id})`).join(", ")}. Use the id.`,
+            "error",
+          );
+          return;
+        }
+        await this.shareSpace(matches[0]!.id, added);
+        return;
+      }
       case "/home":
         if (await this.closeFolder()) this.leaveHome();
         return;
@@ -309,6 +355,8 @@ export class Workbench
       // The native side stopped the folder's agents when trust went.
       if (!info.trusted) this.terminals.closeAgents();
       this.#reloadAgents();
+      // Add-ons that need trust turn on or off.
+      void this.addons.load();
     } catch (error) {
       this.notifications.error(`Could not change trust: ${messageOf(error)}`);
     }
@@ -341,6 +389,7 @@ export class Workbench
     if (!info) return false;
     this.#shown = token;
     if (!keepHome) this.home.hide();
+    void this.addons.load();
     this.editor.closeAll();
     this.#files = null;
     this.workspace.set(info);
@@ -591,6 +640,8 @@ export class Workbench
       { id: "view.models", title: "Show Models", shortcut: { key: "m", meta: true, shift: true }, run: () => this.showModels() },
       { id: "view.mcp", title: "Show MCP Servers", shortcut: { key: "u", meta: true, shift: true }, run: () => this.showMcp() },
       { id: "view.catalog", title: "Show Catalog", shortcut: { key: "k", meta: true, shift: true }, run: () => this.showCatalog() },
+      { id: "view.addons", title: "Show Add-ons", shortcut: { key: "x", meta: true, shift: true }, run: () => this.showAddons() },
+      { id: "addons.share", title: "Share Add-ons with Another Space…", run: () => this.shareAddons() },
       { id: "terminal.toggle", title: "Toggle Terminal", shortcut: { key: "`", ctrl: true }, run: () => this.toggleTerminal() },
       { id: "terminal.new", title: "New Terminal", shortcut: { key: "`", ctrl: true, shift: true }, run: () => this.newTerminal() },
       { id: "terminal.splitRight", title: "Split Terminal Right", shortcut: { key: "d", meta: true }, when: "terminalFocused", run: () => this.splitTerminal("right") },
@@ -941,6 +992,137 @@ export class Workbench
       if (reader?.acceptsPaste() && reader.quietFor() >= QUIET_MS) return reader;
       if (Date.now() >= deadline) return null;
       await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+
+  // Spaces and add-ons
+
+  /**
+   * `/new <name>`: a new, empty folder in ~/Workspaces, opened as a new space
+   * with an id of its own and no add-ons. Resolves to whether it opened.
+   */
+  async newSpace(name: string): Promise<boolean> {
+    if (!(await this.#confirmStopAgents())) return false;
+    if (!(await this.#confirmDiscard("Opening another folder closes its open files."))) return false;
+    const opened = await this.#open((listener) => this.#native.createWorkspace(name, listener), true);
+    if (opened) {
+      const info = this.workspace.get();
+      this.home.say(`${info?.name ?? name} is a new space (${info?.id ?? ""}), in ~/Workspaces. Press Esc to go to it.`);
+      void this.#refreshSpaces();
+    }
+    return opened;
+  }
+
+  /** ⇧⌘X: the open space's add-ons in the sidebar. */
+  showAddons(): void {
+    this.layout.showSidebar("addons");
+    void this.addons.load();
+  }
+
+  refreshAddons(): void {
+    void this.addons.load(true);
+  }
+
+  addAddon(id: string): void {
+    void this.#addAddon(id);
+  }
+
+  async #addAddon(id: string): Promise<void> {
+    const name = this.addons.find(id)?.name ?? id;
+    this.addons.setBusy(id, true);
+    try {
+      const result = await this.#native.addAddon(id);
+      switch (result.kind) {
+        case "added": {
+          this.addons.setList(result.list);
+          const added = result.list.addons.find((a) => a.id === id);
+          this.notifications.info(
+            added?.active
+              ? `${name} is on in ${result.list.space.name}. ${added.reach === "space" ? "New terminals there have it." : "It works in every terminal."}`
+              : `${name} is added to ${result.list.space.name}.`,
+          );
+          break;
+        }
+        case "install":
+          // Its tab shows the install; the add-on is added when it ends well.
+          this.layout.setTerminalVisible(true);
+          this.terminals.add({ type: "install", token: result.token, addon: id, name: result.name });
+          break;
+        case "cancelled":
+          break;
+      }
+    } catch (error) {
+      this.notifications.error(`Could not add ${name}: ${messageOf(error)}`);
+    } finally {
+      this.addons.setBusy(id, false);
+    }
+  }
+
+  removeAddon(id: string): void {
+    const name = this.addons.find(id)?.name ?? id;
+    this.addons.setBusy(id, true);
+    this.#native
+      .removeAddon(id)
+      .then((list) => {
+        this.addons.setList(list);
+        this.notifications.info(`${name} is off in ${list.space.name}. New terminals there start without it.`);
+      })
+      .catch((error: unknown) => this.notifications.error(`Could not remove ${name}: ${messageOf(error)}`))
+      .finally(() => this.addons.setBusy(id, false));
+  }
+
+  /** The welcome screen with `/share ` typed: choose the space, then what to give it. */
+  shareAddons(): void {
+    this.home.show({ draft: "/share " });
+    void this.#refreshSpaces();
+  }
+
+  /** Gives the space `to` these add-ons of the open space (`/share`). */
+  async shareSpace(to: string, addons: readonly string[]): Promise<boolean> {
+    if (addons.length === 0) {
+      this.home.say("This space has no add-ons to share yet. Add some in Add-ons (⇧⌘X).", "error");
+      return false;
+    }
+    try {
+      const target = await this.#native.shareSpace(to, [...addons]);
+      const names = addons.map((id) => this.addons.find(id)?.name ?? id);
+      this.home.say(`${target.name} (${target.id}) now has ${names.join(", ")}. Its new terminals start with them.`);
+      await this.#refreshSpaces();
+      return true;
+    } catch (error) {
+      this.home.say(`Could not share: ${messageOf(error)}`, "error");
+      return false;
+    }
+  }
+
+  async #refreshSpaces(): Promise<void> {
+    try {
+      this.spaces.set(await this.#native.listSpaces());
+    } catch {
+      // Only /share's suggestions are missing; using it reports the problem.
+    }
+  }
+
+  /** An install tab ended: the add-on was added if it went well. Says which, once. */
+  #installsChanged(): void {
+    for (const pane of this.terminals.get().panes.values()) {
+      if (pane.kind.type !== "install" || !pane.ending || this.#installsEnded.has(pane.key)) continue;
+      this.#installsEnded.add(pane.key);
+      const { name, addon } = pane.kind;
+      const ok = pane.ending.type === "exited" && pane.ending.exit.code === 0 && !pane.ending.exit.signal;
+      void this.addons.load(true).then(() => {
+        const status = this.addons.find(addon);
+        const space = this.addons.get().list?.space.name ?? "this space";
+        if (ok && status?.added) {
+          this.notifications.info(
+            status.active
+              ? `${name} is installed and on in ${space}. ${status.reach === "space" ? "Open a new terminal (⌃⇧`) to use it." : "It works in every terminal."}`
+              : `${name} is installed and added to ${space}.`,
+          );
+        } else {
+          this.notifications.error(`${name} was not installed. Its tab shows what happened.`);
+        }
+      });
     }
   }
 

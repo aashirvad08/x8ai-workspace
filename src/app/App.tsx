@@ -82,7 +82,16 @@ export function App({ workbench, native }: { workbench: Workbench; native: Nativ
           onShow={() => workbench.toggleTerminal()}
         />
       </div>
-      {homeVisible && <HomeView home={workbench.home} recent={workbench.recent} workspace={workbench.workspace} actions={workbench} />}
+      {homeVisible && (
+        <HomeView
+          home={workbench.home}
+          recent={workbench.recent}
+          workspace={workbench.workspace}
+          spaces={workbench.spaces}
+          addons={workbench.addons}
+          actions={workbench}
+        />
+      )}
       <StatusBar
         status={status}
         workspace={workspace}

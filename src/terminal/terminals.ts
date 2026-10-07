@@ -5,12 +5,14 @@ import { type PaneTree, pane, paneKeys, removePane, resizeSplit, type SplitDirec
 import type { SessionEnding } from "./session";
 
 /**
- * What runs in a pane: the user's login shell, or the agent of an agent session
- * (which knows its own worktree; docs/multi-agent.md).
+ * What runs in a pane: the user's login shell, the agent of an agent session
+ * (which knows its own worktree; docs/multi-agent.md), or an add-on install the
+ * user confirmed, which runs once (docs/decisions/0019-add-ons.md).
  */
 export type PaneKind =
   | { readonly type: "shell" }
-  | { readonly type: "agent"; readonly agent: string; readonly name: string; readonly session: number };
+  | { readonly type: "agent"; readonly agent: string; readonly name: string; readonly session: number }
+  | { readonly type: "install"; readonly token: number; readonly addon: string; readonly name: string };
 
 export const SHELL: PaneKind = { type: "shell" };
 
@@ -66,6 +68,8 @@ export interface TerminalsSnapshot {
   readonly active: number | null;
   /** Increases when the active tab's focused pane should take keyboard focus. */
   readonly focusRequest: number;
+  /** The font the open space's terminals use (an add-on), or `null` for the app's own. */
+  readonly font: string | null;
 }
 
 /**
@@ -83,7 +87,11 @@ export class Terminals extends Store<TerminalsSnapshot> {
   readonly #readers = new Map<number, TerminalReader>();
 
   constructor() {
-    super({ tabs: [], panes: new Map(), active: null, focusRequest: 0 });
+    super({ tabs: [], panes: new Map(), active: null, focusRequest: 0, font: null });
+  }
+
+  setFont(font: string | null): void {
+    this.update((s) => (s.font === font ? s : { ...s, font }));
   }
 
   /** Opens a new tab with one pane running `kind`. Returns the tab's key. */
@@ -91,6 +99,7 @@ export class Terminals extends Store<TerminalsSnapshot> {
     const tab = this.#nextKey++;
     const first = this.#nextKey++;
     this.update((s) => ({
+      ...s,
       tabs: [...s.tabs, { key: tab, tree: pane(first), focused: first }],
       panes: withPane(s.panes, first, kind),
       active: tab,
@@ -176,7 +185,8 @@ export class Terminals extends Store<TerminalsSnapshot> {
 
   started(key: number, info: TerminalInfo): void {
     const kind = this.get().panes.get(key)?.kind;
-    const title = kind?.type === "agent" ? agentTitle(kind.name, info) : titleOf(info);
+    const title =
+      kind?.type === "agent" ? agentTitle(kind.name, info) : kind?.type === "install" ? `Installing ${kind.name}` : titleOf(info);
     this.#patchPane(key, { title, running: true, session: info.id, ending: null });
   }
 
@@ -184,7 +194,6 @@ export class Terminals extends Store<TerminalsSnapshot> {
     this.#patchPane(key, { running: false, session: null, ending });
   }
 
-  /** Panes running an agent, optionally only one agent. */
   /** Registered by a pane's view when its terminal opens; `null` when it closes. */
   setReader(key: number, reader: TerminalReader | null): void {
     if (reader) this.#readers.set(key, reader);
@@ -196,6 +205,7 @@ export class Terminals extends Store<TerminalsSnapshot> {
     return this.#readers.get(key);
   }
 
+  /** Panes running an agent, optionally only one agent. */
   agentPanes(agent?: string): TerminalPane[] {
     return [...this.get().panes.values()].filter((p) => p.kind.type === "agent" && (agent === undefined || p.kind.agent === agent));
   }
@@ -279,7 +289,7 @@ function dirName(path: string): string {
 
 function withPane(panes: ReadonlyMap<number, TerminalPane>, key: number, kind: PaneKind): Map<number, TerminalPane> {
   const next = new Map(panes);
-  const title = kind.type === "agent" ? kind.name : "Terminal";
+  const title = kind.type === "agent" ? kind.name : kind.type === "install" ? `Installing ${kind.name}` : "Terminal";
   next.set(key, { key, kind, title, running: false, session: null, ending: null });
   return next;
 }

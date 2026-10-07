@@ -1,10 +1,13 @@
+import { matchSpaces, shareName } from "../addons/addons";
 import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
+import type { SpaceInfo } from "../contracts/generated/SpaceInfo";
 import { Store } from "../lib/store";
 import type { AppApi } from "../native";
 
 /**
  * The welcome screen, the head of the app: where it starts, and where the user
- * types `/cd` to open a space (a folder) and `/home` for the workspace with no
+ * types `/cd` to open a space (a folder), `/new` to make one, `/share` to give
+ * another space this one's add-ons, and `/home` for the workspace with no
  * folder. One space is open at a time; the head shows over it and leaves it
  * running.
  */
@@ -15,6 +18,8 @@ export interface HomeState {
   /** The account's full name, as the native side reports it. */
   readonly accountName: string | null;
   readonly message: HomeMessage | null;
+  /** Text to put in the command line when it shows (`/share `), taken once. */
+  readonly draft: string | null;
 }
 
 export interface HomeMessage {
@@ -30,7 +35,7 @@ export class Home extends Store<HomeState> {
   readonly #native: Pick<AppApi, "getAppInfo">;
 
   constructor(native: Pick<AppApi, "getAppInfo">) {
-    super({ visible: true, chosenName: loadName(), accountName: null, message: null });
+    super({ visible: true, chosenName: loadName(), accountName: null, message: null, draft: null });
     this.#native = native;
   }
 
@@ -49,8 +54,15 @@ export class Home extends Store<HomeState> {
     return chosenName ?? accountName;
   }
 
-  show(): void {
-    this.update((s) => ({ ...s, visible: true, message: null }));
+  show(options: { draft?: string } = {}): void {
+    this.update((s) => ({ ...s, visible: true, message: null, draft: options.draft ?? null }));
+  }
+
+  /** The draft, once: the command line takes it. */
+  takeDraft(): string | null {
+    const { draft } = this.get();
+    if (draft !== null) this.update((s) => ({ ...s, draft: null }));
+    return draft;
   }
 
   hide(): void {
@@ -84,10 +96,12 @@ function loadName(): string | null {
 
 // Commands
 
-export type HomeCommandName = "/cd" | "/home" | "/name" | "/get" | "/give";
+export type HomeCommandName = "/cd" | "/new" | "/share" | "/home" | "/name" | "/get" | "/give";
 
 export const HOME_COMMANDS: readonly { name: HomeCommandName; usage: string; description: string }[] = [
   { name: "/cd", usage: "/cd <folder>", description: "open a folder as your space" },
+  { name: "/new", usage: "/new <name>", description: "a new, empty space in ~/Workspaces" },
+  { name: "/share", usage: "/share <space>", description: "give another space this one's add-ons" },
   { name: "/home", usage: "/home", description: "the workspace with no folder open" },
   { name: "/name", usage: "/name <your name>", description: "how the welcome greets you" },
   { name: "/get", usage: "/get [agent]", description: "give an agent what other sessions did" },
@@ -116,8 +130,13 @@ export interface Suggestion {
   readonly completion: string;
 }
 
-/** What fits what is typed so far: commands, then for `/cd`, recent spaces. */
-export function suggestionsFor(text: string, recent: readonly RecentWorkspace[]): Suggestion[] {
+/** What fits what is typed so far: commands, then recent spaces for `/cd`, other spaces for `/share`. */
+export function suggestionsFor(
+  text: string,
+  recent: readonly RecentWorkspace[],
+  spaces: readonly SpaceInfo[] = [],
+  open: string | null = null,
+): Suggestion[] {
   if (!text.startsWith("/")) return [];
   const space = text.search(/\s/);
   if (space === -1) {
@@ -125,6 +144,16 @@ export function suggestionsFor(text: string, recent: readonly RecentWorkspace[])
       label: c.usage,
       detail: c.description,
       completion: c.name === "/home" || c.name === "/get" || c.name === "/give" ? c.name : `${c.name} `,
+    }));
+  }
+  if (text.slice(0, space) === "/share") {
+    const query = text.slice(space).trim();
+    const others = spaces.filter((s) => s.id !== open);
+    const shown = query === "" ? others : matchSpaces(query, spaces, open);
+    return shown.slice(0, 8).map((s) => ({
+      label: s.name,
+      detail: `${s.id} · ${s.root ?? "no folder"}`,
+      completion: `/share ${shareName(s, spaces)}`,
     }));
   }
   if (text.slice(0, space) !== "/cd") return [];

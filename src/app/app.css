@@ -924,6 +924,91 @@ kbd {
   font-family: var(--font-code);
 }
 
+/* Add-ons */
+
+.addons-id {
+  font-family: var(--font-code);
+  font-size: 11px;
+}
+
+/* A list, not cards: an added one gets a surface. */
+.addon {
+  background: none;
+}
+
+.addon + .addon {
+  margin-top: 2px;
+}
+
+.addon-added {
+  background: var(--bg);
+}
+
+.addon {
+  gap: 2px;
+  padding-block: 7px;
+}
+
+.addon-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.addon .agent-hint code {
+  color: var(--text-muted);
+}
+
+.addon-reason {
+  color: var(--text-muted);
+}
+
+.addon-add,
+.addon-toggle {
+  flex: none;
+  padding: 1px 8px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.addon-add {
+  color: var(--accent);
+}
+
+.addon-add:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.addon-add:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.addon-on {
+  color: var(--ok);
+}
+
+.addon-off {
+  color: var(--text-faint);
+}
+
+/* "On" until pointed at: then what clicking does. */
+.addon-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.addon-toggle:hover .addon-toggle-label {
+  display: none;
+}
+
+.addon-toggle:hover::after {
+  content: "Remove";
+}
+
 /* Catalog */
 
 .catalog-search {
@@ -1945,6 +2030,60 @@ kbd {
   color: var(--text-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* /share: the add-ons to give, under the command line, in its style. */
+.home-share {
+  width: 100%;
+  margin: -10px 0 0;
+  padding: 8px 18px 10px 44px;
+  border-left: 3px solid var(--border-strong);
+  background: var(--bg-raised);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.home-share-title,
+.home-share-empty,
+.home-share-help {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.home-share-target {
+  color: var(--text);
+}
+
+.home-share-id,
+.home-share-there {
+  color: var(--text-faint);
+}
+
+.home-share-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-share-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 4px;
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.home-share-item-highlight {
+  background: var(--bg-active);
+}
+
+.home-share-help kbd {
+  font-family: var(--font-mono);
 }
 
 .home-message {

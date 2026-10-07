@@ -2,14 +2,14 @@ import { type DragEvent, type KeyboardEvent, memo, type PointerEvent, type RefOb
 
 import { carriesModel, readModelDrag } from "../lib/modelDrag";
 import { useStore } from "../lib/useStore";
-import type { AgentApi, TerminalApi } from "../native";
+import type { AddonApi, AgentApi, TerminalApi } from "../native";
 import type { TerminalActions } from "./actions";
 import { layoutPanes, type PaneLayout, paneKeys, type Rect, type SplitDirection } from "./panes";
 import type { SessionNative } from "./session";
 import { type PaneKind, type TerminalPane, type Terminals, tabTitle } from "./terminals";
-import { TerminalView } from "./TerminalView";
+import { DEFAULT_FONT, TerminalView } from "./TerminalView";
 
-type PanelNative = TerminalApi & Pick<AgentApi, "runAgentSession">;
+type PanelNative = TerminalApi & Pick<AgentApi, "runAgentSession"> & Pick<AddonApi, "installAddon">;
 
 interface Props {
   native: PanelNative;
@@ -24,7 +24,7 @@ interface Props {
 const KEY_STEP = 0.05;
 
 export function TerminalPanel({ native, terminals, actions, collapsed, onHide, onShow }: Props) {
-  const { tabs, panes, active, focusRequest } = useStore(terminals);
+  const { tabs, panes, active, focusRequest, font } = useStore(terminals);
   const body = useRef<HTMLDivElement>(null);
   const layouts = new Map<number, PaneLayout>(tabs.map((tab) => [tab.key, layoutPanes(tab.tree)]));
   // In creation order, whatever the layout, so splitting never moves an existing
@@ -158,6 +158,7 @@ export function TerminalPanel({ native, terminals, actions, collapsed, onHide, o
                 focused={focused}
                 focusRequest={focusRequest}
                 terminals={terminals}
+                font={font}
               />
               {split && (
                 <button
@@ -207,6 +208,7 @@ const PaneTerminal = memo(function PaneTerminal({
   focused,
   focusRequest,
   terminals,
+  font,
 }: {
   native: PanelNative;
   pane: TerminalPane | undefined;
@@ -214,22 +216,28 @@ const PaneTerminal = memo(function PaneTerminal({
   focused: boolean;
   focusRequest: number;
   terminals: Terminals;
+  font: string | null;
 }) {
   const kind: PaneKind = pane?.kind ?? { type: "shell" };
   const session = kind.type === "agent" ? kind.session : null;
+  const install = kind.type === "install" ? kind.token : null;
   // Stable per pane: a new object would restart the session.
   const sessionNative = useMemo<SessionNative>(
     () =>
-      session === null
-        ? native
-        : { ...native, createTerminal: (size, listener) => native.runAgentSession(session, size, listener) },
-    [native, session],
+      session !== null
+        ? { ...native, createTerminal: (size, listener) => native.runAgentSession(session, size, listener) }
+        : install !== null
+          ? { ...native, createTerminal: (size, listener) => native.installAddon(install, size, listener) }
+          : native,
+    [native, session, install],
   );
   if (!pane) return null;
   return (
     <TerminalView
       native={sessionNative}
-      program={kind.type === "agent" ? kind.name : undefined}
+      program={kind.type === "agent" ? kind.name : kind.type === "install" ? `the install of ${kind.name}` : undefined}
+      once={kind.type === "install"}
+      fontFamily={font ?? DEFAULT_FONT}
       visible={visible}
       focused={focused}
       focusRequest={focusRequest}
