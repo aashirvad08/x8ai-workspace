@@ -94,6 +94,8 @@ line. Each folder you work in is a *space*, and one space is open at a time.
 | Command | What it does |
 | --- | --- |
 | `/cd <folder>` | Opens a space. A recent one opens at once, by its path or the start of its name (`/cd gymRL`, `/cd gym`, `/cd ~/code/app`). Any other folder opens the macOS folder picker at that place, where you choose it. `/cd` alone opens the picker. |
+| `/new <name>` | Makes a new, empty space in `~/Workspaces/<name>` and opens it (see step 9). |
+| `/share <space>` | Gives another space this space's add-ons, by its name or id (see step 9). |
 | `/home` | The workspace with no folder open, and a new terminal in your home folder. |
 | `/name <your name>` | How the Welcome greets you. `/name` alone goes back to your Mac account's name. |
 | `/get [agent]` | Gives an agent what the other sessions did (see step 8). |
@@ -205,15 +207,44 @@ Everything in the text goes to the receiving agent and its model provider, and
 terminal output can contain secrets, so read it first. The app never reads an
 agent's own history files.
 
+### 9. Set up a space's terminal with add-ons (optional)
+
+Open **Add-ons** (**⇧⌘X**) and click **Add** (or **Install**) next to a tool:
+
+| Group | Add-ons |
+| --- | --- |
+| Shell | Starship (prompt), Autosuggestions, fzf, zoxide, eza, Syntax highlighting |
+| Editor | Neovim, LazyVim |
+| Tools | ripgrep, fd, lazygit, bat, Memray |
+| Look | JetBrains Mono Nerd Font |
+
+If it isn't on your Mac yet, a dialog shows the exact Homebrew commands first
+(`brew install starship`), and the install runs in a terminal tab you can watch.
+Homebrew must be installed (brew.sh); the app never uses `sudo`.
+
+An add-on is on **only in the space you add it to**. Its new terminals start with
+it; other spaces don't change, and your own `~/.zshrc` is never edited. (If your
+`~/.zshrc` already turns a tool on, it stays on everywhere; the list tells you.)
+Programs such as ripgrep work in every terminal once installed. Starship runs Git
+in the folder, so it turns on once you trust the folder. **Remove** takes an
+add-on out of a space without uninstalling it.
+
+Every space has an id, shown on the Welcome screen (`gymRL ws-k3f9qa`):
+
+- `/share <space>` gives another space this one's add-ons. Press Enter to give
+  all of them, or press ↓, then Space to uncheck some first.
+- `/new <name>` makes a new, empty space in `~/Workspaces/<name>`, with no
+  add-ons.
+
 ---
 
 ## Keyboard shortcuts
 
 | | |
 | --- | --- |
-| **Welcome** | ⇧⌘H Show Welcome · on it: `/cd <folder>` · `/home` · `/get [agent]` · `/give [agent]` · `/name <your name>` · Esc back to the space |
+| **Welcome** | ⇧⌘H Show Welcome · on it: `/cd <folder>` · `/new <name>` · `/share <space>` · `/home` · `/get [agent]` · `/give [agent]` · `/name <your name>` · Esc back to the space |
 | **Folders and files** | ⌘O Open Folder · ⌃R Open Recent · ⌘P Go to File · ⌘N New File · ⌘S Save · ⌥⌘S Save All · ⌘W Close Editor · ⌘F Find in File |
-| **Panels** | ⇧⌘E Files · ⇧⌘F Search in Folder · ⇧⌘A Agents · ⇧⌘M Models · ⇧⌘U MCP · ⇧⌘K Catalog · ⌘B Toggle Sidebar |
+| **Panels** | ⇧⌘E Files · ⇧⌘F Search in Folder · ⇧⌘A Agents · ⇧⌘M Models · ⇧⌘U MCP · ⇧⌘K Catalog · ⇧⌘X Add-ons · ⌘B Toggle Sidebar |
 | **Terminal** | ⌃\` Show or Hide Terminal · ⌃⇧\` New Terminal · ⌘D Split Right · ⇧⌘D Split Down · ⌘] / ⌘[ Next / Previous Pane · ⌘W Close Pane |
 | **Explorer** | Arrow keys and Enter to move and open · F2 Rename · ⌘⌫ Move to Trash |
 | **Everything else** | ⇧⌘P All Commands |
@@ -248,7 +279,9 @@ asks you first.
 
 | What | Where |
 | --- | --- |
-| Recent and trusted folders, approvals, providers, MCP servers, skills (no secrets) | `~/Library/Application Support/com.x8ai.workspace/` |
+| Recent and trusted folders, approvals, providers, MCP servers, skills, spaces and their add-ons (no secrets) | `~/Library/Application Support/com.x8ai.workspace/` |
+| Each space's terminal setup for its add-ons, rewritten for every new terminal | `~/Library/Application Support/com.x8ai.workspace/spaces/<id>/zsh/` |
+| LazyVim, when added | `~/.config/x8ai-lazyvim/` (your `~/.config/nvim` is untouched) |
 | API keys and MCP secrets | macOS Keychain, under `com.x8ai.workspace.providers` and `com.x8ai.workspace.mcp` |
 | Agent worktrees | `~/.x8ai/worktrees/` |
 
