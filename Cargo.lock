@@ -4985,6 +4985,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "x8ai-addons"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "x8ai-core",
+]
+
+[[package]]
 name = "x8ai-agents"
 version = "0.1.0"
 dependencies = [
@@ -5037,6 +5045,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "x8ai-addons",
  "x8ai-agents",
  "x8ai-catalog",
  "x8ai-core",

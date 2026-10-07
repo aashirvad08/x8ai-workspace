@@ -6,7 +6,8 @@
 //!   [`terminal`], [`workspace`]);
 //! - declarative definitions for integrations: coding agents ([`agent`]), model
 //!   providers ([`model`]) and MCP servers ([`mcp`]), unified in [`definition`];
-//! - skills ([`skill`]) and the catalog over all of them ([`catalog`]).
+//! - skills ([`skill`]) and the catalog over all of them ([`catalog`]);
+//! - add-ons for a space's terminals, and spaces themselves ([`addon`]).
 //!
 //! It deliberately contains no Tauri code, no I/O and no process management, so it
 //! builds and tests on any platform. Implementations (PTY sessions, agent runtime,
@@ -18,6 +19,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod addon;
 pub mod agent;
 pub mod app;
 pub mod catalog;
