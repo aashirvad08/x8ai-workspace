@@ -22,8 +22,12 @@ pub enum Program {
     /// The shell is `$SHELL` if it is executable, otherwise the shell in the user's
     /// account record, otherwise `/bin/sh`. A login shell reads the user's profile,
     /// so `PATH` matches their normal terminal even though a GUI app inherits a
-    /// minimal environment. `cwd` defaults to the home directory.
-    LoginShell { cwd: Option<PathBuf> },
+    /// minimal environment. `cwd` defaults to the home directory. `env` is added
+    /// to the inherited environment: a space's add-ons (`ZDOTDIR` and the like).
+    LoginShell {
+        cwd: Option<PathBuf>,
+        env: Vec<(String, String)>,
+    },
     /// A specific executable with arguments, never interpreted by a shell. `cwd`
     /// defaults to the home directory. Used by the agent runtime and by tests.
     Exec {
@@ -74,11 +78,14 @@ impl Program {
     /// directory it starts in.
     pub(crate) fn command(&self) -> (CommandBuilder, String, PathBuf) {
         let (mut cmd, path, cwd) = match self {
-            Self::LoginShell { cwd } => {
+            Self::LoginShell { cwd, env } => {
                 // portable-pty resolves the shell and prefixes argv[0] with `-`, the
                 // login-shell convention.
-                let cmd = CommandBuilder::new_default_prog();
+                let mut cmd = CommandBuilder::new_default_prog();
                 let shell = cmd.get_shell();
+                for (name, value) in env {
+                    cmd.env(name, value);
+                }
                 (cmd, shell, cwd.clone().unwrap_or_else(home))
             }
             Self::Exec {

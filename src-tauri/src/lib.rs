@@ -2,10 +2,11 @@
 //!
 //! This crate is the only one that knows about Tauri. It owns the window and menu,
 //! registers the IPC commands the webview may call, and holds native state:
-//! terminal sessions, agents, model providers, MCP servers, the open workspace,
-//! and the quit guard. Logic that does not
+//! terminal sessions, agents, model providers, MCP servers, add-ons, the open
+//! workspace, and the quit guard. Logic that does not
 //! need Tauri belongs in `crates/`.
 
+mod addons;
 mod agents;
 mod app;
 mod catalog;
@@ -22,6 +23,7 @@ mod workspace;
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent, WindowEvent};
 
+use addons::Addons;
 use agents::Agents;
 use app::AppState;
 use mcp::Mcp;
@@ -42,6 +44,7 @@ pub fn run() {
         .manage(Providers::default())
         .manage(Mcp::default())
         .manage(Skills::default())
+        .manage(Addons::default())
         .setup(|app| {
             let workspaces = app.state::<Workspaces>();
             match app.path().app_data_dir() {
@@ -125,6 +128,12 @@ pub fn run() {
             skills::skill_update,
             skills::skill_remove,
             catalog::catalog_list,
+            addons::addon_list,
+            addons::addon_add,
+            addons::addon_install,
+            addons::addon_remove,
+            addons::space_list,
+            addons::space_share,
             terminal::terminal_create,
             terminal::terminal_write,
             terminal::terminal_resize,
@@ -132,6 +141,7 @@ pub fn run() {
             terminal::terminal_is_busy,
             terminal::terminal_close,
             workspace::workspace_open,
+            workspace::workspace_create,
             workspace::workspace_close,
             workspace::workspace_open_recent,
             workspace::workspace_recent,

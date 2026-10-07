@@ -130,20 +130,21 @@ struct StoreFile<T> {
     workspaces: Vec<T>,
 }
 
-/// An entry that belongs to one workspace, identified by its absolute root.
-trait Rooted {
-    fn root(&self) -> &Path;
+/// An entry that belongs to one workspace, identified by its absolute root, or
+/// (a space's) to the workspace with no folder.
+pub(crate) trait Rooted {
+    fn root(&self) -> Option<&Path>;
 }
 
 impl Rooted for Entry {
-    fn root(&self) -> &Path {
-        &self.root
+    fn root(&self) -> Option<&Path> {
+        Some(&self.root)
     }
 }
 
 impl Rooted for ApprovalEntry {
-    fn root(&self) -> &Path {
-        &self.root
+    fn root(&self) -> Option<&Path> {
+        Some(&self.root)
     }
 }
 
@@ -195,6 +196,7 @@ impl RecentWorkspaces {
                     .file_name()
                     .map_or_else(|| root.clone(), |n| n.to_string_lossy().into_owned());
                 Some(RecentWorkspace {
+                    id: None,
                     available: e.root.is_dir(),
                     root,
                     name,
@@ -320,9 +322,9 @@ impl ApprovalStore {
 
 /// Reads a store. A missing file is empty. A damaged or unexpected one is moved
 /// aside to `<name>.corrupt` (so nothing is silently destroyed) and treated as
-/// empty; the returned warning says so. Entries that are not absolute paths are
-/// dropped.
-fn load<T: DeserializeOwned + Rooted>(file: &Path) -> (Vec<T>, Option<String>) {
+/// empty; the returned warning says so. Entries whose root is not an absolute
+/// path are dropped.
+pub(crate) fn load<T: DeserializeOwned + Rooted>(file: &Path) -> (Vec<T>, Option<String>) {
     let parsed = match fs::metadata(file) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), None),
         Err(e) => Err(e.to_string()),
@@ -344,7 +346,7 @@ fn load<T: DeserializeOwned + Rooted>(file: &Path) -> (Vec<T>, Option<String>) {
     };
     match parsed {
         Ok(mut entries) => {
-            entries.retain(|e| e.root().is_absolute());
+            entries.retain(|e| e.root().is_none_or(Path::is_absolute));
             (entries, None)
         }
         Err(reason) => {
@@ -364,7 +366,7 @@ fn load<T: DeserializeOwned + Rooted>(file: &Path) -> (Vec<T>, Option<String>) {
     }
 }
 
-fn save<T: Serialize + Clone>(file: &Path, entries: &[T]) -> Result<(), Error> {
+pub(crate) fn save<T: Serialize + Clone>(file: &Path, entries: &[T]) -> Result<(), Error> {
     let shown = file.display().to_string();
     let io = |e: std::io::Error| Error::io(&shown, e);
     let json = serde_json::to_vec_pretty(&StoreFile {
@@ -399,7 +401,7 @@ fn save<T: Serialize + Clone>(file: &Path, entries: &[T]) -> Result<(), Error> {
     written.map_err(io)
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))

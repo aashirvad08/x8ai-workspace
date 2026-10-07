@@ -22,6 +22,7 @@ x8ai-providers.workspace = true
 x8ai-mcp.workspace = true
 x8ai-skills.workspace = true
 x8ai-catalog.workspace = true
+x8ai-addons.workspace = true
 x8ai-secrets.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true

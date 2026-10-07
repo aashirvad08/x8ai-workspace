@@ -311,3 +311,26 @@ describe("native client folder commands", () => {
     expect(calls[2]).toMatchObject({ command: "workspace_close", args: undefined });
   });
 });
+
+describe("native client add-on and space commands", () => {
+  it("names add-ons and spaces by id; an install runs only from a confirmed token", async () => {
+    const { calls, client } = bridge();
+    await client.listAddons(true);
+    await client.addAddon("starship");
+    await client.removeAddon("starship");
+    await client.listSpaces();
+    await client.shareSpace("ws-gymaaa", ["starship", "fzf"]);
+    expect(calls.map(({ command, args }) => ({ command, args }))).toEqual([
+      { command: "addon_list", args: { refresh: true } },
+      { command: "addon_add", args: { id: "starship" } },
+      { command: "addon_remove", args: { id: "starship" } },
+      { command: "space_list", args: undefined },
+      { command: "space_share", args: { to: "ws-gymaaa", addons: ["starship", "fzf"] } },
+    ]);
+    // Nothing sends a command line, a formula or a path: only ids and a token.
+    void client.installAddon(7, { cols: 80, rows: 24 }, { output: () => {}, event: () => {} });
+    const install = calls.at(-1)!;
+    expect(install.command).toBe("addon_install");
+    expect(Object.keys(install.args as object).sort()).toEqual(["events", "size", "token"]);
+  });
+});

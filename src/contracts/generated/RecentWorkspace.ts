@@ -3,7 +3,11 @@
 /**
  * A previously opened workspace. Only its location is remembered.
  */
-export type RecentWorkspace = { root: string, name: string, 
+export type RecentWorkspace = { 
+/**
+ * The space's id, when it has one (every folder opened since ids exist).
+ */
+id: string | null, root: string, name: string, 
 /**
  * The folder still exists. Missing folders (an unmounted drive, a deleted
  * checkout) stay listed until removed or reopened unsuccessfully.

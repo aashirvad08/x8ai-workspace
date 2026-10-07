@@ -498,7 +498,10 @@ fn the_registry_tracks_and_closes_sessions() {
 
 #[test]
 fn the_login_shell_is_the_users_shell() {
-    let (session, recorder) = start(&Program::LoginShell { cwd: None });
+    let (session, recorder) = start(&Program::LoginShell {
+        cwd: None,
+        env: Vec::new(),
+    });
     assert!(session.program().starts_with('/'), "{}", session.program());
     // argv[0] of a login shell starts with '-'. Computed output avoids matching the
     // echoed input.
@@ -524,17 +527,18 @@ fn the_login_shell_starts_in_the_requested_directory() {
     let dir = std::fs::canonicalize(workspace.path()).unwrap();
     let (session, recorder) = start(&Program::LoginShell {
         cwd: Some(dir.clone()),
+        env: vec![("X8AI_SPACE".into(), "ws-abcdef".into())],
     });
     assert_eq!(session.cwd(), dir.display().to_string());
     type_line(
         &session,
-        "printf 'cwd=%s sum=%s\\n' \"$(pwd -P)\" \"$((1 + 1))\"",
+        "printf 'cwd=%s sum=%s space=%s\\n' \"$(pwd -P)\" \"$((1 + 1))\" \"$X8AI_SPACE\"",
     );
     recorder.wait_for_output("sum=2");
     assert!(
         recorder
             .output()
-            .contains(&format!("cwd={}", dir.display())),
+            .contains(&format!("cwd={} sum=2 space=ws-abcdef", dir.display())),
         "{}",
         recorder.output()
     );

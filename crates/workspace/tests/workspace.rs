@@ -43,7 +43,7 @@ fn read(root: &Path, rel: &str) -> String {
 #[test]
 fn opens_a_directory_as_a_workspace() {
     let f = fixture();
-    let info = f.workspace.info(false);
+    let info = f.workspace.info("ws-abcdef", false);
     assert_eq!(info.name, "project");
     assert_eq!(Path::new(&info.root), f.root.as_path());
     assert_eq!(f.workspace.root(), f.root.as_path());

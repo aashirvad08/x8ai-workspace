@@ -110,7 +110,7 @@ impl Agents {
 
     /// The login environment, read once and kept, or again when `refresh` is set.
     /// Runs the user's shell, so call it off the IPC runtime (see `resolved`).
-    fn environment(&self, refresh: bool) -> Arc<Resolved> {
+    pub(crate) fn environment(&self, refresh: bool) -> Arc<Resolved> {
         if !refresh && let Some(resolved) = lock(&self.environment).as_ref() {
             return resolved.clone();
         }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { AddonList } from "../contracts/generated/AddonList";
 import type { AgentChanges } from "../contracts/generated/AgentChanges";
 import type { AgentSessionInfo } from "../contracts/generated/AgentSessionInfo";
 import type { AgentStatus } from "../contracts/generated/AgentStatus";
@@ -14,6 +15,7 @@ import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import type { SearchEvent } from "../contracts/generated/SearchEvent";
 import type { SessionId } from "../contracts/generated/SessionId";
 import type { SkillStatus } from "../contracts/generated/SkillStatus";
+import type { SpaceInfo } from "../contracts/generated/SpaceInfo";
 import type { WorkspaceEvent } from "../contracts/generated/WorkspaceEvent";
 import type { WorkspaceInfo } from "../contracts/generated/WorkspaceInfo";
 import { basename, dirname, isWithin } from "../lib/paths";
@@ -33,7 +35,7 @@ function fakeNative() {
     files,
     dirs,
     calls,
-    pickResult: { root: "/Users/me/project", name: "project", trusted: false } as WorkspaceInfo | null,
+    pickResult: { id: "ws-projec", root: "/Users/me/project", name: "project", trusted: false } as WorkspaceInfo | null,
     recent: [] as RecentWorkspace[],
     trusted: new Set<string>(),
     /** What the native trust dialog answers. */
@@ -86,9 +88,55 @@ function fakeNative() {
     diskListener: null as ((event: WorkspaceEvent) => void) | null,
     unsaved: false,
     quit: false,
+    /** Spaces with ids; the one with no folder first. */
+    spaces: [{ id: "ws-homeaa", name: "Home", root: null, addons: [] }] as SpaceInfo[],
+    /** Add-ons whose programs are on this Mac. */
+    installed: new Set<string>(["neovim"]),
+    /** What the native install dialog answers. */
+    confirmInstall: true,
+  };
+  /** A small stand-in for the native add-on list. */
+  const ADDONS = [
+    { id: "starship", name: "Starship", group: "shell", reach: "space", needsTrust: true },
+    { id: "neovim", name: "Neovim", group: "editor", reach: "mac", needsTrust: false },
+    { id: "nerd-font", name: "JetBrains Mono Nerd Font", group: "look", reach: "space", needsTrust: false },
+  ] as const;
+  const openSpace = (): SpaceInfo => {
+    const root = state.open?.root ?? null;
+    let space = state.spaces.find((s) => s.root === root);
+    if (!space) {
+      space = { id: state.open?.id ?? "ws-unknow", name: state.open?.name ?? "Home", root, addons: [] };
+      state.spaces.push(space);
+    }
+    return space;
+  };
+  const addonList = (): AddonList => {
+    const space = openSpace();
+    const trusted = state.open === null || state.trusted.has(state.open.root);
+    return {
+      space: { ...space, addons: [...space.addons] },
+      homebrew: true,
+      shell: "/bin/zsh",
+      shellSupported: true,
+      addons: ADDONS.map((a) => {
+        const installed = state.installed.has(a.id);
+        const added = space.addons.includes(a.id);
+        return {
+          ...a,
+          description: "",
+          usage: null,
+          requires: [],
+          installed,
+          added,
+          active: added && installed && (!a.needsTrust || trusted),
+          inYourShell: false,
+          install: installed ? [] : [`brew install ${a.id}`],
+        };
+      }),
+    };
   };
   const remember = (info: WorkspaceInfo) => {
-    state.recent = [{ root: info.root, name: info.name, available: true }, ...state.recent.filter((w) => w.root !== info.root)];
+    state.recent = [{ id: null, root: info.root, name: info.name, available: true }, ...state.recent.filter((w) => w.root !== info.root)];
   };
   const notFound = (path: string) => new NativeError("x", "notFound", `"${path}" does not exist`);
   const native: NativeClient = {
@@ -112,6 +160,16 @@ function fakeNative() {
       remember(info);
       return info;
     },
+    createWorkspace: async (name, listener) => {
+      calls.push(`createWorkspace ${name}`);
+      const root = `/Users/me/Workspaces/${name}`;
+      if (state.recent.some((w) => w.root === root)) throw new NativeError("x", "conflict", `~/Workspaces/${name} already exists: open it with /cd`);
+      state.diskListener = listener;
+      const info = { id: "ws-newone", root, name, trusted: false };
+      state.open = info;
+      remember(info);
+      return info;
+    },
     closeWorkspace: async () => {
       calls.push("closeWorkspace");
       state.open = null;
@@ -125,7 +183,7 @@ function fakeNative() {
         throw new NativeError("x", "notFound", `${root} no longer exists, so it was removed from Recent`);
       }
       state.diskListener = listener;
-      const info = { root, name: entry.name, trusted: state.trusted.has(root) };
+      const info = { id: entry.id ?? "ws-recent", root, name: entry.name, trusted: state.trusted.has(root) };
       state.open = info;
       remember(info);
       return info;
@@ -358,6 +416,34 @@ function fakeNative() {
       calls.push("listCatalog");
       return { items: state.catalog.map((i) => ({ ...i })), warnings: [] };
     },
+    listAddons: async () => addonList(),
+    addAddon: async (id) => {
+      calls.push(`addAddon ${id}`);
+      if (state.installed.has(id)) {
+        const space = openSpace();
+        if (!space.addons.includes(id)) space.addons.push(id);
+        return { kind: "added", list: addonList() };
+      }
+      return state.confirmInstall ? { kind: "install", token: 7, name: ADDONS.find((a) => a.id === id)!.name } : { kind: "cancelled" };
+    },
+    installAddon: async (token) => {
+      calls.push(`installAddon ${token}`);
+      return { id: 99, program: "/bin/sh", cwd: "/Users/me", ackBytes: 65536 };
+    },
+    removeAddon: async (id) => {
+      calls.push(`removeAddon ${id}`);
+      const space = openSpace();
+      space.addons = space.addons.filter((a) => a !== id);
+      return addonList();
+    },
+    listSpaces: async () => state.spaces.map((s) => ({ ...s, addons: [...s.addons] })),
+    shareSpace: async (to, addons) => {
+      calls.push(`shareSpace ${to} ${addons.join(",")}`);
+      const target = state.spaces.find((s) => s.id === to);
+      if (!target) throw new NativeError("x", "notFound", `no space has the id "${to}"`);
+      for (const a of addons) if (!target.addons.includes(a)) target.addons.push(a);
+      return { ...target, addons: [...target.addons] };
+    },
   };
   function changeMcp(id: string, change: (s: McpServerStatus) => McpServerStatus): McpServerStatus {
     state.mcp = state.mcp.map((s) => (s.server.id === id ? change(s) : s));
@@ -407,7 +493,7 @@ function type(workbench: Workbench, path: string, text: string) {
 describe("Workbench", () => {
   it("opens a folder: explorer, and a terminal that starts there", async () => {
     const { workbench } = await opened();
-    expect(workbench.workspace.get()).toEqual({ root: "/Users/me/project", name: "project", trusted: false });
+    expect(workbench.workspace.get()).toEqual({ id: "ws-projec", root: "/Users/me/project", name: "project", trusted: false });
     expect(workbench.explorer.get().listings.get("")!.entries!.map((e) => e.name)).toEqual(["src", "README.md"]);
     // The first terminal (started in the home directory) stays; a new one opens.
     expect(workbench.terminals.get().tabs).toHaveLength(2);
@@ -569,7 +655,7 @@ describe("Workbench", () => {
 describe("Workbench workspaces", () => {
   it("reopens the most recent folder at startup, and starts the first terminal there", async () => {
     const { native, state } = fakeNative();
-    state.recent = [{ root: "/Users/me/project", name: "project", available: true }];
+    state.recent = [{ id: null, root: "/Users/me/project", name: "project", available: true }];
     const workbench = new Workbench(native);
     await workbench.start();
     expect(state.calls).toContain("openRecent /Users/me/project");
@@ -579,7 +665,7 @@ describe("Workbench workspaces", () => {
 
   it("does not try to reopen a folder that is gone", async () => {
     const { native, state } = fakeNative();
-    state.recent = [{ root: "/Volumes/usb/project", name: "project", available: false }];
+    state.recent = [{ id: null, root: "/Volumes/usb/project", name: "project", available: false }];
     const workbench = new Workbench(native);
     await workbench.start();
     expect(state.calls.some((c) => c.startsWith("openRecent"))).toBe(false);
@@ -590,7 +676,7 @@ describe("Workbench workspaces", () => {
 
   it("reports a recent folder that disappeared, which then leaves the list", async () => {
     const { workbench, state } = await opened();
-    state.recent.push({ root: "/Users/me/old", name: "old", available: false });
+    state.recent.push({ id: null, root: "/Users/me/old", name: "old", available: false });
     workbench.openRecent("/Users/me/old");
     await settle();
     await settle();
@@ -683,7 +769,7 @@ describe("Workbench search", () => {
     workbench.search.setText("x");
     await workbench.search.run();
     state.searchEvents = [];
-    state.pickResult = { root: "/Users/me/other", name: "other", trusted: false };
+    state.pickResult = { id: "ws-othera", root: "/Users/me/other", name: "other", trusted: false };
     await workbench.openFolder();
     await settle();
     expect(workbench.search.get().results).toEqual([]);
@@ -819,7 +905,7 @@ describe("Workbench agents", () => {
     await settle();
     await settle();
     started(workbench, agentPanes(workbench)[0]!.key, 12);
-    state.pickResult = { root: "/Users/me/other", name: "other", trusted: false };
+    state.pickResult = { id: "ws-othera", root: "/Users/me/other", name: "other", trusted: false };
 
     const declined = workbench.openFolder();
     await answer(workbench, "cancel");
@@ -1259,7 +1345,7 @@ describe("Workbench welcome", () => {
 
   it("starts on the welcome screen, with the last folder reopened behind it", async () => {
     const { native, state } = fakeNative();
-    state.recent = [{ root: "/Users/me/project", name: "project", available: true }];
+    state.recent = [{ id: null, root: "/Users/me/project", name: "project", available: true }];
     const workbench = new Workbench(native);
     await workbench.start();
     await settle();
@@ -1280,7 +1366,7 @@ describe("Workbench welcome", () => {
 
   it("/cd opens a recent space at once, and the welcome screen closes", async () => {
     const { workbench, state } = await opened();
-    state.recent.push({ root: "/Users/me/other", name: "other", available: true });
+    state.recent.push({ id: null, root: "/Users/me/other", name: "other", available: true });
     await workbench.start();
     workbench.showHome();
     await workbench.runHomeCommand("/cd other");
@@ -1304,7 +1390,7 @@ describe("Workbench welcome", () => {
     expect(home(workbench)).toMatchObject({ visible: true, message: { tone: "info" } });
     expect(home(workbench).message?.text).toContain("not one of your spaces yet");
 
-    state.pickResult = { root: "/Users/me/projects/new", name: "new", trusted: false };
+    state.pickResult = { id: "ws-newaaa", root: "/Users/me/projects/new", name: "new", trusted: false };
     await workbench.runHomeCommand("/cd ~/projects/new");
     expect(workbench.workspace.get()?.root).toBe("/Users/me/projects/new");
     expect(home(workbench).visible).toBe(false);
@@ -1317,7 +1403,7 @@ describe("Workbench welcome", () => {
 
   it("/cd that matches several spaces asks for more of the path", async () => {
     const { workbench, state } = await opened();
-    state.recent.push({ root: "/Users/me/a/app", name: "app", available: true }, { root: "/Users/me/b/app", name: "app", available: true });
+    state.recent.push({ id: null, root: "/Users/me/a/app", name: "app", available: true }, { id: null, root: "/Users/me/b/app", name: "app", available: true });
     await workbench.start();
     workbench.showHome();
     await workbench.runHomeCommand("/cd app");

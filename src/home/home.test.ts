@@ -4,11 +4,11 @@ import type { RecentWorkspace } from "../contracts/generated/RecentWorkspace";
 import { Home, matchRecent, parseCommand, suggestionsFor } from "./home";
 
 const recent: RecentWorkspace[] = [
-  { root: "/Users/me/gymRL", name: "gymRL", available: true },
-  { root: "/Users/me/work/x8ai-workspace", name: "x8ai-workspace", available: true },
-  { root: "/Users/me/old/gymRL", name: "gymRL", available: false },
-  { root: "/Users/me/labs/app", name: "app", available: true },
-  { root: "/Users/me/web/app", name: "app", available: true },
+  { id: null, root: "/Users/me/gymRL", name: "gymRL", available: true },
+  { id: null, root: "/Users/me/work/x8ai-workspace", name: "x8ai-workspace", available: true },
+  { id: null, root: "/Users/me/old/gymRL", name: "gymRL", available: false },
+  { id: null, root: "/Users/me/labs/app", name: "app", available: true },
+  { id: null, root: "/Users/me/web/app", name: "app", available: true },
 ];
 
 describe("welcome commands", () => {

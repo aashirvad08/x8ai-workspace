@@ -5,6 +5,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { createNativeClient, type NativeClient } from "./client";
 
 export type {
+  AddonApi,
   AgentApi,
   AppApi,
   CatalogApi,

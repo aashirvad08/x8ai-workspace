@@ -1,3 +1,5 @@
+import type { AddonAddResult } from "../contracts/generated/AddonAddResult";
+import type { AddonList } from "../contracts/generated/AddonList";
 import type { AgentChanges } from "../contracts/generated/AgentChanges";
 import type { AgentList } from "../contracts/generated/AgentList";
 import type { AgentRemoval } from "../contracts/generated/AgentRemoval";
@@ -23,6 +25,7 @@ import type { SessionId } from "../contracts/generated/SessionId";
 import type { Skill } from "../contracts/generated/Skill";
 import type { SkillInput } from "../contracts/generated/SkillInput";
 import type { SkillList } from "../contracts/generated/SkillList";
+import type { SpaceInfo } from "../contracts/generated/SpaceInfo";
 import type { TerminalEvent } from "../contracts/generated/TerminalEvent";
 import type { TerminalInfo } from "../contracts/generated/TerminalInfo";
 import type { TerminalSize } from "../contracts/generated/TerminalSize";
@@ -95,6 +98,11 @@ export interface WorkspaceApi {
    * reported to `listener`. Resolves to `null` if cancelled.
    */
   openWorkspace(listener: (event: WorkspaceEvent) => void, start?: string | null): Promise<WorkspaceInfo | null>;
+  /**
+   * Makes the new, empty folder `~/Workspaces/<name>` and opens it as a new
+   * space (`/new <name>`). Fails with `conflict` if it exists.
+   */
+  createWorkspace(name: string, listener: (event: WorkspaceEvent) => void): Promise<WorkspaceInfo>;
   /** Closes the open folder; its agents stop, and new terminals start in the home folder. */
   closeWorkspace(): Promise<void>;
   /**
@@ -240,10 +248,43 @@ export interface CatalogApi {
 }
 
 /**
+ * Add-ons and spaces (docs/decisions/0019-add-ons.md): tools a space's terminals
+ * use. The webview names add-ons and spaces by id; what an add-on installs and
+ * runs is the native side's.
+ */
+export interface AddonApi {
+  /** Every add-on, in the open space. `refresh` reads the login environment again. */
+  listAddons(refresh: boolean): Promise<AddonList>;
+  /**
+   * Adds an add-on (and what it requires) to the open space. If something must
+   * be installed first, a native dialog shows the commands; once confirmed, the
+   * result has a token to run them with `installAddon`.
+   */
+  addAddon(id: string): Promise<AddonAddResult>;
+  /** Runs a confirmed install, once, in a terminal; the add-on is added when it ends well. */
+  installAddon(token: number, size: TerminalSize, listener: TerminalListener): Promise<TerminalInfo>;
+  /** Takes the add-on out of the open space; nothing is uninstalled. */
+  removeAddon(id: string): Promise<AddonList>;
+  /** Every space with an id, the one with no folder first. */
+  listSpaces(): Promise<SpaceInfo[]>;
+  /** Adds add-ons of the open space to another space (`/share`). */
+  shareSpace(to: string, addons: string[]): Promise<SpaceInfo>;
+}
+
+/**
  * Typed access to the native host. Each method maps to one command in
  * `src-tauri/src/`. UI code depends on these interfaces, never on Tauri.
  */
-export interface NativeClient extends AppApi, TerminalApi, WorkspaceApi, AgentApi, ProviderApi, McpApi, SkillApi, CatalogApi {}
+export interface NativeClient
+  extends AppApi,
+    TerminalApi,
+    WorkspaceApi,
+    AgentApi,
+    ProviderApi,
+    McpApi,
+    SkillApi,
+    CatalogApi,
+    AddonApi {}
 
 export function createNativeClient({ invoke, createChannel }: NativeBridge): NativeClient {
   // Return values come from the trusted side and are typed by the generated
@@ -278,6 +319,11 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     openWorkspace: (listener, start = null) =>
       call<WorkspaceInfo | null>("workspace_open", {
         start,
+        events: createChannel((message) => listener(message as WorkspaceEvent)),
+      }),
+    createWorkspace: (name, listener) =>
+      call<WorkspaceInfo>("workspace_create", {
+        name,
         events: createChannel((message) => listener(message as WorkspaceEvent)),
       }),
     closeWorkspace: () => call<void>("workspace_close"),
@@ -340,6 +386,14 @@ export function createNativeClient({ invoke, createChannel }: NativeBridge): Nat
     removeSkill: (id) => call<void>("skill_remove", { id }),
 
     listCatalog: () => call<CatalogList>("catalog_list"),
+
+    listAddons: (refresh) => call<AddonList>("addon_list", { refresh }),
+    addAddon: (id) => call<AddonAddResult>("addon_add", { id }),
+    installAddon: (token, size, listener) =>
+      call<TerminalInfo>("addon_install", { token, size, events: sessionChannel(listener) }),
+    removeAddon: (id) => call<AddonList>("addon_remove", { id }),
+    listSpaces: () => call<SpaceInfo[]>("space_list"),
+    shareSpace: (to, addons) => call<SpaceInfo>("space_share", { to, addons }),
   };
 
   /**

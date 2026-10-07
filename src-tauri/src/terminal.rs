@@ -2,14 +2,15 @@
 //!
 //! The webview can only start the user's login shell, never a program of its
 //! choosing, in a directory it cannot choose either: the open workspace's root, or
-//! the home directory. It refers to sessions by id afterwards. Every argument is
+//! the home directory. (A confirmed add-on install, `addon_install`, is the
+//! other session it can start; its commands are the app's own.) It refers to sessions by id afterwards. Every argument is
 //! validated here or in `x8ai-pty`.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::State;
 use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Request};
+use tauri::{AppHandle, State};
 use x8ai_core::error::{CommandError, ErrorCode};
 use x8ai_core::terminal::{
     SESSION_ID_HEADER, SessionId, TerminalEvent, TerminalExit, TerminalInfo, TerminalSize,
@@ -84,17 +85,25 @@ impl SessionEvents for ChannelEvents {
 }
 
 /// Starts the user's login shell in a new session, in the open workspace's root
-/// (or the home directory). Output and lifecycle events arrive on `events`.
-/// Sessions keep their directory when the workspace changes later.
+/// (or the home directory), with the space's add-ons. Output and lifecycle
+/// events arrive on `events`. Sessions keep their directory, and their add-ons,
+/// when the workspace changes later.
 #[tauri::command]
 pub async fn terminal_create(
     size: TerminalSize,
     events: Channel,
     terminals: State<'_, Terminals>,
     workspaces: State<'_, Workspaces>,
+    app: AppHandle,
 ) -> Result<TerminalInfo, CommandError> {
+    // The space's id and add-ons (ADR 0019). Reading what is installed can wait
+    // for the login environment, so not on the IPC thread.
+    let env = tauri::async_runtime::spawn_blocking(move || crate::addons::terminal_env(&app))
+        .await
+        .unwrap_or_default();
     let program = Program::LoginShell {
         cwd: workspaces.root(),
+        env,
     };
     let session = terminals
         .0

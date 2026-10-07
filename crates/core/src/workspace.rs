@@ -13,6 +13,8 @@ use ts_rs::TS;
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct WorkspaceInfo {
+    /// The space's id (`ws-k3f9qa`), made when the folder is first opened.
+    pub id: String,
     /// Absolute path of the root, for display.
     pub root: String,
     /// The root directory's name.
@@ -27,6 +29,8 @@ pub struct WorkspaceInfo {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct RecentWorkspace {
+    /// The space's id, when it has one (every folder opened since ids exist).
+    pub id: Option<String>,
     pub root: String,
     pub name: String,
     /// The folder still exists. Missing folders (an unmounted drive, a deleted

@@ -22,7 +22,8 @@ use x8ai_core::workspace::{
     WorkspaceEvent, WorkspaceInfo,
 };
 use x8ai_workspace::{
-    ApprovalStore, RecentWorkspaces, Removal, SearchLimits, TrustStore, Watcher, Workspace,
+    ApprovalStore, RecentWorkspaces, Removal, SearchLimits, Space, SpaceStore, TrustStore, Watcher,
+    Workspace,
 };
 
 use crate::agents::Agents;
@@ -43,6 +44,8 @@ pub struct Workspaces {
     /// Set to cancel the running search.
     search: Mutex<Option<Arc<AtomicBool>>>,
     warnings: Mutex<Vec<String>>,
+    /// The app's data directory, where spaces keep their terminals' setup.
+    data_dir: Mutex<Option<PathBuf>>,
 }
 
 struct Open {
@@ -54,6 +57,7 @@ struct Stores {
     recent: RecentWorkspaces,
     trust: TrustStore,
     approvals: ApprovalStore,
+    spaces: SpaceStore,
 }
 
 impl Workspaces {
@@ -66,17 +70,66 @@ impl Workspaces {
         let (trust, trust_warning) = TrustStore::load(data_dir.join("trusted-workspaces.json"));
         let (approvals, approvals_warning) =
             ApprovalStore::load(data_dir.join("agent-approvals.json"));
+        let (spaces, spaces_warning) = SpaceStore::load(data_dir.join("spaces.json"));
         lock(&self.warnings).extend(
             recent_warning
                 .into_iter()
                 .chain(trust_warning)
-                .chain(approvals_warning),
+                .chain(approvals_warning)
+                .chain(spaces_warning),
         );
         *lock(&self.stores) = Some(Stores {
             recent,
             trust,
             approvals,
+            spaces,
         });
+        *lock(&self.data_dir) = Some(data_dir.to_owned());
+    }
+
+    pub(crate) fn data_dir(&self) -> Option<PathBuf> {
+        lock(&self.data_dir).clone()
+    }
+
+    /// The space of `root` (`None`: no folder open), given its id now if it has
+    /// none yet.
+    pub(crate) fn space(&self, root: Option<&Path>) -> Result<Space, CommandError> {
+        self.with_stores(|s| s.spaces.ensure(root))
+    }
+
+    /// Every space with an id.
+    pub(crate) fn spaces(&self) -> Vec<Space> {
+        lock(&self.stores)
+            .as_ref()
+            .map(|s| s.spaces.list())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn add_addons(
+        &self,
+        root: Option<&Path>,
+        addons: &[&str],
+    ) -> Result<Space, CommandError> {
+        self.with_stores(|s| s.spaces.add(root, addons))
+    }
+
+    pub(crate) fn add_addons_to(&self, id: &str, addons: &[&str]) -> Result<Space, CommandError> {
+        self.with_stores(|s| s.spaces.add_to(id, addons))
+    }
+
+    pub(crate) fn remove_addon(
+        &self,
+        root: Option<&Path>,
+        addon: &str,
+    ) -> Result<Space, CommandError> {
+        self.with_stores(|s| s.spaces.remove(root, addon))
+    }
+
+    /// The open workspace as the webview sees it: its space's id and its trust.
+    fn info_of(&self, workspace: &Workspace) -> Result<WorkspaceInfo, CommandError> {
+        let root = workspace.root();
+        let id = self.space(Some(root))?.id;
+        Ok(workspace.info(&id, self.is_trusted(root)))
     }
 
     /// Keeps a problem for the frontend to show (`app_take_warnings`).
@@ -177,7 +230,7 @@ impl Workspaces {
             .map_err(command_error)?;
         let root = workspace.root().to_owned();
         let recorded = self.with_stores(|s| s.recent.record(&root));
-        let info = workspace.info(self.is_trusted(&root));
+        let info = self.info_of(&workspace)?;
         self.cancel_search();
         *lock(&self.current) = Some(Open {
             workspace: Arc::new(workspace),
@@ -248,6 +301,70 @@ pub async fn workspace_open(
     let info = workspaces.install(workspace, events)?;
     agents.stop_outside(&terminals, Path::new(&info.root));
     Ok(Some(info))
+}
+
+/// Where `/new <name>` makes its folders, in the home folder.
+pub(crate) const NEW_SPACES_FOLDER: &str = "Workspaces";
+
+/// Makes a new, empty folder `~/Workspaces/<name>` and opens it as a new space
+/// (`/new <name>` on the welcome screen). The webview chooses only the name, a
+/// single folder name, never where the folder is; and only a folder made here
+/// and now is opened this way, never one that exists (ADR 0009).
+#[tauri::command]
+pub async fn workspace_create(
+    name: String,
+    events: Channel<WorkspaceEvent>,
+    workspaces: State<'_, Workspaces>,
+    agents: State<'_, Agents>,
+    terminals: State<'_, Terminals>,
+) -> Result<WorkspaceInfo, CommandError> {
+    let name = new_folder_name(&name)?.to_owned();
+    let parent = crate::agents::home().join(NEW_SPACES_FOLDER);
+    let path = parent.join(&name);
+    let shown = format!("~/{NEW_SPACES_FOLDER}/{name}");
+    let workspace = tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&parent)
+            .and_then(|()| std::fs::create_dir(&path))
+            .map_err(|e| {
+                let code = if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    ErrorCode::Conflict
+                } else {
+                    ErrorCode::Internal
+                };
+                let reason = if code == ErrorCode::Conflict {
+                    "already exists: open it with /cd".to_owned()
+                } else {
+                    e.to_string()
+                };
+                CommandError::new(code, format!("{shown} {reason}"))
+            })?;
+        Workspace::open(&path).map_err(command_error)
+    })
+    .await
+    .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))??;
+    let info = workspaces.install(workspace, events)?;
+    agents.stop_outside(&terminals, Path::new(&info.root));
+    Ok(info)
+}
+
+/// `name` if it can be the name of a new folder: one visible folder name, no
+/// path, nothing a shell or Finder would trip over.
+fn new_folder_name(name: &str) -> Result<&str, CommandError> {
+    let name = name.trim();
+    let fine = !name.is_empty()
+        && name.chars().count() <= 64
+        && !name.starts_with('.')
+        && !name.contains('/')
+        && !name.contains(':')
+        && !name.chars().any(char::is_control);
+    if fine {
+        Ok(name)
+    } else {
+        Err(CommandError::new(
+            ErrorCode::InvalidInput,
+            "a new space needs a folder name: letters, digits, spaces, - or _, without / or a leading dot",
+        ))
+    }
 }
 
 /// Closes the open folder: its agents stop, as when another folder opens, and
@@ -340,7 +457,19 @@ pub async fn workspace_open_recent(
 pub fn workspace_recent(
     workspaces: State<'_, Workspaces>,
 ) -> Result<Vec<RecentWorkspace>, CommandError> {
-    workspaces.with_stores(|s| Ok(s.recent.list()))
+    workspaces.with_stores(|s| {
+        Ok(s.recent
+            .list()
+            .into_iter()
+            .map(|recent| RecentWorkspace {
+                id: s
+                    .spaces
+                    .get(Some(Path::new(&recent.root)))
+                    .map(|space| space.id),
+                ..recent
+            })
+            .collect())
+    })
 }
 
 /// Removes a folder from the recent list. Its trust is not changed.
@@ -377,7 +506,7 @@ pub async fn workspace_set_trust(
                  folders never run anything automatically. You can remove trust at any time.",
                 root.display()
             ))
-            .title(format!("Trust “{}”?", workspace.info(false).name))
+            .title(format!("Trust “{}”?", workspaces.info_of(&workspace)?.name))
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
                 "Trust".into(),
@@ -386,7 +515,7 @@ pub async fn workspace_set_trust(
             .parent(&window)
             .blocking_show();
         if !confirmed {
-            return Ok(workspace.info(false));
+            return workspaces.info_of(&workspace);
         }
     }
     workspaces.with_stores(|s| {
@@ -403,7 +532,7 @@ pub async fn workspace_set_trust(
         // Nothing keeps running in a folder the user no longer trusts.
         agents.stop_in(&terminals, &root);
     }
-    Ok(workspace.info(workspaces.is_trusted(&root)))
+    workspaces.info_of(&workspace)
 }
 
 /// Searches the workspace, streaming each file's matches and then a summary on
@@ -566,7 +695,26 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::picker_start;
+    use super::{new_folder_name, picker_start};
+
+    #[test]
+    fn a_new_space_is_named_by_one_folder_name() {
+        assert_eq!(new_folder_name("  demo app ").unwrap(), "demo app");
+        assert_eq!(new_folder_name("gym-RL_2").unwrap(), "gym-RL_2");
+        for bad in [
+            "",
+            "  ",
+            ".hidden",
+            "..",
+            "a/b",
+            "../etc",
+            "a:b",
+            "x\u{0}y",
+            &"n".repeat(65),
+        ] {
+            assert!(new_folder_name(bad).is_err(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn the_picker_starts_where_cd_points_or_the_nearest_folder_above() {

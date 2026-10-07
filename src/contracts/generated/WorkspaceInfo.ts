@@ -5,6 +5,10 @@
  */
 export type WorkspaceInfo = { 
 /**
+ * The space's id (`ws-k3f9qa`), made when the folder is first opened.
+ */
+id: string, 
+/**
  * Absolute path of the root, for display.
  */
 root: string, 

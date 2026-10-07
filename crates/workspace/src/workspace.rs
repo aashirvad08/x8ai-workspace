@@ -77,8 +77,10 @@ impl Workspace {
 
     /// Describes the workspace. Trust is recorded in a [`crate::TrustStore`], not
     /// here, so the caller supplies it.
-    pub fn info(&self, trusted: bool) -> WorkspaceInfo {
+    /// What the webview learns about it, with its space's id and its trust.
+    pub fn info(&self, id: &str, trusted: bool) -> WorkspaceInfo {
         WorkspaceInfo {
+            id: id.to_owned(),
             root: self.root.display().to_string(),
             name: self.name.clone(),
             trusted,

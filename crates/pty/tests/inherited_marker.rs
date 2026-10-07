@@ -56,7 +56,10 @@ fn a_shell_opened_by_an_app_started_from_claude_code_is_not_its_child() {
         rows: 30,
     };
     for program in [
-        Program::LoginShell { cwd: None },
+        Program::LoginShell {
+            cwd: None,
+            env: Vec::new(),
+        },
         Program::Exec {
             program: "/bin/sh".into(),
             args: Vec::new(),
