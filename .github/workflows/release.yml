@@ -1,0 +1,75 @@
+name: Release
+
+# A tag `v<version>` (matching the x8ai crate's version) builds `x8ai` for
+# macOS, publishes it as a GitHub release, and points the Homebrew formula in
+# <owner>/homebrew-tap at it, so `brew install <owner>/tap/x8ai` gets it.
+#
+# Updating the tap needs a token that can push to that repository, saved as the
+# HOMEBREW_TAP_TOKEN secret (a fine-grained token with Contents: read and write
+# on homebrew-tap only). Without it the release is still published, and the
+# formula is printed in the log to commit by hand.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  x8ai:
+    name: x8ai for macOS
+    runs-on: macos-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+
+      - name: The tag names the version being built
+        run: |
+          version="$(cargo pkgid -p x8ai | sed 's/.*[#@]//')"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match x8ai $version in Cargo.toml."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - run: cargo test -p x8ai --locked
+
+      - name: Build the universal binary
+        run: scripts/release/build-x8ai.sh
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "target/x8ai-release/x8ai-$VERSION-macos.tar.gz" \
+            "target/x8ai-release/x8ai-$VERSION-macos.tar.gz.sha256" \
+            --title "x8ai $VERSION" \
+            --notes "Install with Homebrew: \`brew install ${{ github.repository_owner }}/tap/x8ai\`, then run \`x8ai\`."
+
+      - name: The Homebrew formula
+        run: |
+          sha256="$(cut -d ' ' -f 1 "target/x8ai-release/x8ai-$VERSION-macos.tar.gz.sha256")"
+          scripts/release/homebrew-formula.sh "$VERSION" "$sha256" "${{ github.repository_owner }}" > x8ai.rb
+          cat x8ai.rb
+
+      - name: Update the tap
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        run: |
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${{ github.repository_owner }}/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp x8ai.rb tap/Formula/x8ai.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/x8ai.rb
+          git commit -m "x8ai $VERSION"
+          git push
