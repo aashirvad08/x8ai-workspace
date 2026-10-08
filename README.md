@@ -116,15 +116,31 @@ or Codex. Follow each agent's own instructions. The app doesn't install them.
 On an empty line, ↑↓ and Enter open one of your recent spaces, and Esc goes
 back to the space that is open. `x8ai <folder>` opens a folder right away.
 
-A space shows its shell. Every key goes to the shell except **Ctrl-g**, after
-which:
+A space opens with a shell in its folder. Every key goes to the program in the
+focused pane except **Ctrl-g**, after which:
 
 | Key | What it does |
 | --- | --- |
-| `h` | The Welcome screen. The space keeps running, and `/cd` back finds its shell as you left it. |
-| `s` | Scroll back through the shell's output (↑↓, PgUp PgDn, `g` `G`; Esc to go back). |
+| `t` | A new tab, with a shell. `n` and `p` go to the next and previous tab, `1`–`9` to that one. |
+| `\|` and `-` | Split the pane: a new shell to the right, or below. |
+| ←→↑↓ and `o` | The pane beside, or the next one. |
+| `z` | The pane alone, or back with the others. |
+| `x` | Close the pane. If a program is still running in it, you're asked first. |
+| `f` | The file list. ↑↓ move, ←→ close and open folders, Enter opens a file in your editor (`$VISUAL`, `$EDITOR`, or `vi`) in a tab of its own, Esc goes back. |
+| `s` | Scroll back through the output (↑↓, PgUp PgDn, `g` `G`; Esc to go back). |
+| `h` | The Welcome screen. The space keeps running, and `/cd` back finds it as you left it. |
 | `q` | Quit. If a program is still running, you're asked first. |
-| Ctrl-g | Sends Ctrl-g to the shell. |
+| `?` | Every key. |
+| Ctrl-g | Sends Ctrl-g to the program. |
+
+A pane closes when its program ends well (`exit`, or quitting the editor); one
+that fails stays so you can read it.
+
+The mouse works too: click a pane or a tab, drag the line between panes to
+resize them, and scroll with the wheel. Dragging over text selects it and
+copies it to the clipboard (hold Shift in a program that uses the mouse, such
+as vim). Your terminal's own selection still works with its modifier (Option in
+iTerm2 and Terminal.app).
 
 `x8ai` shares the app's recent spaces, space ids and trust, so a folder opened
 in one is recent in the other.

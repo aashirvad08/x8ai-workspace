@@ -26,8 +26,8 @@ the phases. Each step is pushed and released before the next starts.
 | Step | Theme | Status |
 | --- | --- | --- |
 | T1 | `x8ai`: the Welcome screen, spaces with a shell, the Homebrew tap | **Complete** |
-| T2 | Split panes and tabs, the file list and `$EDITOR` | Next |
-| T3 | Agents: trust, the launch dialog, sessions and reviewing changes | Planned |
+| T2 | Split panes and tabs, the file list and `$EDITOR` | **Complete** |
+| T3 | Agents: trust, the launch dialog, sessions and reviewing changes | Next |
 | T4 | Models, MCP, skills, the catalog and add-ons | Planned |
 | T5 | A background process: spaces outlive the window, and `x8ai` reattaches | Planned |
 
@@ -403,4 +403,26 @@ a universal binary from a tag, and a Homebrew formula in `aashirvad08/homebrew-t
 - Quitting asks first while a program runs in a shell; every shell is hung up
   on quit.
 - End-to-end test of the real binary on a PTY (`crates/tui/tests`).
+
+## Terminal step T2 — panes, tabs, the file list and the editor
+
+**Objective.** A space in `x8ai` holds a working session: shells side by side
+and in tabs, the folder's files, and the user's editor (ADR 0021).
+
+**Major components.** Pane trees per tab (`layout.rs`), the file list through
+`x8ai-workspace` with its watcher (`files.rs`), editor tabs started as git
+starts the editor, mouse reports for programs that ask, and `x8ai`'s own
+selection, copied with `pbcopy`.
+
+**Acceptance criteria.**
+- Ctrl-g `|` and `-` split, the arrows and a click move between panes, dragging
+  the line between them resizes both, `t` and `1`–`9` open and show tabs, `x`
+  closes a pane (asking while a program runs).
+- Ctrl-g `f` lists the folder, follows changes on disk, and Enter opens a file
+  in `$VISUAL`/`$EDITOR`/`vi` in its own tab, which closes when the editor ends
+  well.
+- The wheel scrolls back; a program that asked for the mouse gets it, at
+  positions inside its pane; dragging over text copies it.
+- End-to-end test of the real binary: splits, focus by key and click, a dragged
+  divider (`stty size`), tabs, the file list and editor, selection, the wheel.
 
