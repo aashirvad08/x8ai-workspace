@@ -49,6 +49,9 @@ pub struct Pane {
     exit: Option<TerminalExit>,
     /// Where a selection with the mouse started.
     anchor: Option<Point>,
+    /// Hung up from outside (an agent stopped): its session reports no more
+    /// events, so its exit is looked for instead.
+    stopping: bool,
 }
 
 impl Pane {
@@ -61,6 +64,15 @@ impl Pane {
         size: TerminalSize,
         tx: Sender<Msg>,
     ) -> Result<Self, String> {
+        let session = sessions
+            .spawn(program, size, events(id, tx))
+            .map_err(|e| e.to_string())?;
+        Ok(Self::new(id, session, size))
+    }
+
+    /// A pane for a session already started (by the agent runtime) of `size`,
+    /// whose events go to pane `id` (see [`events`]).
+    pub fn new(id: PaneId, session: Arc<Session>, size: TerminalSize) -> Self {
         let events = Listener::default();
         let config = Config {
             osc52: Osc52::Disabled,
@@ -68,10 +80,7 @@ impl Pane {
             ..Config::default()
         };
         let term = Term::new(config, &Grid(size), events.clone());
-        let session = sessions
-            .spawn(program, size, Arc::new(Forward { pane: id, tx }))
-            .map_err(|e| e.to_string())?;
-        Ok(Self {
+        Self {
             id,
             session,
             term,
@@ -81,7 +90,8 @@ impl Pane {
             title: None,
             exit: None,
             anchor: None,
-        })
+            stopping: false,
+        }
     }
 
     /// The program's output: parsed into the screen, and acknowledged, so the
@@ -133,6 +143,27 @@ impl Pane {
 
     pub fn exited(&mut self, exit: TerminalExit) {
         self.exit = Some(exit);
+    }
+
+    /// Its program was hung up from outside; its exit is looked for (see
+    /// [`Pane::settle`]).
+    pub fn mark_stopping(&mut self) {
+        self.stopping = true;
+    }
+
+    /// Whether it was hung up and has not ended yet.
+    pub fn is_stopping(&self) -> bool {
+        self.stopping && self.exit.is_none()
+    }
+
+    /// For a pane hung up from outside: records its exit once it has ended.
+    /// Returns whether it just did.
+    pub fn settle(&mut self) -> bool {
+        if !self.is_stopping() || !self.session.has_exited() {
+            return false;
+        }
+        self.exit = self.session.exit_status();
+        self.exit.is_some()
     }
 
     pub fn exit(&self) -> Option<&TerminalExit> {
@@ -357,6 +388,12 @@ impl EventListener for Listener {
     fn send_event(&self, event: TermEvent) {
         self.0.borrow_mut().push(event);
     }
+}
+
+/// What a session started for pane `id` reports to: its output and exit, as
+/// messages on `tx`.
+pub fn events(id: PaneId, tx: Sender<Msg>) -> Arc<dyn SessionEvents> {
+    Arc::new(Forward { pane: id, tx })
 }
 
 /// Passes a session's output and exit to the main loop, from its threads.

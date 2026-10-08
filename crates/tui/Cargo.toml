@@ -2,7 +2,7 @@
 name = "x8ai"
 description = "x8ai Workspace in the terminal: the `x8ai` command, a full-screen program that hosts the same spaces and shells as the desktop app. No Tauri."
 # Released on its own: a tag v<version> publishes it (.github/workflows/release.yml).
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -15,6 +15,10 @@ path = "src/main.rs"
 x8ai-core.workspace = true
 x8ai-pty.workspace = true
 x8ai-workspace.workspace = true
+x8ai-agents.workspace = true
+x8ai-git.workspace = true
+# Only to forget a folder's MCP approvals when it stops being trusted, as the app does.
+x8ai-mcp.workspace = true
 ratatui.workspace = true
 alacritty_terminal.workspace = true
 serde.workspace = true

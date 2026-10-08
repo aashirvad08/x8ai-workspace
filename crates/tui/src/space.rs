@@ -6,9 +6,12 @@ use std::sync::mpsc::Sender;
 
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
+use x8ai_agents::AgentSession;
+use x8ai_core::agent::AgentSessionId;
 use x8ai_core::terminal::TerminalSize;
 use x8ai_workspace::{Watcher, Workspace};
 
+use crate::agents::{AgentRow, Isolated};
 use crate::app::Msg;
 use crate::files::FileList;
 use crate::layout::{Axis, Layout, PaneArea, Tree};
@@ -18,12 +21,19 @@ use crate::spaces::SpaceInfo;
 /// Longest tab label, in columns.
 const MAX_LABEL: usize = 24;
 
+/// The narrowest window that shows a sidebar beside the panes.
+pub const MIN_WIDTH_FOR_SIDEBAR: u16 = 60;
+
 /// What runs in a pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
     Shell,
     /// The user's editor (`$VISUAL`, `$EDITOR`) on this file.
     Editor(PathBuf),
+    /// An agent session's agent, by name.
+    Agent(AgentSessionId, String),
+    /// A pager on what a session's agent changed.
+    Review(AgentSessionId, String),
 }
 
 pub struct Slot {
@@ -32,9 +42,20 @@ pub struct Slot {
 }
 
 impl Slot {
+    /// Whether closing it would end something running. A shell at its prompt
+    /// is not; anything else that has not ended is.
+    pub fn is_busy(&self) -> bool {
+        match self.kind {
+            Kind::Shell => self.pane.is_busy(),
+            _ => self.pane.exit().is_none(),
+        }
+    }
+
     /// An editor by its file; a shell by the title its program set, or its name.
     pub fn title(&self) -> String {
         let title = match &self.kind {
+            Kind::Agent(_, name) => name.clone(),
+            Kind::Review(_, name) => format!("changes: {name}"),
             Kind::Editor(path) => path.file_name().map_or_else(
                 || path.display().to_string(),
                 |n| n.to_string_lossy().into_owned(),
@@ -67,7 +88,112 @@ pub struct Tab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Panes,
+    Sidebar,
+}
+
+/// What the sidebar beside the panes shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sidebar {
+    Hidden,
     Files,
+    Agents,
+}
+
+/// A row of the Agents panel: an agent to launch, or one of the space's
+/// agent sessions.
+#[derive(Debug, Clone)]
+pub enum PanelRow {
+    Agent(Box<AgentRow>),
+    Session(Box<AgentSession>),
+}
+
+/// The Agents panel's rows and selection, read again when it opens and when a
+/// session changes.
+#[derive(Default)]
+pub struct AgentsPanel {
+    pub rows: Vec<PanelRow>,
+    pub selected: usize,
+    pub offset: usize,
+    pub isolated: Option<Isolated>,
+}
+
+/// A line of the Agents panel, top to bottom.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PanelLine {
+    /// Whether the folder is trusted.
+    Trust,
+    /// How agents work here: worktrees, or directly in the folder.
+    Isolation,
+    Blank,
+    Heading(&'static str),
+    /// Row `n` of `rows`, which can be selected.
+    Row(usize),
+    /// Said when a section is empty.
+    Empty(&'static str),
+}
+
+impl AgentsPanel {
+    pub fn move_by(&mut self, delta: isize) {
+        let last = self.rows.len().saturating_sub(1);
+        self.selected = self.selected.saturating_add_signed(delta).min(last);
+    }
+
+    pub fn row(&self) -> Option<&PanelRow> {
+        self.rows.get(self.selected)
+    }
+
+    /// Every line, in order: the folder's trust and isolation, the agents,
+    /// then the sessions.
+    pub fn lines(&self) -> Vec<PanelLine> {
+        let mut lines = vec![PanelLine::Trust, PanelLine::Isolation, PanelLine::Blank];
+        lines.push(PanelLine::Heading("NEW SESSION"));
+        let agents = self
+            .rows
+            .iter()
+            .filter(|r| matches!(r, PanelRow::Agent(_)))
+            .count();
+        if agents == 0 {
+            lines.push(PanelLine::Empty("No agents."));
+        }
+        lines.extend((0..agents).map(PanelLine::Row));
+        lines.push(PanelLine::Blank);
+        lines.push(PanelLine::Heading("SESSIONS"));
+        if agents == self.rows.len() {
+            lines.push(PanelLine::Empty("None yet: Enter on an agent starts one."));
+        }
+        lines.extend((agents..self.rows.len()).map(PanelLine::Row));
+        lines
+    }
+
+    /// The row at line `line` of the panel (from its first line), if any.
+    pub fn row_at(&self, line: usize) -> Option<usize> {
+        match self.lines().get(self.offset + line) {
+            Some(PanelLine::Row(row)) => Some(*row),
+            _ => None,
+        }
+    }
+
+    /// Scrolls so the selection shows in `height` lines.
+    pub fn keep_in_view(&mut self, height: usize) {
+        let lines = self.lines();
+        let Some(at) = lines
+            .iter()
+            .position(|l| *l == PanelLine::Row(self.selected))
+        else {
+            self.offset = 0;
+            return;
+        };
+        if height == 0 {
+            return;
+        }
+        // The headings above the first rows show when it is selected.
+        let top = if self.selected == 0 { 0 } else { at };
+        if top < self.offset {
+            self.offset = top;
+        } else if at >= self.offset + height {
+            self.offset = at + 1 - height;
+        }
+    }
 }
 
 /// A label in the header: a tab, or `+` for a new one.
@@ -81,16 +207,17 @@ pub enum Label {
 pub struct SpaceLayout {
     pub header: Rect,
     pub labels: Vec<(Label, Rect)>,
-    /// The file list, its right border included.
-    pub files: Option<Rect>,
+    /// The sidebar (the file list or the Agents panel), its right border
+    /// included.
+    pub sidebar: Option<Rect>,
     pub panes: Layout,
     pub status: Rect,
 }
 
 impl SpaceLayout {
-    /// The rows the file list's entries take (below its title row).
-    pub fn file_rows(&self) -> Option<Rect> {
-        self.files.map(|f| Rect {
+    /// The rows the sidebar's entries take (below its title row).
+    pub fn sidebar_rows(&self) -> Option<Rect> {
+        self.sidebar.map(|f| Rect {
             y: f.y + 1,
             height: f.height.saturating_sub(1),
             width: f.width.saturating_sub(1),
@@ -108,7 +235,8 @@ pub struct SpaceView {
     pub slots: Vec<Slot>,
     /// `None` for the workspace with no folder, or a folder that cannot be read.
     pub files: Option<FileList>,
-    pub files_shown: bool,
+    pub sidebar: Sidebar,
+    pub panel: AgentsPanel,
     pub focus: Focus,
     _watcher: Option<Watcher>,
 }
@@ -134,7 +262,8 @@ impl SpaceView {
             active: 0,
             slots: Vec::new(),
             files,
-            files_shown: false,
+            sidebar: Sidebar::Hidden,
+            panel: AgentsPanel::default(),
             focus: Focus::Panes,
             _watcher: watcher,
         }
@@ -265,13 +394,15 @@ impl SpaceView {
     }
 
     /// The header's right end: where the space is, and whether it is trusted.
-    pub fn right_text(&self) -> String {
+    /// At most `width` columns: a long path loses its start, never the trust.
+    pub fn right_text(&self, width: usize) -> String {
         let trust = match (&self.info.root, self.info.trusted) {
             (None, _) => "no folder",
             (Some(_), true) => "trusted",
             (Some(_), false) => "not trusted",
         };
-        format!("{} · {trust} ", self.place)
+        let room = width.saturating_sub(trust.width() + 4);
+        format!("{} · {trust} ", clip_start(&self.place, room))
     }
 
     /// Places the header, the file list, the open tab's panes and the status
@@ -292,9 +423,8 @@ impl SpaceView {
         // The header: " x8ai <name>  " then the tabs, then `+`.
         let mut labels = Vec::new();
         let mut x = area.x + u16::try_from(6 + self.info.name.width() + 2).unwrap_or(u16::MAX);
-        let right = u16::try_from(self.right_text().width())
-            .unwrap_or(u16::MAX)
-            .min(area.width / 3);
+        let right =
+            u16::try_from(self.right_text(usize::from(area.width / 3)).width()).unwrap_or(u16::MAX);
         let end = area.right().saturating_sub(right + 1);
         let mut place = |label: Label, width: usize| {
             let width = u16::try_from(width).unwrap_or(u16::MAX);
@@ -313,7 +443,7 @@ impl SpaceView {
         }
         place(Label::New, 3);
 
-        let (files, panes_area) = self.split_body(body);
+        let (sidebar, panes_area) = self.split_body(body);
         let panes = match self.tab() {
             Some(tab) if tab.zoomed => Tree::Pane(tab.focused).layout(panes_area),
             Some(tab) => tab.tree.layout(panes_area),
@@ -322,7 +452,7 @@ impl SpaceView {
         SpaceLayout {
             header,
             labels,
-            files,
+            sidebar,
             panes,
             status,
         }
@@ -331,19 +461,23 @@ impl SpaceView {
     /// The body (between the header and the status bar) divided between the
     /// file list, when shown, and the panes.
     fn split_body(&self, body: Rect) -> (Option<Rect>, Rect) {
-        let files = (self.files_shown && self.files.is_some() && body.width >= 40).then(|| Rect {
-            width: (body.width / 4).clamp(18, 36),
-            ..body
-        });
-        let panes = match files {
-            Some(files) => Rect {
-                x: files.right(),
-                width: body.width - files.width,
+        let width = match self.sidebar {
+            Sidebar::Files if self.files.is_some() => Some((body.width / 4).clamp(18, 36)),
+            Sidebar::Agents => Some((body.width / 3).clamp(30, 48)),
+            _ => None,
+        };
+        let sidebar = width
+            .filter(|_| body.width >= MIN_WIDTH_FOR_SIDEBAR)
+            .map(|width| Rect { width, ..body });
+        let panes = match sidebar {
+            Some(sidebar) => Rect {
+                x: sidebar.right(),
+                width: body.width - sidebar.width,
                 ..body
             },
             None => body,
         };
-        (files, panes)
+        (sidebar, panes)
     }
 
     /// The size a new pane gets in the window's `area`: a tab of its own, or
@@ -371,9 +505,27 @@ impl SpaceView {
         }
     }
 
-    /// Whether a program other than a shell at its prompt is running, by pane.
+    /// The panes whose closing would end something running: a program a
+    /// shell started, or an editor, agent or pager that has not ended.
     pub fn busy(&self) -> impl Iterator<Item = &Slot> {
-        self.slots.iter().filter(|s| s.pane.is_busy())
+        self.slots.iter().filter(|s| s.is_busy())
+    }
+
+    /// The pane running session `id`'s agent, if any.
+    pub fn agent_pane(&self, id: AgentSessionId) -> Option<PaneId> {
+        self.slots
+            .iter()
+            .find(|s| matches!(&s.kind, Kind::Agent(session, _) if *session == id))
+            .map(|s| s.pane.id)
+    }
+
+    /// Shows the tab holding pane `id`, focused.
+    pub fn show_pane(&mut self, id: PaneId) {
+        if let Some(index) = self.tabs.iter().position(|t| t.tree.contains(id)) {
+            self.active = index;
+            self.tabs[index].focused = id;
+            self.focus = Focus::Panes;
+        }
     }
 }
 
@@ -393,9 +545,37 @@ pub fn clip(text: &str, width: usize) -> String {
     out
 }
 
+/// `text` cut to `width` columns from its start, with `…` when cut: the end
+/// of a path says most about it.
+pub fn clip_start(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_owned();
+    }
+    let mut kept: Vec<char> = Vec::new();
+    let mut used = 1;
+    for c in text.chars().rev() {
+        let w = c.to_string().width();
+        if used + w > width {
+            break;
+        }
+        used += w;
+        kept.push(c);
+    }
+    std::iter::once('…').chain(kept.into_iter().rev()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_paths_keep_their_end() {
+        assert_eq!(clip_start("~/code/app", 20), "~/code/app");
+        assert_eq!(
+            clip_start("/private/tmp/a/very/long/repo", 10),
+            "…long/repo"
+        );
+    }
 
     #[test]
     fn long_titles_are_clipped() {

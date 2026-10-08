@@ -20,17 +20,20 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use ratatui::layout::{Position, Rect};
 use ratatui::{DefaultTerminal, Frame};
+use x8ai_agents::LaunchPlan;
+use x8ai_core::agent::AgentSessionId;
 use x8ai_core::terminal::{TerminalExit, TerminalSize};
 use x8ai_core::workspace::RecentWorkspace;
 use x8ai_pty::{Environment, Program, Sessions};
 
+use crate::agents::Agents;
 use crate::clipboard;
 use crate::files::Activated;
 use crate::keys;
 use crate::layout::{self, Axis, Direction, Divider};
 use crate::mouse::{Action, Button};
 use crate::pane::{Pane, PaneId};
-use crate::space::{Focus, Kind, Label, Slot, SpaceLayout, SpaceView};
+use crate::space::{Focus, Kind, Label, Sidebar, Slot, SpaceLayout, SpaceView};
 use crate::spaces::{SpaceInfo, Spaces};
 use crate::theme::Theme;
 use crate::ui;
@@ -64,6 +67,8 @@ pub enum Msg {
     FilesChanged(PathBuf),
 }
 
+mod agent_panel;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Welcome,
@@ -94,18 +99,38 @@ pub struct Message {
     pub error: bool,
 }
 
-/// What a question asked before doing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a question asks to do, on y.
+#[derive(Debug, Clone)]
 pub enum Ask {
     Quit,
     ClosePane(PaneId),
+    /// Trust the folder, then go on.
+    Trust(PathBuf, Option<Then>),
+    /// Stop trusting the folder: its approvals go, its agents stop.
+    Untrust(PathBuf),
+    /// Allow this launch in its folder, then go on.
+    Approve(Box<LaunchPlan>, Then),
+    /// Remove a session and its worktree; with `true`, its uncommitted
+    /// changes go too.
+    Remove(AgentSessionId, bool),
 }
 
-/// Asked before ending a program that is still running.
+/// What an agent's launch goes on with once a question is answered yes.
+#[derive(Debug, Clone)]
+pub enum Then {
+    /// A new session of this agent.
+    Launch(String),
+    /// This session's agent, again.
+    Run(AgentSessionId),
+}
+
+/// A question in a box: y does `ask`, n or Esc does nothing.
 pub struct Question {
     pub ask: Ask,
-    /// Where programs are running.
-    pub busy: Vec<String>,
+    pub title: String,
+    pub lines: Vec<String>,
+    /// What y does, in a word or two.
+    pub yes: &'static str,
 }
 
 /// What a mouse button held down is doing.
@@ -138,6 +163,9 @@ pub struct App {
     account_name: Option<String>,
     /// Each space shown in this run, with its tabs and panes.
     views: Vec<SpaceView>,
+    agents: Agents,
+    /// Agents whose panes were closed while they ran: still ending.
+    ending: Vec<AgentSessionId>,
     spaces: Spaces,
     sessions: Sessions,
     tx: Sender<Msg>,
@@ -159,6 +187,7 @@ impl App {
             .filter(|r| r.available)
             .and_then(|r| spaces.reopen(Path::new(&r.root)).ok())
             .unwrap_or_else(|| spaces.home_space());
+        let agents = Agents::new(spaces.home(), std::env::vars().collect());
         let mut app = Self {
             theme: Theme::detect(),
             screen: Screen::Welcome,
@@ -174,6 +203,8 @@ impl App {
             chosen_name: spaces.chosen_name(),
             account_name: crate::spaces::account_name(),
             views: Vec::new(),
+            agents,
+            ending: Vec::new(),
             spaces,
             sessions: Sessions::default(),
             tx,
@@ -581,11 +612,19 @@ impl App {
         let Some(slot) = self.view().and_then(|v| v.slot(id)) else {
             return;
         };
-        if slot.pane.is_busy() {
-            let busy = vec![slot.title()];
+        if slot.is_busy() {
+            let title = slot.title();
+            let (what, yes) = match slot.kind {
+                Kind::Agent(..) => (format!("Stop {title}?"), "stop"),
+                _ => ("Close this pane?".to_owned(), "close"),
+            };
             self.question = Some(Question {
                 ask: Ask::ClosePane(id),
-                busy,
+                title: what,
+                lines: vec![format!(
+                    "{title} is still running. Closing the pane stops it."
+                )],
+                yes,
             });
         } else {
             self.close(id);
@@ -599,6 +638,11 @@ impl App {
             return;
         };
         if let Some(slot) = self.views[at].remove(id) {
+            if let Kind::Agent(session, _) = slot.kind
+                && slot.pane.exit().is_none()
+            {
+                self.ending.push(session);
+            }
             let _ = self.sessions.close(slot.pane.session_id());
         }
         self.drag = None;
@@ -642,7 +686,7 @@ impl App {
             return;
         };
         let view = &mut self.views[at];
-        if view.focus == Focus::Files {
+        if view.focus == Focus::Sidebar {
             if direction == Direction::Right {
                 view.focus = Focus::Panes;
             }
@@ -657,8 +701,8 @@ impl App {
                     tab.focused = to;
                 }
             }
-            None if direction == Direction::Left && layout.files.is_some() => {
-                view.focus = Focus::Files;
+            None if direction == Direction::Left && layout.sidebar.is_some() => {
+                view.focus = Focus::Sidebar;
             }
             None => {}
         }
@@ -693,15 +737,20 @@ impl App {
             });
             return;
         }
+        self.toggle_sidebar(at, Sidebar::Files);
+    }
+
+    /// Shows `sidebar` and gives it the keys; hides it when it has them.
+    fn toggle_sidebar(&mut self, at: usize, sidebar: Sidebar) {
         let view = &mut self.views[at];
-        if view.files_shown && view.focus == Focus::Files {
-            view.files_shown = false;
+        if view.sidebar == sidebar && view.focus == Focus::Sidebar {
+            view.sidebar = Sidebar::Hidden;
             view.focus = Focus::Panes;
-        } else if self.size.0 < 40 {
-            self.say("Make the window wider to show the file list.");
+        } else if self.size.0 < crate::space::MIN_WIDTH_FOR_SIDEBAR {
+            self.say("Make the window wider to show the sidebar.");
         } else {
-            view.files_shown = true;
-            view.focus = Focus::Files;
+            view.sidebar = sidebar;
+            view.focus = Focus::Sidebar;
         }
     }
 
@@ -720,9 +769,10 @@ impl App {
             }
             Mode::Scroll => self.scroll_key(key),
             Mode::Normal if prefix => self.mode = Mode::Prefix,
-            Mode::Normal => match self.view().map(|v| v.focus) {
-                Some(Focus::Files) => self.files_key(key),
-                Some(Focus::Panes) => self.pane_key(key),
+            Mode::Normal => match self.view().map(|v| (v.focus, v.sidebar)) {
+                Some((Focus::Sidebar, Sidebar::Files)) => self.files_key(key),
+                Some((Focus::Sidebar, Sidebar::Agents)) => self.agents_key(key),
+                Some(_) => self.pane_key(key),
                 None => {}
             },
         }
@@ -772,6 +822,7 @@ impl App {
                 }
             }
             KeyCode::Char('f') => self.toggle_files(),
+            KeyCode::Char('a') => self.toggle_agents(),
             // Ctrl-g twice: the program gets one.
             _ if prefix => {
                 if let Some(slot) = self.views[at].focused_slot() {
@@ -792,12 +843,13 @@ impl App {
         };
         let (id, mode) = (slot.pane.id, slot.pane.mode());
         if slot.pane.exit().is_some() {
-            // It ended badly: Enter starts another shell, or closes the editor.
+            // Ended: Enter runs the agent again, starts another shell (one that
+            // failed), or closes the pane.
             if key.code == KeyCode::Enter {
-                if slot.kind == Kind::Shell {
-                    self.restart(id);
-                } else {
-                    self.close(id);
+                match slot.kind {
+                    Kind::Agent(session, _) => self.run_session(session, Some(id)),
+                    Kind::Shell => self.restart(id),
+                    Kind::Editor(_) | Kind::Review(..) => self.close(id),
                 }
             }
             return;
@@ -829,7 +881,7 @@ impl App {
             return;
         };
         let height = layout
-            .file_rows()
+            .sidebar_rows()
             .map_or(1, |r| usize::from(r.height).max(1));
         let page = isize::try_from(height.saturating_sub(1).max(1)).unwrap_or(1);
         let view = &mut self.views[at];
@@ -1052,13 +1104,21 @@ impl App {
             }
             return true;
         }
-        if !layout.files.is_some_and(|f| f.contains(cell)) {
+        if !layout.sidebar.is_some_and(|f| f.contains(cell)) {
             return false;
         }
         let view = &mut self.views[at];
-        view.focus = Focus::Files;
+        view.focus = Focus::Sidebar;
+        if view.sidebar == Sidebar::Agents {
+            if let Some(rows) = layout.sidebar_rows()
+                && rows.contains(cell)
+            {
+                self.click_panel_row(at, usize::from(cell.y - rows.y));
+            }
+            return true;
+        }
         let mut open = None;
-        if let (Some(files), Some(rows)) = (view.files.as_mut(), layout.file_rows())
+        if let (Some(files), Some(rows)) = (view.files.as_mut(), layout.sidebar_rows())
             && rows.contains(cell)
         {
             let row = files.offset() + usize::from(cell.y - rows.y);
@@ -1087,10 +1147,19 @@ impl App {
         up: bool,
         modifiers: KeyModifiers,
     ) {
-        if layout.files.is_some_and(|f| f.contains(cell)) {
-            let height = layout.file_rows().map_or(1, |r| usize::from(r.height));
-            if let Some(files) = self.views[at].files.as_mut() {
-                files.scroll(if up { -3 } else { 3 }, height);
+        if layout.sidebar.is_some_and(|f| f.contains(cell)) {
+            let height = layout.sidebar_rows().map_or(1, |r| usize::from(r.height));
+            let view = &mut self.views[at];
+            match view.sidebar {
+                Sidebar::Files => {
+                    if let Some(files) = view.files.as_mut() {
+                        files.scroll(if up { -3 } else { 3 }, height);
+                    }
+                }
+                _ => {
+                    view.panel.move_by(if up { -1 } else { 1 });
+                    view.panel.keep_in_view(height);
+                }
             }
             return;
         }
@@ -1143,29 +1212,36 @@ impl App {
         } else {
             self.question = Some(Question {
                 ask: Ask::Quit,
-                busy,
+                title: "Quit x8ai?".to_owned(),
+                lines: vec![format!(
+                    "Still running: {}. Quitting stops it.",
+                    busy.join(", ")
+                )],
+                yes: "quit",
             });
         }
     }
 
     fn question_key(&mut self, key: KeyEvent) {
-        let Some(question) = &self.question else {
+        let yes = match key.code {
+            KeyCode::Char('y' | 'Y') => true,
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => false,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => false,
+            _ => return,
+        };
+        let Some(question) = self.question.take() else {
             return;
         };
-        let ask = question.ask;
-        match key.code {
-            KeyCode::Char('y' | 'Y') => {
-                self.question = None;
-                match ask {
-                    Ask::Quit => self.quit = true,
-                    Ask::ClosePane(id) => self.close(id),
-                }
-            }
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => self.question = None,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.question = None;
-            }
-            _ => {}
+        if !yes {
+            return;
+        }
+        match question.ask {
+            Ask::Quit => self.quit = true,
+            Ask::ClosePane(id) => self.close(id),
+            Ask::Trust(root, then) => self.trust(&root, then),
+            Ask::Untrust(root) => self.untrust(&root),
+            Ask::Approve(plan, then) => self.approve(&plan, then),
+            Ask::Remove(session, discard) => self.remove_session(session, discard),
         }
     }
 
@@ -1209,13 +1285,22 @@ impl App {
             }
             Msg::Exited(id, exit) => {
                 // A program that ended well takes its pane with it, as closing a
-                // terminal tab does; one that failed stays, to be read.
-                if exit.code == 0 && exit.signal.is_none() {
+                // terminal tab does; one that failed stays, to be read. An agent
+                // stays either way: Enter runs it again in its session.
+                let agent = self
+                    .views
+                    .iter()
+                    .find_map(|v| v.slot(id))
+                    .is_some_and(|s| matches!(s.kind, Kind::Agent(..)));
+                if exit.code == 0 && exit.signal.is_none() && !agent {
                     self.close(id);
                 } else if let Some(slot) = self.slot_mut(id) {
                     slot.pane.exited(exit);
                     let session = slot.pane.session_id();
                     let _ = self.sessions.close(session);
+                }
+                if agent {
+                    self.refresh_panel();
                 }
             }
             Msg::FilesChanged(root) => {
@@ -1347,12 +1432,17 @@ pub fn run(
 ) -> std::io::Result<()> {
     loop {
         app.fit();
+        app.refresh_states();
         terminal.draw(|frame: &mut Frame<'_>| ui::draw(frame, app))?;
         app.apply_cursor(terminal)?;
         if app.quit {
             return Ok(());
         }
-        let first = match app.sync_deadline() {
+        // Agents hung up from outside report no exit: look for it now and then.
+        let settle = app
+            .any_stopping()
+            .then(|| Instant::now() + Duration::from_millis(100));
+        let first = match app.sync_deadline().into_iter().chain(settle).min() {
             Some(due) => match rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
                 Ok(msg) => Some(msg),
                 Err(RecvTimeoutError::Timeout) => None,
@@ -1374,5 +1464,6 @@ pub fn run(
             }
         }
         app.end_due_syncs();
+        app.settle_stopped();
     }
 }

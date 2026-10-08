@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+mod agents;
 mod app;
 mod clipboard;
 mod files;
@@ -62,6 +63,8 @@ In a space, press Ctrl-g, then:
   z               the pane alone, or back with the others
   x               close the pane
   f               the file list: Enter opens a file in $EDITOR
+  a               agents: start one in its own Git worktree, review what it
+                  changed, stop it, remove its session
   s               scroll back through the output
   h               the Welcome screen (the space keeps running)
   q               quit

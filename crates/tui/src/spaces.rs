@@ -11,10 +11,11 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use x8ai_agents::{Authorized, Denied, LaunchPlan};
 use x8ai_core::workspace::RecentWorkspace;
 use x8ai_workspace::{
-    Error, NEW_SPACE_NAME_RULE, NEW_SPACES_FOLDER, RecentWorkspaces, SpaceStore, TrustStore,
-    Workspace, new_space_name,
+    ApprovalStore, Error, NEW_SPACE_NAME_RULE, NEW_SPACES_FOLDER, RecentWorkspaces, SpaceStore,
+    TrustStore, Workspace, new_space_name,
 };
 
 use crate::welcome::{MAX_NAME_LENGTH, tilde};
@@ -24,6 +25,10 @@ const APP_IDENTIFIER: &str = "com.x8ai.workspace";
 
 /// What `x8ai` keeps of its own, beside the app's stores.
 const SETTINGS_FILE: &str = "terminal.json";
+
+/// The app's stores of trusted folders and agent approvals.
+const TRUST_FILE: &str = "trusted-workspaces.json";
+const APPROVALS_FILE: &str = "agent-approvals.json";
 
 /// An open space.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,10 +141,7 @@ impl Spaces {
         let mut spaces = self.load(SpaceStore::load, "spaces.json");
         let id = spaces.ensure(root).map(|s| s.id);
         let id = self.remember(id);
-        let trusted = root.is_some_and(|root| {
-            self.load(TrustStore::load, "trusted-workspaces.json")
-                .is_trusted(root)
-        });
+        let trusted = root.is_some_and(|root| self.is_trusted(root));
         let name = root.map_or_else(
             || "Home".to_owned(),
             |root| {
@@ -155,6 +157,63 @@ impl Spaces {
             name,
             trusted,
         }
+    }
+
+    /// Whether the user trusted exactly this folder (ADR 0010).
+    pub fn is_trusted(&mut self, root: &Path) -> bool {
+        self.load(TrustStore::load, TRUST_FILE).is_trusted(root)
+    }
+
+    /// Trusts `root`, or stops trusting it. Without trust approvals mean
+    /// nothing, so its agent and MCP approvals go with it, as in the app.
+    pub fn set_trust(&mut self, root: &Path, trusted: bool) -> Result<(), String> {
+        let mut trust = self.load(TrustStore::load, TRUST_FILE);
+        trust.set(root, trusted).map_err(|e| e.to_string())?;
+        if !trusted {
+            let mut approvals = self.load(ApprovalStore::load, APPROVALS_FILE);
+            approvals.revoke_all(root).map_err(|e| e.to_string())?;
+            let (mut mcp, warning) =
+                x8ai_mcp::Approvals::load(self.data_dir.join("mcp-approvals.json"));
+            self.warnings.extend(warning);
+            mcp.revoke_all(root).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Whether the user allowed exactly this launch: this agent, executable and
+    /// arguments, in this folder (docs/agent-runtime.md).
+    pub fn is_approved(&mut self, plan: &LaunchPlan) -> bool {
+        self.load(ApprovalStore::load, APPROVALS_FILE)
+            .is_approved(&plan.approval())
+    }
+
+    /// Whether the agent of `plan` is allowed in its folder at all, for any
+    /// model configuration, as the app's Agents view shows it.
+    pub fn is_approved_for_any_provider(&mut self, plan: &LaunchPlan) -> bool {
+        self.load(ApprovalStore::load, APPROVALS_FILE)
+            .is_approved_for_any_provider(&plan.approval())
+    }
+
+    /// Records the user's approval of `plan` in its folder.
+    pub fn approve(&mut self, plan: &LaunchPlan) -> Result<(), String> {
+        self.load(ApprovalStore::load, APPROVALS_FILE)
+            .approve(&plan.approval())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Forgets `agent`'s approval in `root`.
+    pub fn revoke(&mut self, root: &Path, agent: &str) -> Result<(), String> {
+        self.load(ApprovalStore::load, APPROVALS_FILE)
+            .revoke(root, agent)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Allows `plan` only if its folder is trusted and the user approved it
+    /// there (`x8ai_agents::authorize`), as the stores say now.
+    pub fn authorize<'a>(&mut self, plan: &'a LaunchPlan) -> Result<Authorized<'a>, Denied> {
+        let trust = self.load(TrustStore::load, TRUST_FILE);
+        let approvals = self.load(ApprovalStore::load, APPROVALS_FILE);
+        x8ai_agents::authorize(plan, &trust, &approvals)
     }
 
     fn load<T>(&mut self, load: fn(PathBuf) -> (T, Option<String>), file: &str) -> T {

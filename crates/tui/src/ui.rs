@@ -9,9 +9,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Ask, Mode, Question, Screen};
+use crate::agents::Isolated;
+use crate::app::{App, Mode, Question, Screen};
 use crate::layout::Axis;
-use crate::space::{Focus, Label, SpaceLayout, SpaceView, clip};
+use crate::space::{Focus, Label, PanelLine, PanelRow, Sidebar, SpaceLayout, SpaceView, clip};
 use crate::welcome::tilde;
 
 /// The Welcome's column is at most this wide.
@@ -120,7 +121,7 @@ fn welcome(frame: &mut Frame<'_>, app: &App) {
     // Wrapped lines take more rows than lines; leave room for them.
     let rows: u16 = lines
         .iter()
-        .map(|l| u16::try_from(l.width().div_ceil(usize::from(width.max(1))).max(1)).unwrap_or(1))
+        .map(|l| wrapped_rows(l, usize::from(width)))
         .sum();
     // A little above the middle, where the eye starts.
     let top = area.y + area.height.saturating_sub(rows) / 3;
@@ -243,8 +244,12 @@ fn space(frame: &mut Frame<'_>, app: &App) {
     };
     let layout = view.layout(frame.area());
     header(frame, app, view, &layout);
-    if let Some(files) = layout.files {
-        file_list(frame, app, view, files);
+    if let Some(area) = layout.sidebar {
+        match view.sidebar {
+            Sidebar::Files => file_list(frame, app, view, area),
+            Sidebar::Agents => agents_panel(frame, app, view, area),
+            Sidebar::Hidden => {}
+        }
     }
 
     let theme = app.theme;
@@ -280,10 +285,10 @@ fn space(frame: &mut Frame<'_>, app: &App) {
                 Some(signal) => format!("was ended by {signal}"),
                 None => format!("exited with {}", exit.code),
             };
-            let what = if slot.kind == crate::space::Kind::Shell {
-                "Enter starts a new shell"
-            } else {
-                "Enter closes it"
+            let what = match slot.kind {
+                crate::space::Kind::Shell => "Enter starts a new shell",
+                crate::space::Kind::Agent(..) => "Enter runs it again",
+                _ => "Enter closes it",
             };
             let bar = Line::from(vec![
                 Span::styled(
@@ -354,11 +359,8 @@ fn header(frame: &mut Frame<'_>, app: &App, view: &SpaceView, layout: &SpaceLayo
         };
         frame.render_widget(Paragraph::new(Span::styled(text, style)), rect);
     }
-    let text = view.right_text();
-    let width = u16::try_from(text.width())
-        .unwrap_or(u16::MAX)
-        .min(layout.header.width / 3);
-    let text = clip(&text, usize::from(width));
+    let text = view.right_text(usize::from(layout.header.width / 3));
+    let width = u16::try_from(text.width()).unwrap_or(u16::MAX);
     let style = if space.trusted {
         Style::new().fg(theme.ok())
     } else {
@@ -378,7 +380,7 @@ fn file_list(frame: &mut Frame<'_>, app: &App, view: &SpaceView, area: Rect) {
     let Some(files) = &view.files else {
         return;
     };
-    let focused = view.focus == Focus::Files;
+    let focused = view.focus == Focus::Sidebar;
     let width = usize::from(area.width.saturating_sub(1));
     let name = view.info.name.to_uppercase();
     let title_style = if focused {
@@ -445,6 +447,133 @@ fn file_list(frame: &mut Frame<'_>, app: &App, view: &SpaceView, area: Rect) {
     }
 }
 
+/// The Agents panel: the folder's trust and isolation, the agents, and the
+/// space's sessions.
+fn agents_panel(frame: &mut Frame<'_>, app: &App, view: &SpaceView, area: Rect) {
+    let theme = app.theme;
+    let panel = &view.panel;
+    let focused = view.focus == Focus::Sidebar;
+    let width = usize::from(area.width.saturating_sub(1));
+    let title_style = if focused {
+        Style::new().fg(theme.accent()).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().add_modifier(Modifier::BOLD)
+    };
+    let mut lines = vec![Line::styled(" AGENTS", title_style)];
+    let height = usize::from(area.height.saturating_sub(1));
+    for line in panel.lines().into_iter().skip(panel.offset).take(height) {
+        let shown = match line {
+            PanelLine::Trust => {
+                if view.info.trusted {
+                    Line::styled(
+                        clip(" ● trusted folder", width),
+                        Style::new().fg(theme.ok()),
+                    )
+                } else {
+                    Line::styled(
+                        clip(" ○ not trusted: t to trust it", width),
+                        Style::new().fg(theme.highlight()),
+                    )
+                }
+            }
+            PanelLine::Isolation => {
+                let text = match &panel.isolated {
+                    Some(Isolated::Worktrees { branch }) => format!(
+                        " each session: a worktree from {}",
+                        branch.as_deref().unwrap_or("HEAD")
+                    ),
+                    Some(Isolated::Shared(reason)) => format!(" {reason}: in your files"),
+                    None => " …".to_owned(),
+                };
+                Line::styled(clip(&text, width), muted())
+            }
+            PanelLine::Blank => Line::raw(""),
+            PanelLine::Heading(text) => {
+                Line::styled(format!(" {text}"), muted().add_modifier(Modifier::BOLD))
+            }
+            PanelLine::Empty(text) => Line::styled(clip(&format!("   {text}"), width), muted()),
+            PanelLine::Row(index) => {
+                let (name, detail, dim) = match &panel.rows[index] {
+                    PanelRow::Agent(agent) => {
+                        let detail = match (&agent.program, agent.approved) {
+                            (Err(reason), _) => reason.clone(),
+                            (Ok(_), true) => "allowed".to_owned(),
+                            (Ok(_), false) => "installed".to_owned(),
+                        };
+                        (
+                            agent.definition.name.clone(),
+                            detail,
+                            agent.program.is_err(),
+                        )
+                    }
+                    PanelRow::Session(session) => (
+                        session.name.clone(),
+                        session_detail(session),
+                        session.state != x8ai_agents::SessionState::Running,
+                    ),
+                };
+                let text = format!("   {name}  {detail}");
+                let text = clip(&text, width);
+                let pad = width.saturating_sub(text.width());
+                let mut style = if dim { muted() } else { Style::new() };
+                if index == panel.selected {
+                    style = if focused {
+                        Style::new()
+                            .fg(theme.accent())
+                            .add_modifier(Modifier::REVERSED)
+                    } else {
+                        style.fg(theme.accent())
+                    };
+                }
+                Line::styled(format!("{text}{}", " ".repeat(pad)), style)
+            }
+        };
+        lines.push(shown);
+    }
+    let inner = Rect {
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    frame.render_widget(Paragraph::new(lines), inner);
+    for y in area.top()..area.bottom() {
+        if let Some(cell) = frame
+            .buffer_mut()
+            .cell_mut((area.right().saturating_sub(1), y))
+        {
+            cell.set_symbol("│").set_style(muted());
+        }
+    }
+}
+
+/// A session's state and when it started (its branch's time), short.
+fn session_detail(session: &x8ai_agents::AgentSession) -> String {
+    use x8ai_agents::SessionState;
+    let state = match &session.state {
+        SessionState::Running => "running".to_owned(),
+        SessionState::NotRunning => "not running".to_owned(),
+        SessionState::Exited(exit) if exit.signal.is_some() => "stopped".to_owned(),
+        SessionState::Exited(exit) if exit.code == 0 => "ended".to_owned(),
+        SessionState::Exited(exit) => format!("exited {}", exit.code),
+        SessionState::Failed(_) => "failed".to_owned(),
+    };
+    let when = session
+        .worktree
+        .as_ref()
+        .and_then(|w| w.branch.rsplit('/').next())
+        .and_then(|token| {
+            // YYYYMMDD-HHMMSS-xxxxxx, in UTC.
+            let time = token.get(9..15)?;
+            Some(format!(" · {}:{} UTC", &time[..2], &time[2..4]))
+        })
+        .unwrap_or_else(|| " · in your folder".to_owned());
+    let app = if crate::agents::runs_here(session) {
+        ""
+    } else {
+        " · app"
+    };
+    format!("{state}{when}{app}")
+}
+
 fn status_bar(app: &App, view: &SpaceView) -> Paragraph<'static> {
     let theme = app.theme;
     let key = |k: &str| {
@@ -504,7 +633,24 @@ fn status_bar(app: &App, view: &SpaceView) -> Paragraph<'static> {
             key("esc"),
             text(" back"),
         ]),
-        _ if view.focus == Focus::Files => Line::from(vec![
+        _ if view.focus == Focus::Sidebar && view.sidebar == Sidebar::Agents => Line::from(vec![
+            text(" "),
+            key("enter"),
+            text(" launch, open  "),
+            key("c"),
+            text(" changes  "),
+            key("o"),
+            text(" shell there  "),
+            key("s"),
+            text(" stop  "),
+            key("d"),
+            text(" remove  "),
+            key("t"),
+            text(" trust  "),
+            key("esc"),
+            text(" back"),
+        ]),
+        _ if view.focus == Focus::Sidebar => Line::from(vec![
             text(" "),
             key("↑↓"),
             text(" move  "),
@@ -556,6 +702,7 @@ fn help(frame: &mut Frame<'_>, app: &App) {
         ("z", "the pane alone, or back with the others"),
         ("x", "close the pane"),
         ("f", "the file list: Enter opens a file in $EDITOR"),
+        ("a", "agents: launch, review, stop and remove sessions"),
         ("s", "scroll back"),
         ("h", "the Welcome screen (the space keeps running)"),
         ("q", "quit"),
@@ -591,42 +738,65 @@ fn help(frame: &mut Frame<'_>, app: &App) {
 // Questions
 
 fn ask(frame: &mut Frame<'_>, app: &App, question: &Question) {
-    let names = question.busy.join(", ");
-    let (title, body, yes) = match question.ask {
-        Ask::Quit => (
-            "Quit x8ai?",
-            format!("A program is still running in {names}. Quitting stops it."),
-            " quit   ",
+    let mut lines = vec![
+        Line::styled(
+            question.title.clone(),
+            Style::new().add_modifier(Modifier::BOLD),
         ),
-        Ask::ClosePane(_) => (
-            "Close this pane?",
-            format!("A program is still running in {names}. Closing stops it."),
-            " close   ",
-        ),
-    };
-    let lines = vec![
-        Line::styled(title, Style::new().add_modifier(Modifier::BOLD)),
         Line::raw(""),
-        Line::raw(body),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled(
-                "y",
-                Style::new()
-                    .fg(app.theme.highlight())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(yes),
-            Span::styled(
-                "n",
-                Style::new()
-                    .fg(app.theme.accent())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" stay"),
-        ]),
     ];
-    dialog(frame, lines, app.theme.highlight(), 64);
+    for line in &question.lines {
+        lines.push(Line::raw(line.clone()));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "y",
+            Style::new()
+                .fg(app.theme.highlight())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" {}   ", question.yes)),
+        Span::styled(
+            "n",
+            Style::new()
+                .fg(app.theme.accent())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" cancel"),
+    ]));
+    dialog(frame, lines, app.theme.highlight(), 72);
+}
+
+/// The rows `line` takes when wrapped at word boundaries in `width` columns,
+/// as `Paragraph` wraps it: words move to the next row whole, and a word
+/// longer than a row is broken.
+fn wrapped_rows(line: &Line<'_>, width: usize) -> u16 {
+    let width = width.max(1);
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let mut rows = 1;
+    let mut used = 0;
+    for word in text.split(' ') {
+        let len = word.width();
+        let needed = if used == 0 { len } else { used + 1 + len };
+        if needed <= width {
+            used = needed;
+        } else if len <= width {
+            rows += 1;
+            used = len;
+        } else {
+            // Broken across rows, starting on a new one when this one has text.
+            if used > 0 {
+                rows += 1;
+            }
+            rows += (len - 1) / width;
+            used = len % width;
+            if used == 0 {
+                used = width;
+            }
+        }
+    }
+    u16::try_from(rows).unwrap_or(u16::MAX)
 }
 
 /// A box in the middle of the screen.
@@ -634,11 +804,7 @@ fn dialog(frame: &mut Frame<'_>, lines: Vec<Line<'static>>, border: Color, most:
     let area = frame.area();
     let width = area.width.saturating_sub(4).min(most);
     let inner = usize::from(width.saturating_sub(4)).max(1);
-    let rows: u16 = lines
-        .iter()
-        .map(|l| u16::try_from(l.width().div_ceil(inner).max(1)).unwrap_or(1))
-        .sum::<u16>()
-        + 2;
+    let rows: u16 = lines.iter().map(|l| wrapped_rows(l, inner)).sum::<u16>() + 2;
     let height = rows.min(area.height);
     let rect = Rect::new(
         area.x + (area.width - width) / 2,

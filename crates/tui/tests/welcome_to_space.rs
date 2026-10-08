@@ -62,7 +62,7 @@ fn welcome_new_space_shell_and_back() {
     std::thread::sleep(Duration::from_millis(500));
     x8ai.keys(&format!("{CTRL_G}q"));
     let screen = x8ai.wait_for("Quit x8ai?");
-    assert!(screen.contains("still running in demo"), "{screen}");
+    assert!(screen.contains("Still running: demo (sh)"), "{screen}");
     x8ai.keys("y");
     let exit = x8ai.wait_for_exit();
     assert_eq!(exit.code, 0, "{exit:?}");
