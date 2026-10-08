@@ -8,7 +8,6 @@
 //! terminals, and the user's own shell files, are unchanged.
 
 use std::collections::HashMap;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -16,7 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use x8ai_addons::{ADDONS, Addon, Mac, install_script, shown, terminal_setup, with_requirements};
+use x8ai_addons::{ADDONS, Addon, Mac, install_script, shown, with_requirements};
 use x8ai_agents::environment::var;
 use x8ai_core::addon::{AddonAddResult, AddonList, AddonReach, AddonStatus, SpaceInfo};
 use x8ai_core::error::{CommandError, ErrorCode};
@@ -27,10 +26,6 @@ use x8ai_workspace::{Space, is_space_id};
 use crate::agents::{Agents, home};
 use crate::terminal::{ChannelEvents, Terminals, command_error, info};
 use crate::workspace::Workspaces;
-
-/// The longest a user's startup file can be and still be looked through for
-/// add-ons it already turns on.
-const MAX_STARTUP_BYTES: u64 = 256 * 1024;
 
 /// Installs the user confirmed, until their terminal starts. Managed Tauri state.
 #[derive(Default)]
@@ -60,41 +55,11 @@ fn mac(app: &AppHandle, refresh: bool) -> Mac {
     }
 }
 
-/// Where the user's own zsh files are: their `ZDOTDIR`, or home.
-fn user_zdotdir() -> PathBuf {
-    std::env::var_os("ZDOTDIR")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(home)
-}
-
 fn zsh() -> bool {
-    Path::new(&x8ai_pty::user_shell())
-        .file_name()
-        .is_some_and(|name| name == "zsh")
-}
-
-/// The user's own zsh startup files, joined, to see what they already turn on.
-fn startup_text() -> String {
-    let dir = user_zdotdir();
-    [".zshenv", ".zprofile", ".zshrc", ".zlogin"]
-        .iter()
-        .filter_map(|name| {
-            let file = dir.join(name);
-            let size = std::fs::metadata(&file).ok()?.len();
-            (size <= MAX_STARTUP_BYTES)
-                .then(|| std::fs::read_to_string(file).ok())
-                .flatten()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    x8ai_addons::is_zsh(&x8ai_pty::user_shell())
 }
 
 /// Whether an add-on of `space` is on in its new terminals.
-fn active(addon: &Addon, mac: &Mac, trusted: bool, zsh: bool) -> bool {
-    mac.installed(addon) && (!addon.needs_trust || trusted) && (addon.zshrc.is_none() || zsh)
-}
-
 /// The space with no folder is the user's home, which is theirs: it counts as
 /// trusted for add-ons. A folder counts only once the user trusted it.
 fn trusted(workspaces: &Workspaces, root: Option<&Path>) -> bool {
@@ -125,7 +90,11 @@ fn list(app: &AppHandle, refresh: bool) -> Result<AddonList, CommandError> {
     let mac = mac(app, refresh);
     let trusted = trusted(&workspaces, root.as_deref());
     let zsh = zsh();
-    let startup = if zsh { startup_text() } else { String::new() };
+    let startup = if zsh {
+        x8ai_addons::startup_text(&home())
+    } else {
+        String::new()
+    };
     let addons = ADDONS
         .iter()
         .map(|addon| {
@@ -142,7 +111,7 @@ fn list(app: &AppHandle, refresh: bool) -> Result<AddonList, CommandError> {
                 installed,
                 added,
                 needs_trust: addon.needs_trust,
-                active: added && active(addon, &mac, trusted, zsh),
+                active: added && x8ai_addons::active(addon, &mac, trusted, zsh),
                 in_your_shell: zsh && x8ai_addons::in_your_shell(addon, &startup),
                 install: if installed {
                     Vec::new()
@@ -414,65 +383,28 @@ pub(crate) fn terminal_env(app: &AppHandle) -> Vec<(String, String)> {
             return Vec::new();
         }
     };
-    let mut env = vec![("X8AI_SPACE".to_owned(), space.id.clone())];
+    let only_id = || vec![("X8AI_SPACE".to_owned(), space.id.clone())];
+    // Only a space with add-ons needs what is on the Mac.
     if space.addons.is_empty() {
-        return env;
+        return only_id();
     }
-    let mac = mac(app, false);
-    let trusted = trusted(&workspaces, root.as_deref());
-    let zsh = zsh();
-    let addons: Vec<&Addon> = ADDONS
-        .iter()
-        .filter(|a| space.addons.iter().any(|id| id == a.id) && active(a, &mac, trusted, zsh))
-        .collect();
     let Some(data_dir) = workspaces.data_dir() else {
-        return env;
+        return only_id();
     };
-    let dir = data_dir.join("spaces").join(&space.id).join("zsh");
-    let setup = terminal_setup(
-        &format!("{} ({})", space_info(&space).name, space.id),
-        &addons,
-        &dir,
-        &user_zdotdir(),
-        &mac,
+    let title = format!("{} ({})", space_info(&space).name, space.id);
+    let (env, problem) = x8ai_addons::terminal_env(
+        &x8ai_addons::SpaceTerminal {
+            id: &space.id,
+            title: &title,
+            addons: &space.addons,
+            trusted: trusted(&workspaces, root.as_deref()),
+        },
+        &mac(app, false),
+        zsh(),
+        &data_dir,
     );
-    if !setup.files.is_empty()
-        && let Err(error) = write_files(&data_dir.join("spaces"), &dir, &setup.files)
-    {
-        workspaces.warn(format!(
-            "This terminal's shell add-ons are off: {} could not be written ({error})",
-            dir.display()
-        ));
-        env.extend(
-            setup
-                .env
-                .into_iter()
-                .filter(|(name, _)| name != "ZDOTDIR" && name != "X8AI_USER_ZDOTDIR"),
-        );
-        return env;
+    if let Some(problem) = problem {
+        workspaces.warn(problem);
     }
-    env.extend(setup.env);
     env
-}
-
-/// Writes the space's zsh files, readable only by the user, each replaced whole.
-fn write_files(spaces: &Path, dir: &Path, files: &[(&'static str, String)]) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    std::fs::set_permissions(spaces, std::fs::Permissions::from_mode(0o700))?;
-    for (name, text) in files {
-        let temp = dir.join(format!("{name}.tmp-{}", std::process::id()));
-        let written = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&temp)
-            .and_then(|mut out| std::io::Write::write_all(&mut out, text.as_bytes()))
-            .and_then(|()| std::fs::rename(&temp, dir.join(name)));
-        if written.is_err() {
-            let _ = std::fs::remove_file(&temp);
-        }
-        written?;
-    }
-    Ok(())
 }

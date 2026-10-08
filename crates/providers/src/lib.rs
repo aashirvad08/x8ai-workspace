@@ -20,6 +20,12 @@ pub mod settings;
 pub use builtin::builtin;
 pub use settings::{ProviderSettings, Settings};
 
+/// The Keychain service that holds provider API keys, one generic password per
+/// provider. The app and `x8ai` read and write the same items.
+pub const KEYCHAIN_SERVICE: &str = "com.x8ai.workspace.providers";
+/// The label those items show in Keychain Access.
+pub const KEYCHAIN_LABEL: &str = "x8ai Workspace provider key";
+
 use x8ai_core::model::{ModelDefinition, ModelProviderDefinition, ModelSource};
 
 /// A provider as the webview and the catalog see it: whether it has what it

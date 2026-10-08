@@ -250,16 +250,21 @@ fn launch_plan(
 
 /// A launch's MCP servers: every one attached to the session, those that will
 /// run, exactly as they would, and the others with the reason.
-struct McpSelection {
-    attached: Vec<IntegrationId>,
-    prepared: Vec<Prepared>,
-    skipped: Vec<(IntegrationId, String)>,
+type McpSelection = x8ai_mcp::Selection;
+
+/// What `definition`'s agent can do with MCP servers, as its adapter says.
+fn agent_mcp(definition: &AgentDefinition) -> x8ai_mcp::AgentMcp<'_> {
+    let transports = &definition.capabilities.mcp_transports;
+    x8ai_mcp::AgentMcp {
+        name: &definition.name,
+        support: adapter::mcp_support(definition.id.as_str(), transports),
+        transports,
+    }
 }
 
 /// The servers a new session of `definition` in `root` gets: every enabled global
-/// and workspace server the agent can use, and the session servers `chosen`.
-/// Choosing servers for an agent that cannot use them is refused; the others are
-/// simply not attached to it.
+/// and workspace server the agent can use, and the session servers `chosen`
+/// (`x8ai_mcp::selection::for_new_session`).
 fn mcp_for_new_session(
     mcp: &Mcp,
     definition: &AgentDefinition,
@@ -274,42 +279,19 @@ fn mcp_for_new_session(
                 .map_err(|e| CommandError::new(ErrorCode::InvalidInput, e.to_string()))
         })
         .collect::<Result<_, _>>()?;
-    let transports = &definition.capabilities.mcp_transports;
-    if let Err(reason) = adapter::mcp_support(definition.id.as_str(), transports) {
-        if chosen.is_empty() {
-            return Ok(McpSelection {
-                attached: Vec::new(),
-                prepared: Vec::new(),
-                skipped: Vec::new(),
-            });
+    x8ai_mcp::selection::for_new_session(
+        &mcp.servers(),
+        &agent_mcp(definition),
+        root,
+        &chosen,
+        mcp.secrets.as_ref(),
+        path,
+    )
+    .map_err(|error| match error {
+        x8ai_mcp::ChoiceError::Unsupported { agent, reason } => {
+            configure_error(ConfigureError::McpUnsupported { agent, reason })
         }
-        return Err(configure_error(ConfigureError::McpUnsupported {
-            agent: definition.name.clone(),
-            reason,
-        }));
-    }
-    let servers = mcp.servers();
-    let selected = x8ai_mcp::attach(&servers, root, &chosen)
-        .map_err(|e| CommandError::new(ErrorCode::InvalidInput, e.to_string()))?;
-    let mut attached = Vec::new();
-    for server in selected {
-        if transports.contains(&server.transport.kind()) {
-            attached.push(server.clone());
-        } else if chosen.contains(&server.id) {
-            return Err(CommandError::new(
-                ErrorCode::InvalidInput,
-                format!(
-                    "{} cannot use {}: it does not support that transport",
-                    definition.name, server.name
-                ),
-            ));
-        }
-    }
-    let (prepared, skipped) = prepare_all(mcp, &attached, path);
-    Ok(McpSelection {
-        attached: attached.iter().map(|s| s.id.clone()).collect(),
-        prepared,
-        skipped,
+        other => CommandError::new(ErrorCode::InvalidInput, other.to_string()),
     })
 }
 
@@ -322,63 +304,14 @@ fn mcp_for_run(
     attached: &[IntegrationId],
     path: Option<&str>,
 ) -> McpSelection {
-    let servers = mcp.servers();
-    let (kept, mut skipped) = x8ai_mcp::still_attached(&servers, root, attached);
-    let transports = &definition.capabilities.mcp_transports;
-    let supported = adapter::mcp_support(definition.id.as_str(), transports);
-    let mut usable = Vec::new();
-    for server in kept {
-        match &supported {
-            Err(reason) => skipped.push((server.id.clone(), reason.clone())),
-            Ok(()) if !transports.contains(&server.transport.kind()) => {
-                skipped.push((
-                    server.id.clone(),
-                    "the agent does not support its transport".to_owned(),
-                ));
-            }
-            Ok(()) => usable.push(server.clone()),
-        }
-    }
-    let (prepared, more) = prepare_all(mcp, &usable, path);
-    skipped.extend(more);
-    McpSelection {
-        attached: attached.to_vec(),
-        prepared,
-        skipped,
-    }
-}
-
-/// Each server as it would run; one whose command is not found or whose secret
-/// is not saved is left out, with the reason. Nothing half configured runs.
-fn prepare_all(
-    mcp: &Mcp,
-    servers: &[x8ai_core::mcp::McpServer],
-    path: Option<&str>,
-) -> (Vec<Prepared>, Vec<(IntegrationId, String)>) {
-    let mut prepared = Vec::new();
-    let mut skipped = Vec::new();
-    for server in servers {
-        let missing: Vec<&str> = server
-            .secret_names()
-            .filter(|name| {
-                !mcp.secrets
-                    .contains(&x8ai_mcp::secret_account(server.id.as_str(), name))
-                    .unwrap_or(false)
-            })
-            .collect();
-        if !missing.is_empty() {
-            skipped.push((
-                server.id.clone(),
-                format!("secret not saved: {}", missing.join(", ")),
-            ));
-            continue;
-        }
-        match x8ai_mcp::prepare(server, path) {
-            Ok(p) => prepared.push(p),
-            Err(error) => skipped.push((server.id.clone(), error.to_string())),
-        }
-    }
-    (prepared, skipped)
+    x8ai_mcp::selection::for_run(
+        &mcp.servers(),
+        &agent_mcp(definition),
+        root,
+        attached,
+        mcp.secrets.as_ref(),
+        path,
+    )
 }
 
 /// What the approval dialog says about MCP servers: each one's transport, the

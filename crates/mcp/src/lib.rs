@@ -18,12 +18,14 @@ pub mod environment;
 mod files;
 pub mod registry;
 pub mod runtime;
+pub mod selection;
 pub mod session;
 
 pub use approvals::{Approvals, Material, MaterialTransport};
 pub use environment::{ServerEnvironment, environment, secret_account};
 pub use registry::Registry;
 pub use runtime::{Endpoint, Launch, Limits, McpRuntime};
+pub use selection::{AgentMcp, ChoiceError, Selection};
 pub use session::{
     Authorized, Denied, Prepared, attach, authorize, prepare, still_attached, unapproved,
 };

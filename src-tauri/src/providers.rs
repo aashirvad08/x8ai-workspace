@@ -18,15 +18,11 @@ use x8ai_core::error::{CommandError, ErrorCode};
 use x8ai_core::model::{
     CredentialState, ModelProviderDefinition, ProviderAuth, ProviderList, ProviderStatus,
 };
-use x8ai_providers::Settings;
 use x8ai_providers::ollama::{self, Detection};
+use x8ai_providers::{KEYCHAIN_LABEL, KEYCHAIN_SERVICE, Settings};
 use x8ai_secrets::{Cached, Keychain, SecretStore, SecretValue};
 
 use crate::workspace::Workspaces;
-
-/// Groups the app's Keychain items; one generic password per provider.
-pub const KEYCHAIN_SERVICE: &str = "com.x8ai.workspace.providers";
-const KEYCHAIN_LABEL: &str = "x8ai Workspace provider key";
 
 /// Built-in providers, the Keychain, the non-secret settings, and the last local
 /// detection. Managed Tauri state.
