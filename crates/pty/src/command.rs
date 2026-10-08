@@ -15,6 +15,34 @@ use crate::locale;
 /// in one starts as a session of its own. Nothing else is removed.
 pub const CLAUDE_CODE_CHILD_SESSION: &str = "CLAUDE_CODE_CHILD_SESSION";
 
+/// Variables that point at the terminal the app itself runs in, when it was
+/// started from one (`x8ai` always is; the desktop app under `pnpm tauri dev`).
+/// A session is a terminal of the app's own, so no program in it is told it is
+/// inside that one: with `TMUX` set, `tmux` refuses to start ("sessions should
+/// be nested with care"), and kitty's tools would draw images this terminal
+/// cannot show. `TERM`, `TERM_PROGRAM` and the like are set for every session
+/// instead.
+pub const HOST_TERMINAL: &[&str] = &[
+    "TERM_SESSION_ID",
+    "ITERM_SESSION_ID",
+    "ITERM_PROFILE",
+    "LC_TERMINAL",
+    "LC_TERMINAL_VERSION",
+    "TMUX",
+    "TMUX_PANE",
+    "STY",
+    "KITTY_WINDOW_ID",
+    "KITTY_PID",
+    "KITTY_PUBLIC_KEY",
+    "WEZTERM_PANE",
+    "WEZTERM_UNIX_SOCKET",
+    "ALACRITTY_WINDOW_ID",
+    "ALACRITTY_SOCKET",
+    "ZELLIJ",
+    "ZELLIJ_SESSION_NAME",
+    "ZELLIJ_PANE_ID",
+];
+
 /// What a session runs.
 #[derive(Debug, Clone)]
 pub enum Program {
@@ -124,6 +152,9 @@ impl Program {
             cmd.env("LANG", lang);
         }
         cmd.env_remove(CLAUDE_CODE_CHILD_SESSION);
+        for name in HOST_TERMINAL {
+            cmd.env_remove(name);
+        }
         (cmd, path, cwd)
     }
 }

@@ -33,16 +33,22 @@ impl AppInfo {
         }
     }
 
-    /// The account's full name, from the first field of its GECOS entry (where
-    /// macOS and Linux keep it), trimmed; `None` if it is empty.
+    /// The account's full name (see [`account_name`]).
     pub fn with_user_name(mut self, gecos: Option<&str>) -> Self {
-        self.user_name = gecos
-            .and_then(|g| g.split(',').next())
-            .map(str::trim)
-            .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
-            .map(str::to_owned);
+        self.user_name = gecos.and_then(account_name);
         self
     }
+}
+
+/// The account's full name, from the first field of its GECOS entry (where
+/// macOS and Linux keep it), trimmed; `None` if it is empty.
+pub fn account_name(gecos: &str) -> Option<String> {
+    gecos
+        .split(',')
+        .next()
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+        .map(str::to_owned)
 }
 
 /// App-level events delivered on the channel given to `app_subscribe`.

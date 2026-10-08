@@ -22,8 +22,8 @@ use x8ai_core::workspace::{
     WorkspaceEvent, WorkspaceInfo,
 };
 use x8ai_workspace::{
-    ApprovalStore, RecentWorkspaces, Removal, SearchLimits, Space, SpaceStore, TrustStore, Watcher,
-    Workspace,
+    ApprovalStore, NEW_SPACE_NAME_RULE, NEW_SPACES_FOLDER, RecentWorkspaces, Removal, SearchLimits,
+    Space, SpaceStore, TrustStore, Watcher, Workspace, new_space_name,
 };
 
 use crate::agents::Agents;
@@ -303,9 +303,6 @@ pub async fn workspace_open(
     Ok(Some(info))
 }
 
-/// Where `/new <name>` makes its folders, in the home folder.
-pub(crate) const NEW_SPACES_FOLDER: &str = "Workspaces";
-
 /// Makes a new, empty folder `~/Workspaces/<name>` and opens it as a new space
 /// (`/new <name>` on the welcome screen). The webview chooses only the name, a
 /// single folder name, never where the folder is; and only a folder made here
@@ -318,7 +315,9 @@ pub async fn workspace_create(
     agents: State<'_, Agents>,
     terminals: State<'_, Terminals>,
 ) -> Result<WorkspaceInfo, CommandError> {
-    let name = new_folder_name(&name)?.to_owned();
+    let name = new_space_name(&name)
+        .ok_or_else(|| CommandError::new(ErrorCode::InvalidInput, NEW_SPACE_NAME_RULE))?
+        .to_owned();
     let parent = crate::agents::home().join(NEW_SPACES_FOLDER);
     let path = parent.join(&name);
     let shown = format!("~/{NEW_SPACES_FOLDER}/{name}");
@@ -345,26 +344,6 @@ pub async fn workspace_create(
     let info = workspaces.install(workspace, events)?;
     agents.stop_outside(&terminals, Path::new(&info.root));
     Ok(info)
-}
-
-/// `name` if it can be the name of a new folder: one visible folder name, no
-/// path, nothing a shell or Finder would trip over.
-fn new_folder_name(name: &str) -> Result<&str, CommandError> {
-    let name = name.trim();
-    let fine = !name.is_empty()
-        && name.chars().count() <= 64
-        && !name.starts_with('.')
-        && !name.contains('/')
-        && !name.contains(':')
-        && !name.chars().any(char::is_control);
-    if fine {
-        Ok(name)
-    } else {
-        Err(CommandError::new(
-            ErrorCode::InvalidInput,
-            "a new space needs a folder name: letters, digits, spaces, - or _, without / or a leading dot",
-        ))
-    }
 }
 
 /// Closes the open folder: its agents stop, as when another folder opens, and
@@ -695,26 +674,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{new_folder_name, picker_start};
-
-    #[test]
-    fn a_new_space_is_named_by_one_folder_name() {
-        assert_eq!(new_folder_name("  demo app ").unwrap(), "demo app");
-        assert_eq!(new_folder_name("gym-RL_2").unwrap(), "gym-RL_2");
-        for bad in [
-            "",
-            "  ",
-            ".hidden",
-            "..",
-            "a/b",
-            "../etc",
-            "a:b",
-            "x\u{0}y",
-            &"n".repeat(65),
-        ] {
-            assert!(new_folder_name(bad).is_err(), "{bad:?}");
-        }
-    }
+    use super::picker_start;
 
     #[test]
     fn the_picker_starts_where_cd_points_or_the_nearest_folder_above() {

@@ -74,6 +74,26 @@ pub fn is_space_id(id: &str) -> bool {
     })
 }
 
+/// Where `/new <name>` makes its folders, in the home folder.
+pub const NEW_SPACES_FOLDER: &str = "Workspaces";
+
+/// What a new space's folder may be named, for an error message.
+pub const NEW_SPACE_NAME_RULE: &str =
+    "a new space needs a folder name: letters, digits, spaces, - or _, without / or a leading dot";
+
+/// `name`, trimmed, if it can name a new space's folder (`/new <name>`): one
+/// visible folder name, no path, nothing a shell or Finder would trip over.
+pub fn new_space_name(name: &str) -> Option<&str> {
+    let name = name.trim();
+    let fine = !name.is_empty()
+        && name.chars().count() <= 64
+        && !name.starts_with('.')
+        && !name.contains('/')
+        && !name.contains(':')
+        && !name.chars().any(char::is_control);
+    fine.then_some(name)
+}
+
 /// Whether `id` is shaped as an add-on id (`starship`, `nerd-font`). Which ids
 /// exist is the add-on registry's business.
 fn is_addon_id(id: &str) -> bool {
@@ -229,6 +249,25 @@ mod tests {
         let (store, warning) = SpaceStore::load(dir.path().join("spaces.json"));
         assert!(warning.is_none());
         (dir, store)
+    }
+
+    #[test]
+    fn a_new_space_is_named_by_one_folder_name() {
+        assert_eq!(new_space_name("  demo app "), Some("demo app"));
+        assert_eq!(new_space_name("gym-RL_2"), Some("gym-RL_2"));
+        for bad in [
+            "",
+            "  ",
+            ".hidden",
+            "..",
+            "a/b",
+            "../etc",
+            "a:b",
+            "x\u{0}y",
+            &"n".repeat(65),
+        ] {
+            assert_eq!(new_space_name(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

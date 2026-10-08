@@ -20,7 +20,9 @@ mod workspace;
 
 pub use error::{ConflictReason, Error};
 pub use search::SearchLimits;
-pub use spaces::{Space, SpaceStore, is_space_id};
+pub use spaces::{
+    NEW_SPACE_NAME_RULE, NEW_SPACES_FOLDER, Space, SpaceStore, is_space_id, new_space_name,
+};
 pub use store::{
     Approval, ApprovalStore, ApprovedProvider, MAX_RECENT, RecentWorkspaces, TrustStore,
 };
