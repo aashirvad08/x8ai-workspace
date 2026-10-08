@@ -20,6 +20,17 @@ are part of every phase, not a final pass (`docs/security.md`).
 | 11 | Skills, templates and presets | Planned |
 | 12 | Hardening, distribution and Linux | Planned |
 
+The terminal version, `x8ai` (ADR 0020), comes in steps of its own, alongside
+the phases. Each step is pushed and released before the next starts.
+
+| Step | Theme | Status |
+| --- | --- | --- |
+| T1 | `x8ai`: the Welcome screen, spaces with a shell, the Homebrew tap | **Complete** |
+| T2 | Split panes and tabs, the file list and `$EDITOR` | Next |
+| T3 | Agents: trust, the launch dialog, sessions and reviewing changes | Planned |
+| T4 | Models, MCP, skills, the catalog and add-ons | Planned |
+| T5 | A background process: spaces outlive the window, and `x8ai` reattaches | Planned |
+
 ---
 
 ## Phase 0 — Foundation
@@ -371,3 +382,25 @@ containers or VMs for agent sessions). An external security review. A Linux buil
 - The external review's high and critical findings are fixed.
 - The Linux build passes CI and runs the terminal and an agent session end to end.
 - The sandboxing decision is recorded in an ADR, whether it is adopted or not.
+
+## Terminal step T1 — `x8ai`, the Welcome and a space's shell
+
+**Objective.** One command installs the workspace, and it runs in the user's own
+terminal: the Welcome screen, then a space with a real shell.
+
+**Major components.** `crates/tui` (the `x8ai` command): ratatui over crossterm,
+panes as `x8ai-pty` sessions parsed by `alacritty_terminal`, the Ctrl-g prefix,
+the app's stores shared through its data folder. A release workflow that builds
+a universal binary from a tag, and a Homebrew formula in `aashirvad08/homebrew-tap`.
+
+**Acceptance criteria.**
+- `brew install aashirvad08/tap/x8ai` installs it on Apple silicon and Intel;
+  `x8ai` opens the Welcome screen in the terminal.
+- `/cd` (a recent space by name or path, or a typed folder), `/new` and `/home`
+  open a space with a login shell in its folder and `X8AI_SPACE` set; Ctrl-g h
+  shows the Welcome while the shell keeps running; `/cd` back finds it as left.
+- Recent spaces, ids and trust are the app's own.
+- Quitting asks first while a program runs in a shell; every shell is hung up
+  on quit.
+- End-to-end test of the real binary on a PTY (`crates/tui/tests`).
+

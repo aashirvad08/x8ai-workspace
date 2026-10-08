@@ -15,6 +15,9 @@ and it doesn't favor any vendor.
 
 ## What you can do
 
+- **Or stay in your terminal.** `brew install aashirvad08/tap/x8ai`, then run
+  `x8ai`: the same Welcome screen and spaces, with their shells, in the terminal
+  you already use (see [x8ai in your terminal](#x8ai-in-your-terminal)).
 - **Start from the Welcome screen.** Type `/cd` to open a folder as your space
   and `/home` for the workspace with no folder; ⇧⌘H brings it back any time.
 - **Work in real terminals.** Full terminals with tabs and split panes, running
@@ -51,8 +54,22 @@ Any other command-line tool runs in the app's terminals as usual.
 
 ## Install
 
-There is no downloadable release yet, so you build the app from source. The build
-takes a few minutes the first time.
+### In your terminal
+
+```sh
+brew install aashirvad08/tap/x8ai
+x8ai
+```
+
+`x8ai` runs on macOS 13 or later, on Apple silicon and Intel. It is the
+workspace as a full-screen program in the terminal you already use (see
+[x8ai in your terminal](#x8ai-in-your-terminal)). Agents, models, MCP servers,
+skills and add-ons are in the app for now, and come to `x8ai` step by step.
+
+### The app
+
+There is no downloadable release of the app yet, so you build it from source.
+The build takes a few minutes the first time.
 
 **You need:**
 
@@ -83,6 +100,34 @@ open "target/release/bundle/macos/x8ai Workspace.app"
 or Codex. Follow each agent's own instructions. The app doesn't install them.
 
 ---
+
+## x8ai in your terminal
+
+`x8ai` starts on the Welcome screen. Type a command:
+
+| Command | What it does |
+| --- | --- |
+| `/cd <folder>` | Opens a space: a recent one by its name or path (`/cd gym`), or any folder (`/cd ~/code/app`, `/cd ../app`; relative to where you started `x8ai`). Tab completes folders. |
+| `/new <name>` | Makes a new, empty space in `~/Workspaces/<name>` and opens it. |
+| `/home` | The workspace with no folder, with a shell in your home folder. |
+| `/name <your name>` | How the Welcome greets you. |
+| `/quit` | Leaves `x8ai`. So does Ctrl-c on an empty line. |
+
+On an empty line, ↑↓ and Enter open one of your recent spaces, and Esc goes
+back to the space that is open. `x8ai <folder>` opens a folder right away.
+
+A space shows its shell. Every key goes to the shell except **Ctrl-g**, after
+which:
+
+| Key | What it does |
+| --- | --- |
+| `h` | The Welcome screen. The space keeps running, and `/cd` back finds its shell as you left it. |
+| `s` | Scroll back through the shell's output (↑↓, PgUp PgDn, `g` `G`; Esc to go back). |
+| `q` | Quit. If a program is still running, you're asked first. |
+| Ctrl-g | Sends Ctrl-g to the shell. |
+
+`x8ai` shares the app's recent spaces, space ids and trust, so a folder opened
+in one is recent in the other.
 
 ## Getting started
 
@@ -307,6 +352,7 @@ the Keychain items in Keychain Access.
 
 ```sh
 pnpm tauri dev      # run the app with hot reload
+cargo run -p x8ai   # run x8ai, the terminal version, in this terminal
 pnpm check          # everything CI checks: types, tests, formatting, lints
 pnpm test           # frontend tests only
 cargo test --workspace
@@ -316,12 +362,18 @@ cargo test --workspace
 terminal needs permission to control Finder (System Settings → Privacy &
 Security → Automation).
 
+To release `x8ai`, bump the version in `Cargo.toml` and push a tag `v<version>`.
+CI builds a universal binary (`scripts/release/build-x8ai.sh`), publishes it as
+a GitHub release, and updates the formula in `aashirvad08/homebrew-tap` when
+the `HOMEBREW_TAP_TOKEN` secret is set (`.github/workflows/release.yml`).
+
 The app is a [Tauri](https://tauri.app) app with a Rust core and a React +
 TypeScript interface:
 
 ```
 crates/      the Rust core: terminals, workspace files, agents, Git, Keychain,
              providers, MCP, skills and the catalog (none of it depends on Tauri)
+crates/tui/  x8ai, the terminal version: the same core in a full-screen program
 src-tauri/   the desktop app: window, native commands and their permissions
 src/         the interface (React + TypeScript)
 docs/        design documents and decision records

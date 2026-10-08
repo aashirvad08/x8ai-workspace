@@ -27,3 +27,4 @@ NNNN), **Context**, **Decision**, **Consequences**, and **Alternatives considere
 | [0017](0017-platform-managed-mcp.md) | MCP servers managed by the app, owned by agent sessions | Accepted |
 | [0018](0018-catalog-is-discovery-not-execution.md) | The catalog is discovery and orchestration, not execution | Accepted |
 | [0019](0019-add-ons.md) | Add-ons: tools for one space's terminals, installed when the user adds them | Accepted |
+| [0020](0020-terminal-version.md) | `x8ai`: the workspace in the terminal, installed with Homebrew | Accepted |

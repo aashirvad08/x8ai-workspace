@@ -55,6 +55,9 @@ These protections exist and are verified:
 | No terminal content is persisted. Scrollback (10,000 lines) exists only in webview memory. Native output buffering is bounded by flow control (512 KiB per session). | `src/terminal/TerminalView.tsx`, `crates/pty/src/session.rs` | Tests (`output_pauses_until_acknowledged`) |
 | OSC 52 clipboard writes and clickable links are off: the xterm.js add-ons that implement them are not installed | `package.json` | Review |
 | Terminal processes do not outlive their session or the app. Close, reload, quit and crash all hang up the terminal, and a shell ignoring SIGHUP gets SIGKILL after 2 s. A closed session keeps reading its terminal until the end of output, so a shell that writes while exiting cannot hang (macOS waits for unread terminal output on the last close). | `crates/pty`, `src-tauri/src/lib.rs` | Tests (`a_shell_closed_while_starting_finishes_exiting`, …); manual `ps` checks after Cmd+Q, SIGTERM and Ctrl+D |
+| **A program in an `x8ai` pane cannot reach the user's own terminal.** Its output is parsed by the pane's emulator and drawn as cells, so titles, colors, clipboard requests and replies never pass through; OSC 52 is off. The emulator, not the user's terminal, answers its queries. Pastes into it are bracketed when it asks, with ESC characters removed so a paste cannot end itself early (ADR 0020). | `crates/tui/src/pane.rs`, `crates/tui/src/keys.rs` | Tests (`the_program_gets_answers_to_its_queries`, `a_bracketed_paste_is_marked_and_cannot_end_itself`) |
+| **A terminal the app opens is not told it is inside the one the app runs in.** `TMUX`, `KITTY_WINDOW_ID`, `TERM_SESSION_ID` and the like (`HOST_TERMINAL`) are removed from every session, in both hosts. | `crates/pty/src/command.rs` | Test (`a_session_is_not_told_it_runs_inside_the_apps_own_terminal`) |
+| **In `x8ai`, a folder opens only when the user types it** (`/cd <folder>`, `x8ai <folder>`): there is no webview, so the command line is the user, as in `cd`. Opening a folder never trusts it. A recent space reopens only if its path still leads to the same folder. `/new` makes only a new folder in `~/Workspaces` (ADR 0020). | `crates/tui/src/spaces.rs`, `crates/workspace` | Tests (`a_recent_space_that_is_gone_leaves_recent`, `a_new_space_is_made_in_workspaces_once`, end to end: `welcome_new_space_shell_and_back`) |
 | Content Security Policy: `script-src 'self'` with Tauri's nonces and hashes (no inline or remote scripts, no `eval`), no plugins or frames, IPC-only `connect-src`. Inline styles are allowed for xterm.js (ADR 0007). | `src-tauri/tauri.conf.json` | Production build runs under it |
 | Only `src/native/` can talk to Tauri, only `src/terminal/` uses xterm.js, only `src/editor/` uses CodeMirror, and nothing but `main.tsx` depends on the UI layer | `src/architecture.test.ts` | CI |
 | Integration definitions reference secrets by name only. There is no field that can hold a secret value. | `crates/core/src/{launch,model}.rs` | Type design, tests |
@@ -318,6 +321,14 @@ tasks or hooks.
   enable the `devtools` feature.
 
 ### 3.10 Distribution and updates
+
+**Enforced (ADR 0020):** `x8ai` is built by CI from a tag whose name must match
+the crate's version, after its tests pass, as one universal binary signed ad
+hoc, and published as a GitHub release with its SHA-256. The Homebrew formula
+pins that checksum, so `brew install` refuses a different file. The tap is
+updated only with a token scoped to the tap repository. A formula's files are
+not quarantined, so Gatekeeper does not check them; a signed and notarized
+build remains Phase 12's.
 
 **Phase 12:** Developer ID signing, notarization, the hardened runtime with a minimal
 entitlement set, and signed updates (Tauri updater with signature verification,
