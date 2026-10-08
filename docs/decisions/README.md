@@ -30,3 +30,4 @@ NNNN), **Context**, **Decision**, **Consequences**, and **Alternatives considere
 | [0020](0020-terminal-version.md) | `x8ai`: the workspace in the terminal, installed with Homebrew | Accepted |
 | [0021](0021-panes-files-and-the-editor-in-x8ai.md) | Panes, tabs, the file list and the editor in `x8ai` | Accepted |
 | [0022](0022-agents-in-x8ai.md) | Agents in `x8ai` | Accepted |
+| [0023](0023-models-mcp-skills-and-add-ons-in-x8ai.md) | Models, MCP, skills, the catalog and add-ons in `x8ai` | Accepted |

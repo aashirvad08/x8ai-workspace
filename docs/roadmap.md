@@ -28,8 +28,8 @@ the phases. Each step is pushed and released before the next starts.
 | T1 | `x8ai`: the Welcome screen, spaces with a shell, the Homebrew tap | **Complete** |
 | T2 | Split panes and tabs, the file list and `$EDITOR` | **Complete** |
 | T3 | Agents: trust, the launch dialog, sessions and reviewing changes | **Complete** |
-| T4 | Models, MCP, skills, the catalog and add-ons | Next |
-| T5 | A background process: spaces outlive the window, and `x8ai` reattaches | Planned |
+| T4 | Models, MCP, skills, the catalog and add-ons | **Complete** |
+| T5 | A background process: spaces outlive the window, and `x8ai` reattaches | Next |
 
 ---
 
@@ -450,3 +450,33 @@ review in `less`.
 - End-to-end test with a stand-in agent; checked once with the real Claude
   Code (drawn, stopped, removed).
 
+## Terminal step T4 — models, MCP, skills, the catalog and add-ons
+
+**Objective.** What the app's Models, MCP, Catalog and Add-ons views do, in
+`x8ai`, and agents launched with a model, MCP servers and skills (ADR 0023).
+
+**Major components.** The list panels (`app/panels.rs`, `listing.rs`), forms
+and pickers (`dialog.rs`), `services.rs` over the app's stores, the Keychain
+and an MCP runtime of `x8ai`'s own, with `x8ai --mcp-bridge` as the bridge.
+Logic both hosts need moved into the crates: a session's MCP servers
+(`x8ai_mcp::selection`) and a space's terminal environment
+(`x8ai_addons::space`).
+
+**Acceptance criteria.**
+- A provider's key is saved in the Keychain from a form that never shows it;
+  model ids are added and removed; local models are looked for on request.
+- MCP servers are added, edited, turned on and off and removed; their secrets
+  go to the Keychain; a session's servers run with its agent, reached through
+  the bridge, and stop with it.
+- The catalog lists agents, models, MCP servers and skills with their state,
+  filters, and writes the user's skills.
+- A model, MCP servers and skills chosen for an agent's next launch are listed
+  in its approval question and reach it; a session made with them runs again
+  with them.
+- Add-ons are added and removed per space and given to another (`/share`); one
+  not installed is installed with Homebrew in a tab, only after the exact
+  command is shown and agreed to.
+- Everything is the app's own: stores, Keychain items, approvals.
+- End-to-end tests of the real binary, with secrets in a file (debug builds
+  only): the key, model, skill and an MCP server's secret reach a stand-in
+  agent; add-ons are added, removed and shared.

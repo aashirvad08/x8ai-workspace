@@ -133,7 +133,9 @@ these checks. The agent contacts the URL; the app never does.
    app makes a directory `~/.x8ai/mcp/<session>-<token>/` (0700) with one socket
    per stdio server (0600). The agent is told to run the **bridge** for each: the
    app's own executable with `--mcp-bridge <socket>`, a command that connects its
-   stdin and stdout to the socket and knows nothing else.
+   stdin and stdout to the socket and knows nothing else. `x8ai`, the terminal
+   version, does the same for the sessions it runs, with its own runtime, its
+   own binary as the bridge and its own folder, `~/.x8ai/mcp-<pid>/` (ADR 0023).
 3. When the agent **connects**, the app checks the connecting process: it must be
    the session's agent or one of its descendants (the peer process id, from
    `LOCAL_PEERPID` on macOS or `SO_PEERCRED` on Linux, walked up to the agent's).
@@ -322,6 +324,7 @@ supplies a command, a path, a socket or a value.
 | Keychain, `com.x8ai.workspace.mcp` | secret values | — |
 | `~/.x8ai/worktrees/…/<name>.json` | the session's server ids | configuration, secrets |
 | `~/.x8ai/mcp/<session>-<token>/*.sock` | sockets, while the agent runs | anything else |
+| `~/.x8ai/mcp-<pid>/<session>-<token>/*.sock` | the same, for sessions `x8ai` runs (ADR 0023); removed when it quits | anything else |
 
 ## Known limitations
 

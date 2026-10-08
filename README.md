@@ -16,8 +16,9 @@ and it doesn't favor any vendor.
 ## What you can do
 
 - **Or stay in your terminal.** `brew install aashirvad08/tap/x8ai`, then run
-  `x8ai`: the same Welcome screen and spaces, with their shells, in the terminal
-  you already use (see [x8ai in your terminal](#x8ai-in-your-terminal)).
+  `x8ai`: the same Welcome screen, spaces, agents, models, MCP servers, skills
+  and add-ons, in the terminal you already use (see
+  [x8ai in your terminal](#x8ai-in-your-terminal)).
 - **Start from the Welcome screen.** Type `/cd` to open a folder as your space
   and `/home` for the workspace with no folder; ⇧⌘H brings it back any time.
 - **Work in real terminals.** Full terminals with tabs and split panes, running
@@ -63,9 +64,8 @@ x8ai
 
 `x8ai` runs on macOS 13 or later, on Apple silicon and Intel. It is the
 workspace as a full-screen program in the terminal you already use (see
-[x8ai in your terminal](#x8ai-in-your-terminal)), agents included. Choosing a
-model, MCP servers, skills and add-ons are in the app for now, and come to
-`x8ai` next.
+[x8ai in your terminal](#x8ai-in-your-terminal)): agents, with the model, MCP
+servers and skills you choose, and add-ons. `brew upgrade x8ai` updates it.
 
 ### The app
 
@@ -112,6 +112,7 @@ or Codex. Follow each agent's own instructions. The app doesn't install them.
 | `/new <name>` | Makes a new, empty space in `~/Workspaces/<name>` and opens it. |
 | `/home` | The workspace with no folder, with a shell in your home folder. |
 | `/name <your name>` | How the Welcome greets you. |
+| `/share <space>` | Gives the open space's add-ons to another space. |
 | `/quit` | Leaves `x8ai`. So does Ctrl-c on an empty line. |
 
 On an empty line, ↑↓ and Enter open one of your recent spaces, and Esc goes
@@ -129,6 +130,7 @@ focused pane except **Ctrl-g**, after which:
 | `x` | Close the pane. If a program is still running in it, you're asked first. |
 | `f` | The file list. ↑↓ move, ←→ close and open folders, Enter opens a file in your editor (`$VISUAL`, `$EDITOR`, or `vi`) in a tab of its own, Esc goes back. |
 | `a` | The Agents panel (below). |
+| `m` `u` `k` `e` | The Models, MCP, Catalog and Add-ons panels (below). |
 | `s` | Scroll back through the output (↑↓, PgUp PgDn, `g` `G`; Esc to go back). |
 | `h` | The Welcome screen. The space keeps running, and `/cd` back finds it as you left it. |
 | `q` | Quit. If a program is still running, you're asked first. |
@@ -147,8 +149,24 @@ tree is never touched. On a session: Enter shows it (or runs it again), `c`
 shows what it changed, `o` opens a shell in its worktree, `s` stops it, `d`
 removes it (saying what is discarded; a branch with commits is kept). `t`
 trusts the folder, or stops trusting it, and `r` takes an agent's approval
-back. Agents run with their own settings for now; a model, MCP servers and
-skills come next. Approvals and sessions are shared with the app.
+back. On an agent, `m`, `u` and `l` choose the model, MCP servers and skills of
+its next launch; they are shown under it, and the question that allows it lists
+them all. Approvals and sessions are shared with the app.
+
+**Models, MCP servers, skills and add-ons.** Each has a panel, with its keys
+shown at the bottom:
+
+| Ctrl-g | Panel | What you can do |
+| --- | --- | --- |
+| `m` | Models | `s` saves a provider's API key in your Keychain (typed as dots, never shown again), `a` adds a model id, `d` removes either, `r` looks for local models (Ollama), Enter gives a model to an agent's next launch. |
+| `u` | MCP | `n` adds a server (a command, or a URL), Enter edits it, space turns it on or off, `s` saves a secret it needs, `d` removes it, `l` gives it to an agent's next launch. |
+| `k` | Catalog | Agents, models, MCP servers and skills in one list. `/` filters, Enter uses the one selected, `n` writes a skill, `e` and `d` change and remove yours. |
+| `e` | Add-ons | Tools for this space's terminals. Enter adds one; one that is not installed is installed with Homebrew in a tab, after you see the exact command and agree. `d` removes one, `s` gives them to another space. |
+
+`x8ai` runs the MCP servers of the sessions it starts, and stops them with the
+session. Keys, servers, skills and add-ons are the app's own: one saved in
+either is there in both. macOS may ask once whether `x8ai` may read a key the
+app saved.
 
 The mouse works too: click a pane or a tab, drag the line between panes to
 resize them, and scroll with the wheel. Dragging over text selects it and
@@ -359,6 +377,7 @@ asks you first.
 | LazyVim, when added | `~/.config/x8ai-lazyvim/` (your `~/.config/nvim` is untouched) |
 | API keys and MCP secrets | macOS Keychain, under `com.x8ai.workspace.providers` and `com.x8ai.workspace.mcp` |
 | Agent worktrees | `~/.x8ai/worktrees/` |
+| MCP sockets of running sessions (the app's, and one folder per `x8ai`) | `~/.x8ai/mcp/`, `~/.x8ai/mcp-<pid>/` |
 
 To start over, quit the app, delete that Application Support folder, and remove
 the Keychain items in Keychain Access.
