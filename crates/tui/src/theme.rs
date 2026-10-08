@@ -10,10 +10,19 @@ pub struct Theme {
     truecolor: bool,
 }
 
+/// Whether this terminal shows 24-bit color: `COLORTERM`, which such
+/// terminals set.
+pub fn truecolor_here() -> bool {
+    std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit")
+}
+
 impl Theme {
-    /// From `COLORTERM`, which terminals that show 24-bit color set.
+    /// As this process's terminal shows color, until one attaches.
     pub fn detect() -> Self {
-        let truecolor = std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit");
+        Self::new(truecolor_here())
+    }
+
+    pub fn new(truecolor: bool) -> Self {
         Self { truecolor }
     }
 

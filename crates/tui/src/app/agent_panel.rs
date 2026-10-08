@@ -1024,7 +1024,7 @@ impl App {
 
     /// Brings the panel's sessions up to date with the runtime (running,
     /// ended), without asking Git again. Cheap enough for every frame.
-    pub(super) fn refresh_states(&mut self) {
+    pub fn refresh_states(&mut self) {
         let Some(at) = self.view_at() else {
             return;
         };
@@ -1041,7 +1041,7 @@ impl App {
     }
 
     /// Whether a pane hung up from outside is still ending.
-    pub(super) fn any_stopping(&self) -> bool {
+    pub fn any_stopping(&self) -> bool {
         !self.ending.is_empty()
             || self
                 .views
@@ -1051,7 +1051,7 @@ impl App {
     }
 
     /// Records the exits of panes hung up from outside that have ended.
-    pub(super) fn settle_stopped(&mut self) {
+    pub fn settle_stopped(&mut self) {
         let mut ended = false;
         for slot in self.views.iter_mut().flat_map(|v| &mut v.slots) {
             ended |= slot.pane.settle();

@@ -49,9 +49,14 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "how the welcome greets you",
     },
     CommandInfo {
+        name: "/detach",
+        usage: "/detach",
+        description: "leave x8ai running in the background",
+    },
+    CommandInfo {
         name: "/quit",
         usage: "/quit",
-        description: "leave x8ai",
+        description: "quit x8ai, ending its shells and agents",
     },
 ];
 
@@ -67,6 +72,7 @@ pub enum Command<'a> {
     Home,
     Name(&'a str),
     Quit,
+    Detach,
     AppOnly(&'a str),
     Unknown(&'a str),
 }
@@ -87,6 +93,7 @@ pub fn parse(text: &str) -> Command<'_> {
         "/home" => Command::Home,
         "/name" => Command::Name(arg),
         "/quit" | "/exit" => Command::Quit,
+        "/detach" => Command::Detach,
         _ if APP_ONLY.contains(&word) => Command::AppOnly(word),
         _ => Command::Unknown(word),
     }
@@ -475,7 +482,9 @@ mod tests {
         // Commands, with a space after those that take an argument.
         assert_eq!(
             completions("/"),
-            ["/cd ", "/new ", "/share ", "/home", "/name ", "/quit"]
+            [
+                "/cd ", "/new ", "/share ", "/home", "/name ", "/detach", "/quit"
+            ]
         );
         assert_eq!(completions("/h"), ["/home"]);
         // Recent spaces by path, then folders for a path, not files or hidden

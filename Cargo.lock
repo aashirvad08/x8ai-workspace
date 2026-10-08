@@ -611,6 +611,7 @@ dependencies = [
  "mio",
  "parking_lot",
  "rustix",
+ "serde",
  "signal-hook 0.3.18",
  "signal-hook-mio",
  "winapi",
@@ -5498,13 +5499,15 @@ dependencies = [
 
 [[package]]
 name = "x8ai"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "alacritty_terminal",
+ "crossterm",
  "nix",
  "ratatui",
  "serde",
  "serde_json",
+ "signal-hook 0.3.18",
  "tempfile",
  "unicode-width",
  "x8ai-addons",

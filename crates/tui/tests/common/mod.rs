@@ -1,11 +1,13 @@
 //! Drives the real `x8ai` binary on a PTY: its screen is read back through
 //! the same emulator the panes use, and keys and mouse reports are typed into
-//! it. A home folder and a data folder of its own keep it away from the user's.
+//! it. A home folder and a data folder of its own keep it away from the user's,
+//! and its background `x8ai` (`~/.x8ai/server` in that home) from theirs; it
+//! is stopped when the test is done with it.
 
 #![allow(dead_code)]
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -76,6 +78,9 @@ pub struct X8ai {
     parser: Processor,
     listener: Listener,
     exit: Option<TerminalExit>,
+    home: PathBuf,
+    /// Leave the background `x8ai` running when this is dropped.
+    keep_server: bool,
 }
 
 impl X8ai {
@@ -120,7 +125,21 @@ impl X8ai {
             parser: Processor::new(),
             listener,
             exit: None,
+            home: home.to_owned(),
+            keep_server: false,
         }
+    }
+
+    /// Closes its terminal, as closing the window does, and leaves the
+    /// background `x8ai` running.
+    pub fn hang_up(mut self) {
+        self.keep_server = true;
+        self.session.close();
+        let deadline = Instant::now() + TIMEOUT;
+        while !self.session.has_exited() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(self.session.has_exited(), "x8ai did not end when hung up");
     }
 
     pub fn keys(&self, text: &str) {
@@ -243,5 +262,49 @@ impl X8ai {
     pub fn wheel(&self, col: usize, row: usize, up: bool) {
         let button = if up { 64 } else { 65 };
         self.keys(&format!("\x1b[<{button};{};{}M", col + 1, row + 1));
+    }
+}
+
+impl Drop for X8ai {
+    fn drop(&mut self) {
+        if !self.keep_server {
+            stop_server(&self.home);
+        }
+    }
+}
+
+/// The background `x8ai` of `home`, while it runs.
+pub fn server_pid(home: &Path) -> Option<i32> {
+    let pid = std::fs::read_to_string(home.join(".x8ai/server/pid"))
+        .ok()?
+        .trim()
+        .parse::<i32>()
+        .ok()?;
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
+        .is_ok()
+        .then_some(pid)
+}
+
+/// Stops the background `x8ai` of `home`, if one runs.
+pub fn stop_server(home: &Path) {
+    use nix::sys::signal::{Signal, kill};
+    let Some(pid) = server_pid(home) else {
+        return;
+    };
+    let pid = nix::unistd::Pid::from_raw(pid);
+    let _ = kill(pid, Signal::SIGTERM);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while kill(pid, None).is_ok() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = kill(pid, Signal::SIGKILL);
+}
+
+/// Waits until `done` holds, or fails saying `what` never happened.
+pub fn eventually(what: &str, done: impl Fn() -> bool) {
+    let deadline = Instant::now() + TIMEOUT;
+    while !done() {
+        assert!(Instant::now() < deadline, "never {what}");
+        std::thread::sleep(Duration::from_millis(20));
     }
 }

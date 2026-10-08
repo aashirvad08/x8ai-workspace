@@ -1,25 +1,26 @@
-//! The app: the Welcome screen and the open space, what each key and mouse
-//! action does there, and the loop that reads them and programs' output.
+//! The app: the Welcome screen and the open space, and what each key and
+//! mouse action does there. It runs in the background `x8ai` (`server.rs`),
+//! whose loop gives it the keys of the terminal attached and programs' output.
 //!
-//! One space is shown at a time, as in the desktop app. Each space opened in
-//! this run keeps its tabs and panes while `x8ai` runs, so going back to it
-//! with `/cd` finds them as they were left.
+//! One space is shown at a time, as in the desktop app. Each space opened
+//! keeps its tabs and panes while `x8ai` runs, so going back to it with `/cd`
+//! finds them as they were left, from this terminal or another.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::ansi::CursorShape;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::SetCursorStyle;
 use ratatui::crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
-    MouseEventKind,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::layout::{Position, Rect};
-use ratatui::{DefaultTerminal, Frame};
 use x8ai_agents::LaunchPlan;
 use x8ai_core::agent::AgentSessionId;
 use x8ai_core::terminal::{TerminalExit, TerminalSize};
@@ -36,15 +37,11 @@ use crate::pane::{Pane, PaneId};
 use crate::space::{Focus, Kind, Label, Sidebar, Slot, SpaceLayout, SpaceView};
 use crate::spaces::{SpaceInfo, Spaces};
 use crate::theme::Theme;
-use crate::ui;
 use crate::welcome::{self, Command, Context, Line, MAX_NAME_LENGTH, Suggestion};
+use crate::wire::Hello;
 
 /// How long programs get to exit after hangup when `x8ai` quits.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
-
-/// The longest the loop handles messages before drawing, so a flood of output
-/// still shows as it arrives.
-const FRAME_BUDGET: Duration = Duration::from_millis(16);
 
 /// How the user's editor is started on a file, as git starts it: through
 /// `sh`, so `$VISUAL` or `$EDITOR` may carry options (`code -w`). The file is
@@ -54,12 +51,39 @@ const EDITOR_SCRIPT: &str = r#"exec ${VISUAL:-${EDITOR:-vi}} "$1""#;
 /// Lines the mouse wheel moves per notch.
 const WHEEL_LINES: i32 = 3;
 
-/// What reaches the loop: keys and the mouse from the user's terminal,
+/// Where the app draws: the screen of the terminal attached, as the bytes
+/// that draw it, which are sent there.
+pub type Canvas = Terminal<CrosstermBackend<Sink>>;
+
+/// The bytes drawn since last taken.
+#[derive(Clone, Default)]
+pub struct Sink(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+impl Sink {
+    pub fn take(&self) -> Vec<u8> {
+        std::mem::take(&mut self.0.borrow_mut())
+    }
+}
+
+impl std::io::Write for Sink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// What reaches the loop: keys and the mouse from the terminal attached,
 /// programs' output, and changes to a space's files.
 pub enum Msg {
     Input(Event),
-    /// Reading the user's terminal failed; nothing more can be typed.
-    InputClosed(String),
+    /// A terminal attaching, typing, or gone (`server.rs`).
+    Client(crate::server::ClientEvent),
+    /// Asked to end from outside (`x8ai --stop`).
+    Terminate,
     Output(PaneId, Vec<u8>),
     PaneError(PaneId, String),
     Exited(PaneId, TerminalExit),
@@ -201,6 +225,8 @@ pub struct App {
     cursor: Option<(CursorShape, bool)>,
     drag: Option<Drag>,
     quit: bool,
+    /// Ctrl-g d: the terminal lets go, everything keeps running.
+    detach: bool,
 }
 
 impl App {
@@ -245,6 +271,7 @@ impl App {
             cursor: None,
             drag: None,
             quit: false,
+            detach: false,
         };
         app.refresh_recent();
         app.show_warnings();
@@ -258,6 +285,48 @@ impl App {
 
     pub fn home(&self) -> &Path {
         self.spaces.home()
+    }
+
+    // The terminal attached
+
+    /// A terminal attached: drawn for at its size and colors, its folder the
+    /// one relative paths start from, and `x8ai <folder>` opened.
+    pub fn attach(&mut self, hello: &Hello) {
+        self.cwd = hello.cwd.clone();
+        self.size = hello.size;
+        self.theme = Theme::new(hello.truecolor);
+        // A new terminal shows its own cursor, and has nothing held down.
+        self.cursor = None;
+        self.drag = None;
+        self.refresh_recent();
+        if hello.version != env!("CARGO_PKG_VERSION") {
+            self.say(format!(
+                "x8ai {} is installed; this is {}, started before. Quit it (Ctrl-g q) and run x8ai to use the new one.",
+                hello.version,
+                env!("CARGO_PKG_VERSION")
+            ));
+        }
+        if let Some(folder) = &hello.folder {
+            self.open_at_start(folder);
+        }
+    }
+
+    pub fn size(&self) -> (u16, u16) {
+        self.size
+    }
+
+    pub fn quitting(&self) -> bool {
+        self.quit
+    }
+
+    /// Whether the user asked to detach, since last asked.
+    pub fn take_detach(&mut self) -> bool {
+        std::mem::take(&mut self.detach)
+    }
+
+    /// Nothing is open: no space has a terminal or an agent.
+    pub fn idle(&self) -> bool {
+        self.views.iter().all(|v| v.tabs.is_empty())
     }
 
     /// The open space, once it has been shown.
@@ -413,6 +482,7 @@ impl App {
                 }
             }
             Command::Quit => self.ask_to_quit(),
+            Command::Detach => self.detach = true,
             Command::Share("") => self.complain("Name the space to share with: /share <space>."),
             Command::Share(name) => self.share_with(name),
             Command::AppOnly(word) => {
@@ -848,6 +918,7 @@ impl App {
         match key.code {
             KeyCode::Char('h') => self.show_welcome(),
             KeyCode::Char('q') => self.ask_to_quit(),
+            KeyCode::Char('d') => self.detach = true,
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('s') | KeyCode::PageUp => self.scroll(Scroll::PageUp),
             KeyCode::Char('t' | 'c') => self.new_tab(),
@@ -1289,10 +1360,10 @@ impl App {
             self.question = Some(Question {
                 ask: Ask::Quit,
                 title: "Quit x8ai?".to_owned(),
-                lines: vec![format!(
-                    "Still running: {}. Quitting stops it.",
-                    busy.join(", ")
-                )],
+                lines: vec![
+                    format!("Still running: {}. Quitting stops it.", busy.join(", ")),
+                    "To leave it running instead, press n, then Ctrl-g d: x8ai keeps running in the background.".to_owned(),
+                ],
                 yes: "quit",
             });
         }
@@ -1378,11 +1449,7 @@ impl App {
                 None => self.paste(&text),
             },
             Msg::Input(Event::Resize(cols, rows)) => self.size = (cols, rows),
-            Msg::Input(_) => {}
-            Msg::InputClosed(error) => {
-                self.failure = Some(format!("could not read the terminal: {error}"));
-                self.quit = true;
-            }
+            Msg::Input(_) | Msg::Client(_) | Msg::Terminate => {}
             Msg::Output(id, bytes) => {
                 if let Some(slot) = self.slot_mut(id) {
                     slot.pane.feed(&bytes);
@@ -1437,7 +1504,7 @@ impl App {
 
     /// Gives every pane on screen its size in the layout. Sizes that did not
     /// change cost nothing.
-    fn fit(&mut self) {
+    pub fn fit(&mut self) {
         if self.screen != Screen::Space {
             return;
         }
@@ -1456,7 +1523,7 @@ impl App {
     }
 
     /// The soonest a pane's synchronized update must be shown.
-    fn sync_deadline(&self) -> Option<Instant> {
+    pub fn sync_deadline(&self) -> Option<Instant> {
         self.views
             .iter()
             .flat_map(|v| &v.slots)
@@ -1464,7 +1531,7 @@ impl App {
             .min()
     }
 
-    fn end_due_syncs(&mut self) {
+    pub fn end_due_syncs(&mut self) {
         let now = Instant::now();
         for slot in self.views.iter_mut().flat_map(|v| &mut v.slots) {
             if slot.pane.sync_deadline().is_some_and(|due| due <= now) {
@@ -1492,7 +1559,7 @@ impl App {
 
     /// Shows the program's cursor shape (a bar in vim's insert mode, say), and
     /// the user's own shape elsewhere. Sent only when it changes.
-    fn apply_cursor(&mut self, terminal: &mut DefaultTerminal) -> std::io::Result<()> {
+    pub fn apply_cursor(&mut self, terminal: &mut Canvas) -> std::io::Result<()> {
         let wanted = self.wanted_cursor();
         if wanted == self.cursor {
             return Ok(());
@@ -1522,69 +1589,4 @@ fn inside(body: Rect, cell: Position) -> (u16, u16) {
     let col = cell.x.clamp(body.x, body.right().saturating_sub(1)) - body.x;
     let row = cell.y.clamp(body.y, body.bottom().saturating_sub(1)) - body.y;
     (col, row)
-}
-
-/// Reads keys and the mouse on a thread of its own, so the loop can wait for
-/// them and for output together.
-pub fn read_input(tx: Sender<Msg>) {
-    std::thread::spawn(move || {
-        loop {
-            match event::read() {
-                Ok(event) => {
-                    if tx.send(Msg::Input(event)).is_err() {
-                        return;
-                    }
-                }
-                Err(error) => {
-                    let _ = tx.send(Msg::InputClosed(error.to_string()));
-                    return;
-                }
-            }
-        }
-    });
-}
-
-/// Draws, waits for something to happen, handles it and everything else
-/// already waiting, and draws again, until the user quits.
-pub fn run(
-    terminal: &mut DefaultTerminal,
-    app: &mut App,
-    rx: &Receiver<Msg>,
-) -> std::io::Result<()> {
-    loop {
-        app.fit();
-        app.refresh_states();
-        terminal.draw(|frame: &mut Frame<'_>| ui::draw(frame, app))?;
-        app.apply_cursor(terminal)?;
-        if app.quit {
-            return Ok(());
-        }
-        // Agents hung up from outside report no exit: look for it now and then.
-        let settle = app
-            .any_stopping()
-            .then(|| Instant::now() + Duration::from_millis(100));
-        let first = match app.sync_deadline().into_iter().chain(settle).min() {
-            Some(due) => match rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
-                Ok(msg) => Some(msg),
-                Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => return Ok(()),
-            },
-            None => match rx.recv() {
-                Ok(msg) => Some(msg),
-                Err(mpsc::RecvError) => return Ok(()),
-            },
-        };
-        let started = Instant::now();
-        if let Some(msg) = first {
-            app.handle(msg);
-        }
-        while started.elapsed() < FRAME_BUDGET && !app.quit {
-            match rx.try_recv() {
-                Ok(msg) => app.handle(msg),
-                Err(_) => break,
-            }
-        }
-        app.end_due_syncs();
-        app.settle_stopped();
-    }
 }

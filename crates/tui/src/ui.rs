@@ -757,7 +757,8 @@ fn help(frame: &mut Frame<'_>, app: &App) {
         ("e", "add-ons for this space's terminals"),
         ("s", "scroll back"),
         ("h", "the Welcome screen (the space keeps running)"),
-        ("q", "quit"),
+        ("d", "detach: x8ai keeps running in the background"),
+        ("q", "quit, ending every shell and agent"),
         ("ctrl-g", "send ctrl-g to the program"),
     ];
     let theme = app.theme;

@@ -2,7 +2,7 @@
 name = "x8ai"
 description = "x8ai Workspace in the terminal: the `x8ai` command, a full-screen program that hosts the same spaces and shells as the desktop app. No Tauri."
 # Released on its own: a tag v<version> publishes it (.github/workflows/release.yml).
-version = "0.4.0"
+version = "0.5.0"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -29,8 +29,15 @@ serde.workspace = true
 serde_json.workspace = true
 unicode-width = "0.2"
 # The account's full name, for the greeting, from the user database; whether
-# the `x8ai` that left MCP sockets behind is gone.
-nix = { workspace = true, features = ["user", "signal"] }
+# the `x8ai` that left MCP sockets behind is gone; and for the background
+# `x8ai`: a session of its own, its lock, and who connects to its socket.
+nix = { workspace = true, features = ["user", "signal", "process", "fs", "socket"] }
+# The version ratatui draws with, for its events in serde form: the terminal
+# sends them to the background `x8ai` (ADR 0024).
+crossterm = { version = "0.29", default-features = false, features = ["events", "bracketed-paste", "serde"] }
+# The background `x8ai` ends cleanly on SIGTERM (`x8ai --stop`). Already built
+# for crossterm.
+signal-hook = "0.3"
 
 [dev-dependencies]
 tempfile.workspace = true
