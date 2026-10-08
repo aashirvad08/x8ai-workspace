@@ -15,17 +15,21 @@ use std::time::Instant;
 
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as TermColor, CursorShape, NamedColor, Processor};
 use ratatui::buffer::Buffer;
+use ratatui::crossterm::event::KeyModifiers;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier};
 use x8ai_core::terminal::{SessionId, TerminalExit, TerminalSize};
 use x8ai_pty::{Program, Session, SessionEvents, Sessions};
 
 use crate::app::Msg;
+use crate::mouse::{self, Action, Button};
 use crate::theme::Theme;
 
 /// Names a pane in messages from its session's threads. A new pane, even for
@@ -43,6 +47,8 @@ pub struct Pane {
     size: TerminalSize,
     title: Option<String>,
     exit: Option<TerminalExit>,
+    /// Where a selection with the mouse started.
+    anchor: Option<Point>,
 }
 
 impl Pane {
@@ -74,6 +80,7 @@ impl Pane {
             size,
             title: None,
             exit: None,
+            anchor: None,
         })
     }
 
@@ -132,6 +139,11 @@ impl Pane {
         self.exit.as_ref()
     }
 
+    /// The program's path, as started (the user's shell, for a shell).
+    pub fn program(&self) -> &str {
+        self.session.program()
+    }
+
     /// The title the program set (OSC 0/2), if any.
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
@@ -151,6 +163,79 @@ impl Pane {
     pub fn scroll(&mut self, scroll: Scroll) {
         self.term.scroll_display(scroll);
         self.answer();
+    }
+
+    /// Scrolls the view by `lines` (up when positive), as the mouse wheel does.
+    pub fn scroll_lines(&mut self, lines: i32) {
+        self.scroll(Scroll::Delta(lines));
+    }
+
+    /// Whether the program asked for the mouse (vim, htop, less with `--mouse`).
+    pub fn wants_mouse(&self) -> bool {
+        mouse::wanted(self.mode())
+    }
+
+    /// Reports a mouse event at `col`, `row` of the pane to the program, if
+    /// it asked for this kind.
+    pub fn report_mouse(
+        &self,
+        action: Action,
+        button: Button,
+        (col, row): (u16, u16),
+        modifiers: KeyModifiers,
+    ) {
+        if let Some(bytes) = mouse::report(action, button, col, row, modifiers, self.mode()) {
+            self.write(bytes);
+        }
+    }
+
+    /// The point of the grid shown at `col`, `row` of the pane.
+    fn point(&self, col: u16, row: u16) -> Point {
+        let offset = i32::try_from(self.scrolled_back()).unwrap_or(i32::MAX);
+        let last_line = i32::try_from(self.term.screen_lines()).unwrap_or(1) - 1;
+        let last_column = self.term.columns().saturating_sub(1);
+        Point::new(
+            Line(i32::from(row).min(last_line) - offset),
+            Column(usize::from(col).min(last_column)),
+        )
+    }
+
+    /// Starts selecting text at `col`, `row`.
+    pub fn start_selection(&mut self, col: u16, row: u16) {
+        self.anchor = Some(self.point(col, row));
+        self.term.selection = None;
+    }
+
+    /// Selects from where it started to `col`, `row`, both cells included.
+    pub fn extend_selection(&mut self, col: u16, row: u16) {
+        let Some(anchor) = self.anchor else {
+            return;
+        };
+        let to = self.point(col, row);
+        let (from_side, to_side) = if to >= anchor {
+            (Side::Left, Side::Right)
+        } else {
+            (Side::Right, Side::Left)
+        };
+        let mut selection = Selection::new(SelectionType::Simple, anchor, from_side);
+        selection.update(to, to_side);
+        self.term.selection = Some(selection);
+    }
+
+    /// Ends the selection: its text, if anything was selected. It stays
+    /// highlighted until cleared.
+    pub fn end_selection(&mut self) -> Option<String> {
+        self.anchor = None;
+        let text = self.term.selection_to_string().filter(|t| !t.is_empty());
+        if text.is_none() {
+            self.term.selection = None;
+        }
+        text
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.anchor = None;
+        self.term.selection = None;
     }
 
     /// Lines scrolled back from the bottom.
@@ -185,6 +270,7 @@ impl Pane {
     /// Draws the screen into `area`. Returns where the cursor is, if shown.
     pub fn render(&self, area: Rect, buf: &mut Buffer, theme: Theme) -> Option<Position> {
         let content = self.term.renderable_content();
+        let selection = content.selection;
         let offset = i32::try_from(content.display_offset).unwrap_or(i32::MAX);
         for indexed in content.display_iter {
             let (Ok(row), Ok(col)) = (
@@ -222,6 +308,9 @@ impl Pane {
             out.fg = color(cell.fg, content.colors, theme);
             out.bg = color(cell.bg, content.colors, theme);
             out.modifier = modifier(cell.flags);
+            if selection.is_some_and(|s| s.contains(indexed.point)) {
+                out.modifier.toggle(Modifier::REVERSED);
+            }
         }
         let point = content.cursor.point;
         let shown = content.cursor.shape != CursorShape::Hidden

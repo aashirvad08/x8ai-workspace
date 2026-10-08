@@ -1,5 +1,6 @@
-//! Drawing: the Welcome screen, a space (its header, its shell, the status
-//! bar), and the question asked before quitting.
+//! Drawing: the Welcome screen; a space (its header and tabs, the file list,
+//! the open tab's panes, the status bar); the list of keys; and the question
+//! asked before ending a running program.
 
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
@@ -8,7 +9,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Mode, QuitQuestion, Screen};
+use crate::app::{App, Ask, Mode, Question, Screen};
+use crate::layout::Axis;
+use crate::space::{Focus, Label, SpaceLayout, SpaceView, clip};
 use crate::welcome::tilde;
 
 /// The Welcome's column is at most this wide.
@@ -28,8 +31,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         Screen::Welcome => welcome(frame, app),
         Screen::Space => space(frame, app),
     }
-    if let Some(question) = &app.quit_question {
-        quit_question(frame, app, question);
+    if app.mode == Mode::Help && app.screen == Screen::Space {
+        help(frame, app);
+    }
+    if let Some(question) = &app.question {
+        ask(frame, app, question);
     }
 }
 
@@ -121,7 +127,7 @@ fn welcome(frame: &mut Frame<'_>, app: &App) {
     let column = Rect::new(x, top, width, area.height.saturating_sub(top - area.y));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), column);
 
-    if app.quit_question.is_none() {
+    if app.question.is_none() {
         let caret = u16::try_from(app.line.caret_column() + 2).unwrap_or(u16::MAX);
         let row = top + u16::try_from(prompt_row).unwrap_or(0);
         if caret < width && row < area.bottom() {
@@ -232,53 +238,97 @@ fn hints(app: &App, width: u16) -> Vec<Line<'static>> {
 // A space
 
 fn space(frame: &mut Frame<'_>, app: &App) {
-    let area = frame.area();
-    let header = Rect::new(area.x, area.y, area.width, 1);
-    let status = Rect::new(area.x, area.bottom() - 1, area.width, 1);
-    let body = Rect::new(
-        area.x,
-        area.y + 1,
-        area.width,
-        area.height.saturating_sub(2),
-    );
-
-    frame.render_widget(space_header(app, area.width), header);
-    let Some(pane) = app.current_pane() else {
+    let Some(view) = app.view() else {
         return;
     };
-    let cursor = pane.render(body, frame.buffer_mut(), app.theme);
-    if let Some(exit) = pane.exit() {
-        let how = match &exit.signal {
-            Some(signal) => format!("ended by {signal}"),
-            None => format!("exited with {}", exit.code),
-        };
-        let bar = Line::from(vec![
-            Span::styled(
-                format!(" The shell {how}. "),
-                Style::new().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("Enter starts a new one · ctrl-g h Welcome · ctrl-g q quit "),
-        ]);
-        let row = Rect::new(body.x, body.bottom().saturating_sub(1), body.width, 1);
-        frame.render_widget(Clear, row);
-        frame.render_widget(
-            Paragraph::new(bar).style(Style::new().add_modifier(Modifier::REVERSED)),
-            row,
-        );
+    let layout = view.layout(frame.area());
+    header(frame, app, view, &layout);
+    if let Some(files) = layout.files {
+        file_list(frame, app, view, files);
     }
-    frame.render_widget(status_bar(app, pane.scrolled_back()), status);
+
+    let theme = app.theme;
+    let mut cursor = None;
+    for area in &layout.panes.panes {
+        let Some(slot) = view.slot(area.id) else {
+            continue;
+        };
+        let focused = view.focused() == Some(area.id) && view.focus == Focus::Panes;
+        if let Some(title) = area.title {
+            // The title row: the pane's name on a line, which also separates it
+            // from the pane above.
+            let name_style = if focused {
+                Style::new().fg(theme.accent()).add_modifier(Modifier::BOLD)
+            } else {
+                muted()
+            };
+            let name = clip(&slot.title(), usize::from(title.width.saturating_sub(4)));
+            let fill = usize::from(title.width).saturating_sub(name.width() + 3);
+            let line = Line::from(vec![
+                Span::styled("─ ", muted()),
+                Span::styled(name, name_style),
+                Span::styled(format!(" {}", "─".repeat(fill)), muted()),
+            ]);
+            frame.render_widget(Paragraph::new(line), title);
+        }
+        let at = slot.pane.render(area.body, frame.buffer_mut(), theme);
+        if focused {
+            cursor = at;
+        }
+        if let Some(exit) = slot.pane.exit() {
+            let how = match &exit.signal {
+                Some(signal) => format!("was ended by {signal}"),
+                None => format!("exited with {}", exit.code),
+            };
+            let what = if slot.kind == crate::space::Kind::Shell {
+                "Enter starts a new shell"
+            } else {
+                "Enter closes it"
+            };
+            let bar = Line::from(vec![
+                Span::styled(
+                    format!(" {} {how}. ", slot.title()),
+                    Style::new().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!("{what} · ctrl-g x closes the pane ")),
+            ]);
+            let row = Rect::new(
+                area.body.x,
+                area.body.bottom().saturating_sub(1),
+                area.body.width,
+                1,
+            );
+            frame.render_widget(Clear, row);
+            frame.render_widget(
+                Paragraph::new(bar).style(Style::new().add_modifier(Modifier::REVERSED)),
+                row,
+            );
+        }
+    }
+    // The lines between panes side by side.
+    for divider in &layout.panes.dividers {
+        if divider.axis == Axis::Right {
+            for y in divider.line.top()..divider.line.bottom() {
+                if let Some(cell) = frame.buffer_mut().cell_mut((divider.line.x, y)) {
+                    cell.set_symbol("│").set_style(muted());
+                }
+            }
+        }
+    }
+    frame.render_widget(status_bar(app, view), layout.status);
     if let Some(position) = cursor
-        && app.quit_question.is_none()
-        && app.mode != Mode::Scroll
+        && app.question.is_none()
+        && matches!(app.mode, Mode::Normal | Mode::Prefix)
     {
         frame.set_cursor_position(position);
     }
 }
 
-fn space_header(app: &App, width: u16) -> Paragraph<'static> {
+/// " x8ai <name>  1 zsh  2 main.rs  +            not trusted"
+fn header(frame: &mut Frame<'_>, app: &App, view: &SpaceView, layout: &SpaceLayout) {
     let theme = app.theme;
-    let space = &app.current;
-    let mut left = vec![
+    let space = &view.info;
+    let prefix = Line::from(vec![
         Span::styled(
             " x8ai ",
             Style::new()
@@ -289,40 +339,113 @@ fn space_header(app: &App, width: u16) -> Paragraph<'static> {
             space.name.clone(),
             Style::new().add_modifier(Modifier::BOLD),
         ),
-    ];
-    let place = space
-        .root
-        .as_deref()
-        .map_or_else(|| "~".to_owned(), |root| tilde(root, app.home()));
-    left.push(Span::styled(format!("  {place}"), muted()));
-    if let Some(id) = &space.id {
-        left.push(Span::styled(format!("  {id}"), muted()));
+    ]);
+    frame.render_widget(Paragraph::new(prefix), layout.header);
+    for &(label, rect) in &layout.labels {
+        let (text, style) = match label {
+            Label::Tab(index) if index == view.active => (
+                view.label(index),
+                Style::new()
+                    .fg(theme.accent())
+                    .add_modifier(Modifier::BOLD | Modifier::REVERSED),
+            ),
+            Label::Tab(index) => (view.label(index), muted()),
+            Label::New => (" + ".to_owned(), muted()),
+        };
+        frame.render_widget(Paragraph::new(Span::styled(text, style)), rect);
     }
-    if let Some(title) = app.current_pane().and_then(|p| p.title()) {
-        let title: String = title.chars().filter(|c| !c.is_control()).take(60).collect();
-        left.push(Span::styled(
-            format!("  — {title}"),
-            muted().add_modifier(Modifier::ITALIC),
-        ));
-    }
-    let (trust, color) = match (&space.root, space.trusted) {
-        (None, _) => ("", Color::Reset),
-        (Some(_), true) => ("trusted ", theme.ok()),
-        (Some(_), false) => ("not trusted ", Color::Reset),
-    };
-    let used: usize = left.iter().map(|s| s.width()).sum();
-    let pad = usize::from(width).saturating_sub(used + trust.width());
-    left.push(Span::raw(" ".repeat(pad)));
-    let trust_style = if space.trusted {
-        Style::new().fg(color)
+    let text = view.right_text();
+    let width = u16::try_from(text.width())
+        .unwrap_or(u16::MAX)
+        .min(layout.header.width / 3);
+    let text = clip(&text, usize::from(width));
+    let style = if space.trusted {
+        Style::new().fg(theme.ok())
     } else {
         muted()
     };
-    left.push(Span::styled(trust, trust_style));
-    Paragraph::new(Line::from(left))
+    let right = Rect {
+        x: layout.header.right().saturating_sub(width),
+        width,
+        ..layout.header
+    };
+    frame.render_widget(Paragraph::new(Span::styled(text, style)), right);
 }
 
-fn status_bar(app: &App, scrolled: usize) -> Paragraph<'static> {
+/// The space's folder as a tree, beside the panes.
+fn file_list(frame: &mut Frame<'_>, app: &App, view: &SpaceView, area: Rect) {
+    let theme = app.theme;
+    let Some(files) = &view.files else {
+        return;
+    };
+    let focused = view.focus == Focus::Files;
+    let width = usize::from(area.width.saturating_sub(1));
+    let name = view.info.name.to_uppercase();
+    let title_style = if focused {
+        Style::new().fg(theme.accent()).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().add_modifier(Modifier::BOLD)
+    };
+    let mut lines = vec![Line::styled(clip(&format!(" {name}"), width), title_style)];
+    if let Some(error) = files.error() {
+        lines.push(Line::styled(
+            clip(&format!(" {error}"), width),
+            Style::new().fg(theme.error()),
+        ));
+    } else if files.rows().is_empty() {
+        lines.push(Line::styled(" (empty)", muted()));
+    }
+    let height = usize::from(area.height.saturating_sub(1));
+    for (index, row) in files
+        .rows()
+        .iter()
+        .enumerate()
+        .skip(files.offset())
+        .take(height)
+    {
+        let marker = match (row.folder, row.open) {
+            (true, true) => "▾ ",
+            (true, false) => "▸ ",
+            (false, _) => "  ",
+        };
+        let text = format!(" {}{marker}{}", "  ".repeat(row.depth), row.name);
+        let mut style = if row.name.starts_with('.') {
+            muted()
+        } else {
+            Style::new()
+        };
+        if row.folder {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        if index == files.selected() {
+            style = if focused {
+                Style::new()
+                    .fg(theme.accent())
+                    .add_modifier(Modifier::REVERSED)
+            } else {
+                style.fg(theme.accent())
+            };
+        }
+        let text = clip(&text, width);
+        let pad = width.saturating_sub(text.width());
+        lines.push(Line::styled(format!("{text}{}", " ".repeat(pad)), style));
+    }
+    let inner = Rect {
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    frame.render_widget(Paragraph::new(lines), inner);
+    for y in area.top()..area.bottom() {
+        if let Some(cell) = frame
+            .buffer_mut()
+            .cell_mut((area.right().saturating_sub(1), y))
+        {
+            cell.set_symbol("│").set_style(muted());
+        }
+    }
+}
+
+fn status_bar(app: &App, view: &SpaceView) -> Paragraph<'static> {
     let theme = app.theme;
     let key = |k: &str| {
         Span::styled(
@@ -339,18 +462,8 @@ fn status_bar(app: &App, scrolled: usize) -> Paragraph<'static> {
         };
         return Paragraph::new(Line::styled(format!(" {}", message.text), style));
     }
+    let scrolled = view.focused_slot().map_or(0, |s| s.pane.scrolled_back());
     let line = match app.mode {
-        Mode::Normal => Line::from(vec![
-            text(" "),
-            key("ctrl-g"),
-            text(" then  "),
-            key("h"),
-            text(" Welcome  "),
-            key("s"),
-            text(" scroll back  "),
-            key("q"),
-            text(" quit"),
-        ]),
         Mode::Prefix => Line::from(vec![
             Span::styled(
                 " ctrl-g ",
@@ -358,14 +471,20 @@ fn status_bar(app: &App, scrolled: usize) -> Paragraph<'static> {
                     .fg(theme.highlight())
                     .add_modifier(Modifier::BOLD),
             ),
+            key("t"),
+            Span::raw(" tab  "),
+            key("| -"),
+            Span::raw(" split  "),
+            key("x"),
+            Span::raw(" close  "),
+            key("←→↑↓"),
+            Span::raw(" move  "),
+            key("f"),
+            Span::raw(" files  "),
             key("h"),
-            Span::raw(" Welcome   "),
-            key("s"),
-            Span::raw(" scroll back   "),
-            key("q"),
-            Span::raw(" quit   "),
-            key("ctrl-g"),
-            Span::raw(" send ctrl-g   "),
+            Span::raw(" Welcome  "),
+            key("?"),
+            Span::raw(" all keys  "),
             key("esc"),
             Span::raw(" cancel"),
         ]),
@@ -383,24 +502,112 @@ fn status_bar(app: &App, scrolled: usize) -> Paragraph<'static> {
             key("g G"),
             text(" top, bottom  "),
             key("esc"),
-            text(" back to the shell"),
+            text(" back"),
+        ]),
+        _ if view.focus == Focus::Files => Line::from(vec![
+            text(" "),
+            key("↑↓"),
+            text(" move  "),
+            key("enter"),
+            text(" open in your editor  "),
+            key("←→"),
+            text(" close, open folders  "),
+            key("esc"),
+            text(" back to the terminal"),
+        ]),
+        _ if scrolled > 0 => Line::from(vec![
+            Span::styled(
+                format!(" Scrolled back {scrolled} lines"),
+                Style::new()
+                    .fg(theme.highlight())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            text("  ·  scroll down, or type to go back"),
+        ]),
+        _ => Line::from(vec![
+            text(" "),
+            key("ctrl-g"),
+            text(" then  "),
+            key("t"),
+            text(" tab  "),
+            key("| -"),
+            text(" split  "),
+            key("x"),
+            text(" close  "),
+            key("f"),
+            text(" files  "),
+            key("h"),
+            text(" Welcome  "),
+            key("?"),
+            text(" all keys"),
         ]),
     };
     Paragraph::new(line)
 }
 
-// Quitting
-
-fn quit_question(frame: &mut Frame<'_>, app: &App, question: &QuitQuestion) {
-    let area = frame.area();
-    let width = area.width.saturating_sub(4).min(64);
-    let names = question.busy.join(", ");
-    let lines = vec![
-        Line::styled("Quit x8ai?", Style::new().add_modifier(Modifier::BOLD)),
+/// Ctrl-g ?: every key, in a box.
+fn help(frame: &mut Frame<'_>, app: &App) {
+    const KEYS: &[(&str, &str)] = &[
+        ("t", "a new tab, with a shell"),
+        ("n  p  1-9", "the next, the previous, or that tab"),
+        ("|", "split: a new shell to the right"),
+        ("-", "split: a new shell below"),
+        ("←→↑↓  o", "the pane beside, or the next one"),
+        ("z", "the pane alone, or back with the others"),
+        ("x", "close the pane"),
+        ("f", "the file list: Enter opens a file in $EDITOR"),
+        ("s", "scroll back"),
+        ("h", "the Welcome screen (the space keeps running)"),
+        ("q", "quit"),
+        ("ctrl-g", "send ctrl-g to the program"),
+    ];
+    let theme = app.theme;
+    let mut lines = vec![
+        Line::styled(
+            "Keys, after ctrl-g",
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
         Line::raw(""),
-        Line::raw(format!(
-            "A program is still running in {names}. Quitting stops it."
-        )),
+    ];
+    for (keys, what) in KEYS {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{keys:<11}"),
+                Style::new().fg(theme.accent()).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw((*what).to_owned()),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "The mouse: click a pane or a tab, drag a line between panes, wheel to scroll, drag to select and copy (hold Shift in programs that use the mouse).",
+        muted(),
+    ));
+    lines.push(Line::raw(""));
+    lines.push(Line::styled("Any key closes this.", muted()));
+    dialog(frame, lines, theme.accent(), 66);
+}
+
+// Questions
+
+fn ask(frame: &mut Frame<'_>, app: &App, question: &Question) {
+    let names = question.busy.join(", ");
+    let (title, body, yes) = match question.ask {
+        Ask::Quit => (
+            "Quit x8ai?",
+            format!("A program is still running in {names}. Quitting stops it."),
+            " quit   ",
+        ),
+        Ask::ClosePane(_) => (
+            "Close this pane?",
+            format!("A program is still running in {names}. Closing stops it."),
+            " close   ",
+        ),
+    };
+    let lines = vec![
+        Line::styled(title, Style::new().add_modifier(Modifier::BOLD)),
+        Line::raw(""),
+        Line::raw(body),
         Line::raw(""),
         Line::from(vec![
             Span::styled(
@@ -409,7 +616,7 @@ fn quit_question(frame: &mut Frame<'_>, app: &App, question: &QuitQuestion) {
                     .fg(app.theme.highlight())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" quit   "),
+            Span::raw(yes),
             Span::styled(
                 "n",
                 Style::new()
@@ -419,6 +626,13 @@ fn quit_question(frame: &mut Frame<'_>, app: &App, question: &QuitQuestion) {
             Span::raw(" stay"),
         ]),
     ];
+    dialog(frame, lines, app.theme.highlight(), 64);
+}
+
+/// A box in the middle of the screen.
+fn dialog(frame: &mut Frame<'_>, lines: Vec<Line<'static>>, border: Color, most: u16) {
+    let area = frame.area();
+    let width = area.width.saturating_sub(4).min(most);
     let inner = usize::from(width.saturating_sub(4)).max(1);
     let rows: u16 = lines
         .iter()
@@ -434,7 +648,7 @@ fn quit_question(frame: &mut Frame<'_>, app: &App, question: &QuitQuestion) {
     );
     frame.render_widget(Clear, rect);
     let block = Block::bordered()
-        .border_style(Style::new().fg(app.theme.highlight()))
+        .border_style(Style::new().fg(border))
         .padding(ratatui::widgets::Padding::horizontal(1));
     frame.render_widget(
         Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),

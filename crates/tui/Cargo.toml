@@ -1,7 +1,8 @@
 [package]
 name = "x8ai"
 description = "x8ai Workspace in the terminal: the `x8ai` command, a full-screen program that hosts the same spaces and shells as the desktop app. No Tauri."
-version.workspace = true
+# Released on its own: a tag v<version> publishes it (.github/workflows/release.yml).
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

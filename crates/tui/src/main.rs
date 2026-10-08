@@ -9,8 +9,13 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod clipboard;
+mod files;
 mod keys;
+mod layout;
+mod mouse;
 mod pane;
+mod space;
 mod spaces;
 mod theme;
 mod ui;
@@ -24,6 +29,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::{SetCursorStyle, Show};
 use ratatui::crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use ratatui::crossterm::execute;
+use ratatui::crossterm::style::Print;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -49,10 +55,21 @@ On the Welcome screen:
   Esc             go back to the open space
 
 In a space, press Ctrl-g, then:
+  t               a new tab, with a shell
+  n  p  1-9       the next, the previous, or that tab
+  |  -            split: a new shell to the right, or below
+  arrows  o       the pane beside, or the next one
+  z               the pane alone, or back with the others
+  x               close the pane
+  f               the file list: Enter opens a file in $EDITOR
+  s               scroll back through the output
   h               the Welcome screen (the space keeps running)
-  s               scroll back through the shell's output
   q               quit
-  Ctrl-g          send Ctrl-g to the shell
+  ?               every key
+  Ctrl-g          send Ctrl-g to the program
+
+The mouse: click a pane or a tab, drag the line between panes, scroll with
+the wheel, drag over text to copy it.
 
 Options:
   -h, --help      Print this help
@@ -116,8 +133,13 @@ fn run(folder: Option<&str>) -> std::io::Result<()> {
         .map_or(Ok(()), |failure| Err(std::io::Error::other(failure)))
 }
 
-/// Takes over the terminal: raw mode, the alternate screen, and pastes marked
-/// as pastes. A panic gives it back first, so its message is readable.
+/// Mouse reports: presses and releases (1000), drags (1002), in SGR form
+/// (1006). Not every movement (1003), which would wake x8ai at each one.
+const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+
+/// Takes over the terminal: raw mode, the alternate screen, pastes marked as
+/// pastes, and the mouse. A panic gives it back first, so its message is readable.
 fn enter() -> std::io::Result<DefaultTerminal> {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -125,7 +147,12 @@ fn enter() -> std::io::Result<DefaultTerminal> {
         previous(info);
     }));
     enable_raw_mode()?;
-    execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
+    execute!(
+        stdout(),
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        Print(MOUSE_ON)
+    )?;
     Terminal::new(CrosstermBackend::new(stdout()))
 }
 
@@ -134,6 +161,7 @@ fn leave() {
     let _ = disable_raw_mode();
     let _ = execute!(
         stdout(),
+        Print(MOUSE_OFF),
         DisableBracketedPaste,
         SetCursorStyle::DefaultUserShape,
         LeaveAlternateScreen,

@@ -1,9 +1,9 @@
-//! The app: the Welcome screen and the open space, what each key does there,
-//! and the loop that reads keys and programs' output and redraws.
+//! The app: the Welcome screen and the open space, what each key and mouse
+//! action does there, and the loop that reads them and programs' output.
 //!
 //! One space is shown at a time, as in the desktop app. Each space opened in
-//! this run keeps its shell while `x8ai` runs, so going back to it with `/cd`
-//! finds the shell as it was left.
+//! this run keeps its tabs and panes while `x8ai` runs, so going back to it
+//! with `/cd` finds them as they were left.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -13,15 +13,24 @@ use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::ansi::CursorShape;
 use ratatui::crossterm::cursor::SetCursorStyle;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use ratatui::crossterm::execute;
+use ratatui::layout::{Position, Rect};
 use ratatui::{DefaultTerminal, Frame};
 use x8ai_core::terminal::{TerminalExit, TerminalSize};
 use x8ai_core::workspace::RecentWorkspace;
-use x8ai_pty::{Program, Sessions};
+use x8ai_pty::{Environment, Program, Sessions};
 
+use crate::clipboard;
+use crate::files::Activated;
 use crate::keys;
+use crate::layout::{self, Axis, Direction, Divider};
+use crate::mouse::{Action, Button};
 use crate::pane::{Pane, PaneId};
+use crate::space::{Focus, Kind, Label, Slot, SpaceLayout, SpaceView};
 use crate::spaces::{SpaceInfo, Spaces};
 use crate::theme::Theme;
 use crate::ui;
@@ -34,10 +43,16 @@ const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 /// still shows as it arrives.
 const FRAME_BUDGET: Duration = Duration::from_millis(16);
 
-/// Rows the space's own lines take: its header and the status bar.
-const CHROME_ROWS: u16 = 2;
+/// How the user's editor is started on a file, as git starts it: through
+/// `sh`, so `$VISUAL` or `$EDITOR` may carry options (`code -w`). The file is
+/// an argument (`$1`), never part of the script.
+const EDITOR_SCRIPT: &str = r#"exec ${VISUAL:-${EDITOR:-vi}} "$1""#;
 
-/// What reaches the loop: keys from the user's terminal, and programs' output.
+/// Lines the mouse wheel moves per notch.
+const WHEEL_LINES: i32 = 3;
+
+/// What reaches the loop: keys and the mouse from the user's terminal,
+/// programs' output, and changes to a space's files.
 pub enum Msg {
     Input(Event),
     /// Reading the user's terminal failed; nothing more can be typed.
@@ -45,6 +60,8 @@ pub enum Msg {
     Output(PaneId, Vec<u8>),
     PaneError(PaneId, String),
     Exited(PaneId, TerminalExit),
+    /// Something changed in this space's folder.
+    FilesChanged(PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,12 +73,15 @@ pub enum Screen {
 /// What keys do in a space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Keys go to the shell; Ctrl-g is the prefix for x8ai's own keys.
+    /// Keys go to the focused pane or the file list; Ctrl-g is the prefix
+    /// for x8ai's own keys.
     Normal,
     /// Ctrl-g was pressed: the next key is x8ai's.
     Prefix,
     /// Reading the scrollback: keys move the view.
     Scroll,
+    /// Every key, listed; any key closes it.
+    Help,
 }
 
 /// Ctrl-g: the prefix for x8ai's keys in a space. Not Ctrl-Space, which macOS
@@ -74,15 +94,29 @@ pub struct Message {
     pub error: bool,
 }
 
-/// A program still running when the user asked to quit.
-pub struct QuitQuestion {
+/// What a question asked before doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ask {
+    Quit,
+    ClosePane(PaneId),
+}
+
+/// Asked before ending a program that is still running.
+pub struct Question {
+    pub ask: Ask,
+    /// Where programs are running.
     pub busy: Vec<String>,
 }
 
-/// A space opened in this run, and its shell.
-struct SpacePane {
-    space: SpaceInfo,
-    pane: Pane,
+/// What a mouse button held down is doing.
+#[derive(Debug, Clone, Copy)]
+enum Drag {
+    /// Moving the line between two panes.
+    Divider(Divider),
+    /// Selecting text in a pane, whose body is given.
+    Select(PaneId, Rect),
+    /// Held over a program that asked for the mouse.
+    Report(PaneId, Rect, Button),
 }
 
 pub struct App {
@@ -94,22 +128,25 @@ pub struct App {
     pub selected: Option<usize>,
     pub suggestions: Vec<Suggestion>,
     pub message: Option<Message>,
+    /// The open space; the Welcome screen shows over it.
+    pub current: SpaceInfo,
+    pub question: Option<Question>,
+    /// Why `x8ai` stopped, when it was not the user's choice.
+    pub failure: Option<String>,
     recent: Vec<RecentWorkspace>,
     chosen_name: Option<String>,
     account_name: Option<String>,
-    /// The open space; the Welcome screen shows over it.
-    pub current: SpaceInfo,
-    panes: Vec<SpacePane>,
-    pub quit_question: Option<QuitQuestion>,
-    /// Why `x8ai` stopped, when it was not the user's choice.
-    pub failure: Option<String>,
+    /// Each space shown in this run, with its tabs and panes.
+    views: Vec<SpaceView>,
     spaces: Spaces,
     sessions: Sessions,
     tx: Sender<Msg>,
     cwd: PathBuf,
     next_pane: u32,
+    next_split: u32,
     size: (u16, u16),
     cursor: Option<(CursorShape, bool)>,
+    drag: Option<Drag>,
     quit: bool,
 }
 
@@ -130,20 +167,22 @@ impl App {
             selected: None,
             suggestions: Vec::new(),
             message: None,
+            current,
+            question: None,
+            failure: None,
             recent: Vec::new(),
             chosen_name: spaces.chosen_name(),
             account_name: crate::spaces::account_name(),
-            current,
-            panes: Vec::new(),
-            quit_question: None,
-            failure: None,
+            views: Vec::new(),
             spaces,
             sessions: Sessions::default(),
             tx,
             cwd,
             next_pane: 0,
+            next_split: 0,
             size,
             cursor: None,
+            drag: None,
             quit: false,
         };
         app.refresh_recent();
@@ -160,31 +199,31 @@ impl App {
         self.spaces.home()
     }
 
-    /// The open space's pane, if its shell has started.
-    pub fn current_pane(&self) -> Option<&Pane> {
-        self.panes
+    /// The open space, once it has been shown.
+    pub fn view(&self) -> Option<&SpaceView> {
+        self.views.iter().find(|v| v.info.root == self.current.root)
+    }
+
+    fn view_at(&self) -> Option<usize> {
+        self.views
             .iter()
-            .find(|p| p.space.root == self.current.root)
-            .map(|p| &p.pane)
+            .position(|v| v.info.root == self.current.root)
     }
 
-    fn current_pane_mut(&mut self) -> Option<&mut Pane> {
-        let root = self.current.root.clone();
-        self.panes
-            .iter_mut()
-            .find(|p| p.space.root == root)
-            .map(|p| &mut p.pane)
+    fn area(&self) -> Rect {
+        Rect::new(0, 0, self.size.0, self.size.1)
     }
 
-    /// The size of a space's pane: the window, less the header and status bar.
-    fn pane_size(&self) -> TerminalSize {
-        TerminalSize {
-            cols: self.size.0.max(1),
-            rows: self.size.1.saturating_sub(CHROME_ROWS).max(1),
-        }
+    /// Where everything in the open space is on the screen.
+    pub fn space_layout(&self) -> Option<SpaceLayout> {
+        self.view().map(|v| v.layout(self.area()))
     }
 
-    // Welcome
+    fn slot_mut(&mut self, id: PaneId) -> Option<&mut Slot> {
+        self.views.iter_mut().find_map(|v| v.slot_mut(id))
+    }
+
+    // Messages
 
     pub fn say(&mut self, text: impl Into<String>) {
         self.message = Some(Message {
@@ -206,6 +245,8 @@ impl App {
             self.complain(warnings.join(" "));
         }
     }
+
+    // Welcome
 
     fn refresh_recent(&mut self) {
         self.recent = self.spaces.recent();
@@ -229,31 +270,26 @@ impl App {
         self.screen = Screen::Welcome;
         self.mode = Mode::Normal;
         self.message = None;
+        self.drag = None;
         self.refresh_recent();
     }
 
-    /// The open space, its shell started if it has none yet.
+    /// The open space, with a shell started if it has no terminal open.
     fn show_space(&mut self) {
-        let size = self.pane_size();
-        if self.current_pane().is_none() {
-            let id = PaneId(self.next_pane);
-            self.next_pane += 1;
-            // The space's id, as the app's terminals have it (ADR 0019).
-            let env = self
-                .current
-                .id
-                .iter()
-                .map(|id| ("X8AI_SPACE".to_owned(), id.clone()))
-                .collect();
-            let program = Program::LoginShell {
-                cwd: self.current.root.clone(),
-                env,
-            };
-            match Pane::start(id, &self.sessions, &program, size, self.tx.clone()) {
-                Ok(pane) => self.panes.push(SpacePane {
-                    space: self.current.clone(),
-                    pane,
-                }),
+        let at = self.view_at().unwrap_or_else(|| {
+            let place = self.current.root.as_deref().map_or_else(
+                || "~".to_owned(),
+                |root| welcome::tilde(root, self.spaces.home()),
+            );
+            self.views
+                .push(SpaceView::new(self.current.clone(), place, &self.tx));
+            self.views.len() - 1
+        });
+        // What is known about the space now (its trust may have changed).
+        self.views[at].info = self.current.clone();
+        if self.views[at].tabs.is_empty() {
+            match self.start_shell(self.new_pane_size(at, None)) {
+                Ok(slot) => self.views[at].add_tab(slot),
                 Err(error) => {
                     self.screen = Screen::Welcome;
                     self.complain(format!("Could not start a shell: {error}"));
@@ -264,16 +300,6 @@ impl App {
         self.screen = Screen::Space;
         self.mode = Mode::Normal;
         self.line.take();
-    }
-
-    /// Forgets the open space's pane, whose shell has ended, and starts another.
-    fn restart_shell(&mut self) {
-        let root = self.current.root.clone();
-        if let Some(at) = self.panes.iter().position(|p| p.space.root == root) {
-            let ended = self.panes.remove(at);
-            let _ = self.sessions.close(ended.pane.session_id());
-        }
-        self.show_space();
     }
 
     /// Opens `space` and goes to it.
@@ -301,7 +327,7 @@ impl App {
             Command::Empty => self.show_space(),
             Command::Cd(arg) => self.cd(arg),
             Command::New("") => {
-                self.complain("Name the new space: /new <name>. It is made in ~/Workspaces.")
+                self.complain("Name the new space: /new <name>. It is made in ~/Workspaces.");
             }
             Command::New(name) => match self.spaces.create(name) {
                 Ok(space) => self.go_to(space),
@@ -468,78 +494,405 @@ impl App {
         }
     }
 
-    // A space
+    // Panes and tabs
+
+    /// Starts a program for a new pane of `size`.
+    fn start(&mut self, program: &Program, kind: Kind, size: TerminalSize) -> Result<Slot, String> {
+        let id = PaneId(self.next_pane);
+        self.next_pane += 1;
+        let pane = Pane::start(id, &self.sessions, program, size, self.tx.clone())?;
+        Ok(Slot { pane, kind })
+    }
+
+    /// The user's login shell in the open space's folder, with its id, as the
+    /// app's terminals have it (ADR 0019).
+    fn start_shell(&mut self, size: TerminalSize) -> Result<Slot, String> {
+        let program = Program::LoginShell {
+            cwd: self.current.root.clone(),
+            env: self
+                .current
+                .id
+                .iter()
+                .map(|id| ("X8AI_SPACE".to_owned(), id.clone()))
+                .collect(),
+        };
+        self.start(&program, Kind::Shell, size)
+    }
+
+    /// The size a new pane in view `at` gets: a tab of its own, or half the
+    /// focused pane.
+    fn new_pane_size(&self, at: usize, split: Option<Axis>) -> TerminalSize {
+        self.views[at].new_pane_size(self.area(), split)
+    }
+
+    fn new_tab(&mut self) {
+        let Some(at) = self.view_at() else {
+            return;
+        };
+        match self.start_shell(self.new_pane_size(at, None)) {
+            Ok(slot) => self.views[at].add_tab(slot),
+            Err(error) => self.complain(format!("Could not start a shell: {error}")),
+        }
+    }
+
+    fn split(&mut self, axis: Axis) {
+        let Some(at) = self.view_at() else {
+            return;
+        };
+        match self.start_shell(self.new_pane_size(at, Some(axis))) {
+            Ok(slot) => {
+                self.next_split += 1;
+                self.views[at].split(slot, axis, self.next_split);
+            }
+            Err(error) => self.complain(format!("Could not start a shell: {error}")),
+        }
+    }
+
+    /// Opens `path` in the user's editor, in a tab of its own; a tab that
+    /// already has it open is shown instead.
+    fn open_in_editor(&mut self, path: PathBuf) {
+        let Some(at) = self.view_at() else {
+            return;
+        };
+        if let Some(tab) = self.views[at].editor_tab(&path) {
+            self.views[at].show_tab(tab);
+            return;
+        }
+        let program = Program::Exec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                EDITOR_SCRIPT.into(),
+                "x8ai-editor".into(),
+                path.clone().into_os_string(),
+            ],
+            cwd: self.current.root.clone(),
+            env: Environment::Inherit,
+        };
+        let size = self.new_pane_size(at, None);
+        match self.start(&program, Kind::Editor(path), size) {
+            Ok(slot) => self.views[at].add_tab(slot),
+            Err(error) => self.complain(format!("Could not start your editor: {error}")),
+        }
+    }
+
+    /// Closes pane `id`, after asking if a program is still running in it.
+    fn ask_to_close(&mut self, id: PaneId) {
+        let Some(slot) = self.view().and_then(|v| v.slot(id)) else {
+            return;
+        };
+        if slot.pane.is_busy() {
+            let busy = vec![slot.title()];
+            self.question = Some(Question {
+                ask: Ask::ClosePane(id),
+                busy,
+            });
+        } else {
+            self.close(id);
+        }
+    }
+
+    /// Closes pane `id`, wherever it is. When the space on screen is left
+    /// with no terminal, the Welcome shows.
+    fn close(&mut self, id: PaneId) {
+        let Some(at) = self.views.iter().position(|v| v.slot(id).is_some()) else {
+            return;
+        };
+        if let Some(slot) = self.views[at].remove(id) {
+            let _ = self.sessions.close(slot.pane.session_id());
+        }
+        self.drag = None;
+        let view = &self.views[at];
+        if view.tabs.is_empty()
+            && view.info.root == self.current.root
+            && self.screen == Screen::Space
+        {
+            let name = view.info.name.clone();
+            self.show_welcome();
+            self.say(format!(
+                "{name} has no terminal open. Press Esc to start a new one."
+            ));
+        }
+    }
+
+    /// A shell that ended badly: another one in its place.
+    fn restart(&mut self, id: PaneId) {
+        let (Some(at), Some(layout)) = (self.view_at(), self.space_layout()) else {
+            return;
+        };
+        let size = layout.panes.area_of(id).map_or_else(
+            || self.new_pane_size(at, None),
+            |area| TerminalSize {
+                cols: area.body.width.max(1),
+                rows: area.body.height.max(1),
+            },
+        );
+        match self.start_shell(size) {
+            Ok(slot) => {
+                if let Some(old) = self.views[at].replace(id, slot) {
+                    let _ = self.sessions.close(old.pane.session_id());
+                }
+            }
+            Err(error) => self.complain(format!("Could not start a shell: {error}")),
+        }
+    }
+
+    fn move_focus(&mut self, direction: Direction) {
+        let (Some(at), Some(layout)) = (self.view_at(), self.space_layout()) else {
+            return;
+        };
+        let view = &mut self.views[at];
+        if view.focus == Focus::Files {
+            if direction == Direction::Right {
+                view.focus = Focus::Panes;
+            }
+            return;
+        }
+        let Some(from) = view.focused() else {
+            return;
+        };
+        match layout.panes.neighbor(from, direction) {
+            Some(to) => {
+                if let Some(tab) = view.tab_mut() {
+                    tab.focused = to;
+                }
+            }
+            None if direction == Direction::Left && layout.files.is_some() => {
+                view.focus = Focus::Files;
+            }
+            None => {}
+        }
+    }
+
+    /// Ctrl-g o: the next pane of the tab, in reading order.
+    fn next_pane(&mut self) {
+        let Some(at) = self.view_at() else {
+            return;
+        };
+        let view = &mut self.views[at];
+        view.focus = Focus::Panes;
+        if let Some(tab) = view.tab_mut() {
+            let panes = tab.tree.panes();
+            let here = panes.iter().position(|&p| p == tab.focused).unwrap_or(0);
+            tab.focused = panes[(here + 1) % panes.len()];
+            tab.zoomed = false;
+        }
+    }
+
+    /// Ctrl-g f: shows the file list and gives it the keys; hides it when it
+    /// has them.
+    fn toggle_files(&mut self) {
+        let Some(at) = self.view_at() else {
+            return;
+        };
+        if self.views[at].files.is_none() {
+            self.say(if self.current.root.is_none() {
+                "The workspace with no folder has no file list."
+            } else {
+                "This folder cannot be read."
+            });
+            return;
+        }
+        let view = &mut self.views[at];
+        if view.files_shown && view.focus == Focus::Files {
+            view.files_shown = false;
+            view.focus = Focus::Panes;
+        } else if self.size.0 < 40 {
+            self.say("Make the window wider to show the file list.");
+        } else {
+            view.files_shown = true;
+            view.focus = Focus::Files;
+        }
+    }
+
+    // Keys in a space
 
     fn space_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let prefix = ctrl && key.code == KeyCode::Char(PREFIX);
-        // A message from opening the space shows until the next key.
+        // A message shows until the next key.
         self.message = None;
         match self.mode {
+            Mode::Help => self.mode = Mode::Normal,
             Mode::Prefix => {
                 self.mode = Mode::Normal;
-                match key.code {
-                    KeyCode::Char('h') => self.show_welcome(),
-                    KeyCode::Char('q') => self.ask_to_quit(),
-                    KeyCode::Char('s') | KeyCode::PageUp => self.scroll(Scroll::PageUp),
-                    // Ctrl-g twice: the shell gets one.
-                    _ if prefix => {
-                        if let Some(pane) = self.current_pane() {
-                            pane.write(vec![0x07]);
-                        }
-                    }
-                    _ => {}
-                }
+                self.prefix_key(key, prefix);
             }
-            Mode::Scroll => match key.code {
-                KeyCode::Up | KeyCode::Char('k') => self.scroll(Scroll::Delta(1)),
-                KeyCode::Down | KeyCode::Char('j') => self.scroll(Scroll::Delta(-1)),
-                KeyCode::PageUp | KeyCode::Char('u' | 'b') => self.scroll(Scroll::PageUp),
-                KeyCode::PageDown | KeyCode::Char('d' | ' ') => self.scroll(Scroll::PageDown),
-                KeyCode::Home | KeyCode::Char('g') if !ctrl => self.scroll(Scroll::Top),
-                KeyCode::End | KeyCode::Char('G') => self.scroll(Scroll::Bottom),
-                _ => {
-                    // Esc, q or anything else: back to the bottom, and to typing.
-                    if let Some(pane) = self.current_pane_mut() {
-                        pane.scroll(Scroll::Bottom);
-                    }
-                    self.mode = Mode::Normal;
-                }
-            },
+            Mode::Scroll => self.scroll_key(key),
             Mode::Normal if prefix => self.mode = Mode::Prefix,
-            Mode::Normal => {
-                let Some(pane) = self.current_pane() else {
-                    return;
-                };
-                if pane.exit().is_some() {
-                    // The shell has ended: Enter starts another one.
-                    if key.code == KeyCode::Enter {
-                        self.restart_shell();
-                    }
-                    return;
-                }
-                let mode = pane.mode();
-                // Shift-PageUp reads the scrollback, where the terminal passes it on
-                // and the program has no screen of its own.
-                if key.code == KeyCode::PageUp
-                    && key.modifiers.contains(KeyModifiers::SHIFT)
-                    && !mode.contains(TermMode::ALT_SCREEN)
-                {
-                    self.scroll(Scroll::PageUp);
-                    return;
-                }
-                if let Some(bytes) = keys::encode(&key, mode.contains(TermMode::APP_CURSOR)) {
-                    pane.write(bytes);
-                }
-            }
+            Mode::Normal => match self.view().map(|v| v.focus) {
+                Some(Focus::Files) => self.files_key(key),
+                Some(Focus::Panes) => self.pane_key(key),
+                None => {}
+            },
         }
     }
 
-    /// Moves the view through the scrollback; keys move it until Esc.
+    /// The key after Ctrl-g.
+    fn prefix_key(&mut self, key: KeyEvent, prefix: bool) {
+        let Some(at) = self.view_at() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Char('h') => self.show_welcome(),
+            KeyCode::Char('q') => self.ask_to_quit(),
+            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('s') | KeyCode::PageUp => self.scroll(Scroll::PageUp),
+            KeyCode::Char('t' | 'c') => self.new_tab(),
+            KeyCode::Char('n' | 'p') => {
+                let view = &mut self.views[at];
+                let count = view.tabs.len();
+                if count > 0 {
+                    let step = if key.code == KeyCode::Char('n') {
+                        1
+                    } else {
+                        count - 1
+                    };
+                    view.show_tab((view.active + step) % count);
+                }
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                self.views[at].show_tab(usize::from(c as u8 - b'1'));
+            }
+            KeyCode::Char('|' | '%' | '\\') => self.split(Axis::Right),
+            KeyCode::Char('-' | '"') => self.split(Axis::Down),
+            KeyCode::Char('x') => {
+                if let Some(id) = self.views[at].focused() {
+                    self.ask_to_close(id);
+                }
+            }
+            KeyCode::Char('o') => self.next_pane(),
+            KeyCode::Left => self.move_focus(Direction::Left),
+            KeyCode::Right => self.move_focus(Direction::Right),
+            KeyCode::Up => self.move_focus(Direction::Up),
+            KeyCode::Down => self.move_focus(Direction::Down),
+            KeyCode::Char('z') => {
+                if let Some(tab) = self.views[at].tab_mut() {
+                    tab.zoomed = !tab.zoomed;
+                }
+            }
+            KeyCode::Char('f') => self.toggle_files(),
+            // Ctrl-g twice: the program gets one.
+            _ if prefix => {
+                if let Some(slot) = self.views[at].focused_slot() {
+                    slot.pane.write(vec![0x07]);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Keys for the focused pane's program.
+    fn pane_key(&mut self, key: KeyEvent) {
+        let Some(at) = self.view_at() else {
+            return;
+        };
+        let Some(slot) = self.views[at].focused_slot() else {
+            return;
+        };
+        let (id, mode) = (slot.pane.id, slot.pane.mode());
+        if slot.pane.exit().is_some() {
+            // It ended badly: Enter starts another shell, or closes the editor.
+            if key.code == KeyCode::Enter {
+                if slot.kind == Kind::Shell {
+                    self.restart(id);
+                } else {
+                    self.close(id);
+                }
+            }
+            return;
+        }
+        // Shift-PageUp reads the scrollback, where the terminal passes it on and
+        // the program has no screen of its own.
+        if key.code == KeyCode::PageUp
+            && key.modifiers.contains(KeyModifiers::SHIFT)
+            && !mode.contains(TermMode::ALT_SCREEN)
+        {
+            self.scroll(Scroll::PageUp);
+            return;
+        }
+        let Some(slot) = self.views[at].focused_slot_mut() else {
+            return;
+        };
+        slot.pane.clear_selection();
+        if slot.pane.scrolled_back() > 0 {
+            slot.pane.scroll(Scroll::Bottom);
+        }
+        if let Some(bytes) = keys::encode(&key, mode.contains(TermMode::APP_CURSOR)) {
+            slot.pane.write(bytes);
+        }
+    }
+
+    /// Keys for the file list.
+    fn files_key(&mut self, key: KeyEvent) {
+        let (Some(at), Some(layout)) = (self.view_at(), self.space_layout()) else {
+            return;
+        };
+        let height = layout
+            .file_rows()
+            .map_or(1, |r| usize::from(r.height).max(1));
+        let page = isize::try_from(height.saturating_sub(1).max(1)).unwrap_or(1);
+        let view = &mut self.views[at];
+        let Some(files) = view.files.as_mut() else {
+            view.focus = Focus::Panes;
+            return;
+        };
+        let mut open = None;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => files.move_by(-1),
+            KeyCode::Down | KeyCode::Char('j') => files.move_by(1),
+            KeyCode::PageUp => files.move_by(-page),
+            KeyCode::PageDown => files.move_by(page),
+            KeyCode::Home | KeyCode::Char('g') => files.first(),
+            KeyCode::End | KeyCode::Char('G') => files.last(),
+            KeyCode::Right | KeyCode::Char('l') => files.expand(),
+            KeyCode::Left | KeyCode::Char('h') => files.collapse(),
+            KeyCode::Enter => {
+                if let Activated::File(path) = files.activate() {
+                    open = Some(path);
+                }
+            }
+            KeyCode::Esc | KeyCode::Tab => view.focus = Focus::Panes,
+            _ => {}
+        }
+        if let Some(files) = view.files.as_mut() {
+            files.keep_in_view(height);
+        }
+        if let Some(path) = open {
+            self.open_in_editor(path);
+        }
+    }
+
+    /// Moves the focused pane's view through its scrollback; keys move it
+    /// until Esc.
     fn scroll(&mut self, scroll: Scroll) {
-        if let Some(pane) = self.current_pane_mut() {
-            pane.scroll(scroll);
+        let Some(at) = self.view_at() else {
+            return;
+        };
+        if let Some(slot) = self.views[at].focused_slot_mut() {
+            slot.pane.scroll(scroll);
             self.mode = Mode::Scroll;
+        }
+    }
+
+    fn scroll_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.scroll(Scroll::Delta(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.scroll(Scroll::Delta(-1)),
+            KeyCode::PageUp | KeyCode::Char('u' | 'b') => self.scroll(Scroll::PageUp),
+            KeyCode::PageDown | KeyCode::Char('d' | ' ') => self.scroll(Scroll::PageDown),
+            KeyCode::Home | KeyCode::Char('g') if !ctrl => self.scroll(Scroll::Top),
+            KeyCode::End | KeyCode::Char('G') => self.scroll(Scroll::Bottom),
+            _ => {
+                // Esc, q or anything else: back to the bottom, and to typing.
+                if let Some(at) = self.view_at()
+                    && let Some(slot) = self.views[at].focused_slot_mut()
+                {
+                    slot.pane.scroll(Scroll::Bottom);
+                }
+                self.mode = Mode::Normal;
+            }
         }
     }
 
@@ -550,12 +903,226 @@ impl App {
                 self.refresh_suggestions();
             }
             Screen::Space if self.mode == Mode::Normal => {
-                if let Some(pane) = self.current_pane() {
-                    let bracketed = pane.mode().contains(TermMode::BRACKETED_PASTE);
-                    pane.write(keys::paste(text, bracketed));
+                let Some(at) = self.view_at() else {
+                    return;
+                };
+                if self.views[at].focus != Focus::Panes {
+                    return;
+                }
+                if let Some(slot) = self.views[at].focused_slot() {
+                    let bracketed = slot.pane.mode().contains(TermMode::BRACKETED_PASTE);
+                    slot.pane.write(keys::paste(text, bracketed));
                 }
             }
             Screen::Space => {}
+        }
+    }
+
+    // The mouse
+
+    fn mouse(&mut self, event: MouseEvent) {
+        if self.screen != Screen::Space || self.question.is_some() {
+            return;
+        }
+        if self.mode == Mode::Help {
+            if matches!(event.kind, MouseEventKind::Down(_)) {
+                self.mode = Mode::Normal;
+            }
+            return;
+        }
+        let (Some(at), Some(layout)) = (self.view_at(), self.space_layout()) else {
+            return;
+        };
+        let at_cell = Position::new(event.column, event.row);
+        let shift = event.modifiers.contains(KeyModifiers::SHIFT);
+        match event.kind {
+            MouseEventKind::Down(pressed) => {
+                self.message = None;
+                if self.mode == Mode::Prefix {
+                    self.mode = Mode::Normal;
+                }
+                if pressed == MouseButton::Left && self.click_chrome(at, &layout, at_cell) {
+                    return;
+                }
+                let Some(area) = layout.panes.pane_at(at_cell.x, at_cell.y).copied() else {
+                    return;
+                };
+                let view = &mut self.views[at];
+                view.focus = Focus::Panes;
+                if let Some(tab) = view.tab_mut() {
+                    tab.focused = area.id;
+                }
+                for slot in &mut view.slots {
+                    slot.pane.clear_selection();
+                }
+                if !area.body.contains(at_cell) {
+                    return;
+                }
+                let cell = inside(area.body, at_cell);
+                let button = match pressed {
+                    MouseButton::Left => Button::Left,
+                    MouseButton::Middle => Button::Middle,
+                    MouseButton::Right => Button::Right,
+                };
+                let Some(slot) = view.slot_mut(area.id) else {
+                    return;
+                };
+                if slot.pane.wants_mouse() && !shift {
+                    slot.pane
+                        .report_mouse(Action::Press, button, cell, event.modifiers);
+                    self.drag = Some(Drag::Report(area.id, area.body, button));
+                } else if button == Button::Left {
+                    slot.pane.start_selection(cell.0, cell.1);
+                    self.drag = Some(Drag::Select(area.id, area.body));
+                }
+            }
+            MouseEventKind::Drag(_) => match self.drag {
+                Some(Drag::Divider(divider)) => {
+                    if let Some(tab) = self.views[at].tab_mut() {
+                        let ratio = layout::ratio_at(&divider, at_cell.x, at_cell.y);
+                        tab.tree.resize(divider.split, ratio);
+                    }
+                }
+                Some(Drag::Select(id, body)) => {
+                    if let Some(slot) = self.slot_mut(id) {
+                        let (col, row) = inside(body, at_cell);
+                        slot.pane.extend_selection(col, row);
+                    }
+                }
+                Some(Drag::Report(id, body, button)) => {
+                    if let Some(slot) = self.slot_mut(id) {
+                        let cell = inside(body, at_cell);
+                        slot.pane
+                            .report_mouse(Action::Drag, button, cell, event.modifiers);
+                    }
+                }
+                None => {}
+            },
+            MouseEventKind::Up(_) => match self.drag.take() {
+                Some(Drag::Select(id, _)) => {
+                    let text = self.slot_mut(id).and_then(|s| s.pane.end_selection());
+                    if let Some(text) = text {
+                        match clipboard::copy(&text) {
+                            Ok(()) => {
+                                self.say(format!("Copied {} characters.", text.chars().count()))
+                            }
+                            Err(error) => self.complain(error),
+                        }
+                    }
+                }
+                Some(Drag::Report(id, body, button)) => {
+                    if let Some(slot) = self.slot_mut(id) {
+                        let cell = inside(body, at_cell);
+                        slot.pane
+                            .report_mouse(Action::Release, button, cell, event.modifiers);
+                    }
+                }
+                _ => {}
+            },
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let up = event.kind == MouseEventKind::ScrollUp;
+                self.wheel(at, &layout, at_cell, up, event.modifiers);
+            }
+            _ => {}
+        }
+    }
+
+    /// A left click on the header's tabs, a line between panes, or the file
+    /// list. Returns whether it was one of those.
+    fn click_chrome(&mut self, at: usize, layout: &SpaceLayout, cell: Position) -> bool {
+        if let Some(&(label, _)) = layout.labels.iter().find(|(_, r)| r.contains(cell)) {
+            match label {
+                Label::Tab(index) => self.views[at].show_tab(index),
+                Label::New => self.new_tab(),
+            }
+            return true;
+        }
+        if cell.y == layout.header.y {
+            return true;
+        }
+        if let Some(divider) = layout.panes.divider_at(cell.x, cell.y) {
+            self.drag = Some(Drag::Divider(*divider));
+            // A pane's title row is also the line above it: the pane gets the keys.
+            if let Some(area) = layout.panes.pane_at(cell.x, cell.y) {
+                let view = &mut self.views[at];
+                view.focus = Focus::Panes;
+                if let Some(tab) = view.tab_mut() {
+                    tab.focused = area.id;
+                }
+            }
+            return true;
+        }
+        if !layout.files.is_some_and(|f| f.contains(cell)) {
+            return false;
+        }
+        let view = &mut self.views[at];
+        view.focus = Focus::Files;
+        let mut open = None;
+        if let (Some(files), Some(rows)) = (view.files.as_mut(), layout.file_rows())
+            && rows.contains(cell)
+        {
+            let row = files.offset() + usize::from(cell.y - rows.y);
+            if row < files.rows().len() {
+                files.select(row);
+                // A folder opens or closes; a file opens in the editor.
+                if let Activated::File(path) = files.activate() {
+                    open = Some(path);
+                }
+            }
+        }
+        if let Some(path) = open {
+            self.open_in_editor(path);
+        }
+        true
+    }
+
+    /// The wheel: the file list scrolls; a program that asked for the mouse
+    /// gets it; one on its own screen (less, man) gets arrow keys; otherwise
+    /// the scrollback moves.
+    fn wheel(
+        &mut self,
+        at: usize,
+        layout: &SpaceLayout,
+        cell: Position,
+        up: bool,
+        modifiers: KeyModifiers,
+    ) {
+        if layout.files.is_some_and(|f| f.contains(cell)) {
+            let height = layout.file_rows().map_or(1, |r| usize::from(r.height));
+            if let Some(files) = self.views[at].files.as_mut() {
+                files.scroll(if up { -3 } else { 3 }, height);
+            }
+            return;
+        }
+        let Some(area) = layout.panes.pane_at(cell.x, cell.y).copied() else {
+            return;
+        };
+        if !area.body.contains(cell) {
+            return;
+        }
+        let Some(slot) = self.views[at].slot_mut(area.id) else {
+            return;
+        };
+        let mode = slot.pane.mode();
+        if slot.pane.wants_mouse() && !modifiers.contains(KeyModifiers::SHIFT) {
+            let button = if up {
+                Button::WheelUp
+            } else {
+                Button::WheelDown
+            };
+            slot.pane
+                .report_mouse(Action::Press, button, inside(area.body, cell), modifiers);
+        } else if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
+            let arrow = KeyEvent::new(
+                if up { KeyCode::Up } else { KeyCode::Down },
+                KeyModifiers::NONE,
+            );
+            if let Some(bytes) = keys::encode(&arrow, mode.contains(TermMode::APP_CURSOR)) {
+                slot.pane.write(bytes.repeat(WHEEL_LINES as usize));
+            }
+        } else {
+            slot.pane
+                .scroll_lines(if up { WHEEL_LINES } else { -WHEEL_LINES });
         }
     }
 
@@ -564,24 +1131,39 @@ impl App {
     /// Quits, after asking if a program is still running in some space.
     fn ask_to_quit(&mut self) {
         let busy: Vec<String> = self
-            .panes
+            .views
             .iter()
-            .filter(|p| p.pane.is_busy())
-            .map(|p| p.space.name.clone())
+            .flat_map(|v| {
+                v.busy()
+                    .map(move |s| format!("{} ({})", v.info.name, s.title()))
+            })
             .collect();
         if busy.is_empty() {
             self.quit = true;
         } else {
-            self.quit_question = Some(QuitQuestion { busy });
+            self.question = Some(Question {
+                ask: Ask::Quit,
+                busy,
+            });
         }
     }
 
-    fn quit_key(&mut self, key: KeyEvent) {
+    fn question_key(&mut self, key: KeyEvent) {
+        let Some(question) = &self.question else {
+            return;
+        };
+        let ask = question.ask;
         match key.code {
-            KeyCode::Char('y' | 'Y') => self.quit = true,
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => self.quit_question = None,
+            KeyCode::Char('y' | 'Y') => {
+                self.question = None;
+                match ask {
+                    Ask::Quit => self.quit = true,
+                    Ask::ClosePane(id) => self.close(id),
+                }
+            }
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => self.question = None,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.quit_question = None;
+                self.question = None;
             }
             _ => {}
         }
@@ -589,17 +1171,17 @@ impl App {
 
     /// Hangs up every program, and kills what does not exit.
     pub fn shut_down(&mut self) {
-        self.panes.clear();
+        self.views.clear();
         self.sessions.shutdown(SHUTDOWN_GRACE);
     }
 
-    // Messages
+    // The loop
 
     pub fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::Input(Event::Key(key)) if key.kind != KeyEventKind::Release => {
-                if self.quit_question.is_some() {
-                    self.quit_key(key);
+                if self.question.is_some() {
+                    self.question_key(key);
                 } else {
                     match self.screen {
                         Screen::Welcome => self.welcome_key(key),
@@ -607,67 +1189,102 @@ impl App {
                     }
                 }
             }
+            Msg::Input(Event::Mouse(event)) => self.mouse(event),
             Msg::Input(Event::Paste(text)) => self.paste(&text),
-            Msg::Input(Event::Resize(cols, rows)) => {
-                self.size = (cols, rows);
-                let size = self.pane_size();
-                for p in &mut self.panes {
-                    p.pane.resize(size);
-                }
-            }
+            Msg::Input(Event::Resize(cols, rows)) => self.size = (cols, rows),
             Msg::Input(_) => {}
             Msg::InputClosed(error) => {
                 self.failure = Some(format!("could not read the terminal: {error}"));
                 self.quit = true;
             }
             Msg::Output(id, bytes) => {
-                if let Some(p) = self.panes.iter_mut().find(|p| p.pane.id == id) {
-                    p.pane.feed(&bytes);
+                if let Some(slot) = self.slot_mut(id) {
+                    slot.pane.feed(&bytes);
                 }
             }
             Msg::PaneError(id, error) => {
-                if let Some(p) = self.panes.iter().find(|p| p.pane.id == id) {
-                    let name = p.space.name.clone();
-                    self.complain(format!("{name}'s shell: {error}"));
+                if let Some(title) = self.views.iter().find_map(|v| v.slot(id)).map(Slot::title) {
+                    self.complain(format!("{title}: {error}"));
                 }
             }
             Msg::Exited(id, exit) => {
-                if let Some(p) = self.panes.iter_mut().find(|p| p.pane.id == id) {
-                    p.pane.exited(exit);
-                    let _ = self.sessions.close(p.pane.session_id());
+                // A program that ended well takes its pane with it, as closing a
+                // terminal tab does; one that failed stays, to be read.
+                if exit.code == 0 && exit.signal.is_none() {
+                    self.close(id);
+                } else if let Some(slot) = self.slot_mut(id) {
+                    slot.pane.exited(exit);
+                    let session = slot.pane.session_id();
+                    let _ = self.sessions.close(session);
                 }
+            }
+            Msg::FilesChanged(root) => {
+                for view in &mut self.views {
+                    if view.root() == Some(root.as_path())
+                        && let Some(files) = view.files.as_mut()
+                    {
+                        files.reload();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Gives every pane on screen its size in the layout. Sizes that did not
+    /// change cost nothing.
+    fn fit(&mut self) {
+        if self.screen != Screen::Space {
+            return;
+        }
+        let (Some(at), Some(layout)) = (self.view_at(), self.space_layout()) else {
+            return;
+        };
+        let view = &mut self.views[at];
+        for area in &layout.panes.panes {
+            if let Some(slot) = view.slot_mut(area.id) {
+                slot.pane.resize(TerminalSize {
+                    cols: area.body.width,
+                    rows: area.body.height,
+                });
             }
         }
     }
 
     /// The soonest a pane's synchronized update must be shown.
     fn sync_deadline(&self) -> Option<Instant> {
-        self.panes
+        self.views
             .iter()
-            .filter_map(|p| p.pane.sync_deadline())
+            .flat_map(|v| &v.slots)
+            .filter_map(|s| s.pane.sync_deadline())
             .min()
     }
 
     fn end_due_syncs(&mut self) {
         let now = Instant::now();
-        for p in &mut self.panes {
-            if p.pane.sync_deadline().is_some_and(|due| due <= now) {
-                p.pane.end_sync();
+        for slot in self.views.iter_mut().flat_map(|v| &mut v.slots) {
+            if slot.pane.sync_deadline().is_some_and(|due| due <= now) {
+                slot.pane.end_sync();
             }
         }
     }
 
-    /// The cursor the user's terminal should show: the shell's own, in a space.
+    /// The cursor the user's terminal should show: the focused program's own,
+    /// in a space.
     fn wanted_cursor(&self) -> Option<(CursorShape, bool)> {
-        match (self.screen, self.mode, self.quit_question.as_ref()) {
-            (Screen::Space, Mode::Normal | Mode::Prefix, None) => {
-                self.current_pane().and_then(Pane::cursor_style)
-            }
-            _ => None,
+        if self.screen != Screen::Space
+            || self.question.is_some()
+            || !matches!(self.mode, Mode::Normal | Mode::Prefix)
+        {
+            return None;
         }
+        let view = self.view()?;
+        if view.focus != Focus::Panes {
+            return None;
+        }
+        view.focused_slot().and_then(|s| s.pane.cursor_style())
     }
 
-    /// Shows the shell's cursor shape (a bar in vim's insert mode, say), and
+    /// Shows the program's cursor shape (a bar in vim's insert mode, say), and
     /// the user's own shape elsewhere. Sent only when it changes.
     fn apply_cursor(&mut self, terminal: &mut DefaultTerminal) -> std::io::Result<()> {
         let wanted = self.wanted_cursor();
@@ -694,8 +1311,15 @@ impl App {
     }
 }
 
-/// Reads keys on a thread of its own, so the loop can wait for keys and output
-/// together.
+/// The cell of `body` at `cell`, from its top left, kept inside it.
+fn inside(body: Rect, cell: Position) -> (u16, u16) {
+    let col = cell.x.clamp(body.x, body.right().saturating_sub(1)) - body.x;
+    let row = cell.y.clamp(body.y, body.bottom().saturating_sub(1)) - body.y;
+    (col, row)
+}
+
+/// Reads keys and the mouse on a thread of its own, so the loop can wait for
+/// them and for output together.
 pub fn read_input(tx: Sender<Msg>) {
     std::thread::spawn(move || {
         loop {
@@ -722,6 +1346,7 @@ pub fn run(
     rx: &Receiver<Msg>,
 ) -> std::io::Result<()> {
     loop {
+        app.fit();
         terminal.draw(|frame: &mut Frame<'_>| ui::draw(frame, app))?;
         app.apply_cursor(terminal)?;
         if app.quit {
