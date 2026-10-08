@@ -172,6 +172,8 @@ Refresh):
   other variables pass as before.
 - If the environment cannot be read, agents are looked up with the app's own
   environment and the Agents view says why.
+- `x8ai`, the terminal version, does not read it: it was started from the
+  user's shell, so its own environment is that one (ADR 0022).
 
 This is what the user's own terminal would give the agent, including variables
 their startup files export. Unless the user chose a provider and model for the

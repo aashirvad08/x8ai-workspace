@@ -27,8 +27,8 @@ the phases. Each step is pushed and released before the next starts.
 | --- | --- | --- |
 | T1 | `x8ai`: the Welcome screen, spaces with a shell, the Homebrew tap | **Complete** |
 | T2 | Split panes and tabs, the file list and `$EDITOR` | **Complete** |
-| T3 | Agents: trust, the launch dialog, sessions and reviewing changes | Next |
-| T4 | Models, MCP, skills, the catalog and add-ons | Planned |
+| T3 | Agents: trust, the launch dialog, sessions and reviewing changes | **Complete** |
+| T4 | Models, MCP, skills, the catalog and add-ons | Next |
 | T5 | A background process: spaces outlive the window, and `x8ai` reattaches | Planned |
 
 ---
@@ -425,4 +425,28 @@ selection, copied with `pbcopy`.
   positions inside its pane; dragging over text copies it.
 - End-to-end test of the real binary: splits, focus by key and click, a dragged
   divider (`stty size`), tabs, the file list and editor, selection, the wheel.
+
+## Terminal step T3 — agents
+
+**Objective.** Agents in `x8ai` as in the app's Agents view: started in a
+worktree of their own, only in trusted folders and once allowed there, then
+watched, reviewed, run again, stopped and removed (ADR 0022).
+
+**Major components.** The Agents panel (`app/agent_panel.rs`), `agents.rs`
+over `x8ai-agents` (runtime, isolation, plans), trust and approvals through the
+app's stores (`spaces.rs`), agent panes that stay when the agent ends, and the
+review in `less`.
+
+**Acceptance criteria.**
+- Enter on an agent asks to trust the folder, then to allow the agent (folder,
+  program, model, isolation), and runs it in a new worktree; the user's working
+  tree stays clean.
+- A session's changes (branch, commits, files, the diff) show in a pager; its
+  agent can run again (Enter), be stopped (`s`, or closing its pane), and the
+  session removed, discarding uncommitted changes only when asked and keeping a
+  branch with commits.
+- Removing trust takes the folder's approvals back and stops its agents.
+- Approvals and worktrees are the app's own.
+- End-to-end test with a stand-in agent; checked once with the real Claude
+  Code (drawn, stopped, removed).
 

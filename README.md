@@ -63,8 +63,9 @@ x8ai
 
 `x8ai` runs on macOS 13 or later, on Apple silicon and Intel. It is the
 workspace as a full-screen program in the terminal you already use (see
-[x8ai in your terminal](#x8ai-in-your-terminal)). Agents, models, MCP servers,
-skills and add-ons are in the app for now, and come to `x8ai` step by step.
+[x8ai in your terminal](#x8ai-in-your-terminal)), agents included. Choosing a
+model, MCP servers, skills and add-ons are in the app for now, and come to
+`x8ai` next.
 
 ### The app
 
@@ -127,6 +128,7 @@ focused pane except **Ctrl-g**, after which:
 | `z` | The pane alone, or back with the others. |
 | `x` | Close the pane. If a program is still running in it, you're asked first. |
 | `f` | The file list. ↑↓ move, ←→ close and open folders, Enter opens a file in your editor (`$VISUAL`, `$EDITOR`, or `vi`) in a tab of its own, Esc goes back. |
+| `a` | The Agents panel (below). |
 | `s` | Scroll back through the output (↑↓, PgUp PgDn, `g` `G`; Esc to go back). |
 | `h` | The Welcome screen. The space keeps running, and `/cd` back finds it as you left it. |
 | `q` | Quit. If a program is still running, you're asked first. |
@@ -135,6 +137,18 @@ focused pane except **Ctrl-g**, after which:
 
 A pane closes when its program ends well (`exit`, or quitting the editor); one
 that fails stays so you can read it.
+
+**Agents.** Ctrl-g `a` lists Claude Code, OpenCode and Codex (whichever you
+have installed) and the space's agent sessions. Enter on an agent starts a
+session: the first time, `x8ai` asks you to trust the folder and to allow that
+agent there, showing the exact program, as the app does. In a Git repository
+each session works in a worktree of its own, on its own branch, so your working
+tree is never touched. On a session: Enter shows it (or runs it again), `c`
+shows what it changed, `o` opens a shell in its worktree, `s` stops it, `d`
+removes it (saying what is discarded; a branch with commits is kept). `t`
+trusts the folder, or stops trusting it, and `r` takes an agent's approval
+back. Agents run with their own settings for now; a model, MCP servers and
+skills come next. Approvals and sessions are shared with the app.
 
 The mouse works too: click a pane or a tab, drag the line between panes to
 resize them, and scroll with the wheel. Dragging over text selects it and
