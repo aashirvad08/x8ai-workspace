@@ -65,9 +65,14 @@ pub enum Msg {
     Exited(PaneId, TerminalExit),
     /// Something changed in this space's folder.
     FilesChanged(PathBuf),
+    /// What looking for local models (Ollama) found.
+    Local(x8ai_providers::ollama::Detection),
 }
 
 mod agent_panel;
+mod panels;
+
+pub use panels::{Dialog, Draft};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -108,11 +113,24 @@ pub enum Ask {
     Trust(PathBuf, Option<Then>),
     /// Stop trusting the folder: its approvals go, its agents stop.
     Untrust(PathBuf),
-    /// Allow this launch in its folder, then go on.
-    Approve(Box<LaunchPlan>, Then),
+    /// Allow this launch in its folder (the agent, if `true`), and these MCP
+    /// servers, then go on.
+    Approve(Box<LaunchPlan>, bool, Vec<x8ai_mcp::Prepared>, Then),
     /// Remove a session and its worktree; with `true`, its uncommitted
     /// changes go too.
     Remove(AgentSessionId, bool),
+    /// Delete a provider's key from the Keychain.
+    RemoveKey(String),
+    RemoveMcp(String),
+    RemoveSkill(String),
+    /// Install add-ons in a tab of their own, then add them to the space of
+    /// `root`.
+    Install {
+        addons: Vec<&'static str>,
+        root: Option<PathBuf>,
+        name: String,
+        script: String,
+    },
 }
 
 /// What an agent's launch goes on with once a question is answered yes.
@@ -156,6 +174,8 @@ pub struct App {
     /// The open space; the Welcome screen shows over it.
     pub current: SpaceInfo,
     pub question: Option<Question>,
+    /// A form or a picker on top.
+    pub dialog: Option<Dialog>,
     /// Why `x8ai` stopped, when it was not the user's choice.
     pub failure: Option<String>,
     recent: Vec<RecentWorkspace>,
@@ -164,6 +184,11 @@ pub struct App {
     /// Each space shown in this run, with its tabs and panes.
     views: Vec<SpaceView>,
     agents: Agents,
+    services: crate::services::Services,
+    /// What each agent's next launch gets, by agent id.
+    drafts: std::collections::HashMap<String, Draft>,
+    /// The catalog's items as the Catalog panel last read them.
+    catalog: Vec<x8ai_core::catalog::CatalogItem>,
     /// Agents whose panes were closed while they ran: still ending.
     ending: Vec<AgentSessionId>,
     spaces: Spaces,
@@ -188,6 +213,7 @@ impl App {
             .and_then(|r| spaces.reopen(Path::new(&r.root)).ok())
             .unwrap_or_else(|| spaces.home_space());
         let agents = Agents::new(spaces.home(), std::env::vars().collect());
+        let services = crate::services::Services::new(spaces.data_dir().to_owned(), spaces.home());
         let mut app = Self {
             theme: Theme::detect(),
             screen: Screen::Welcome,
@@ -198,12 +224,16 @@ impl App {
             message: None,
             current,
             question: None,
+            dialog: None,
             failure: None,
             recent: Vec::new(),
             chosen_name: spaces.chosen_name(),
             account_name: crate::spaces::account_name(),
             views: Vec::new(),
             agents,
+            services,
+            drafts: std::collections::HashMap::new(),
+            catalog: Vec::new(),
             ending: Vec::new(),
             spaces,
             sessions: Sessions::default(),
@@ -383,6 +413,8 @@ impl App {
                 }
             }
             Command::Quit => self.ask_to_quit(),
+            Command::Share("") => self.complain("Name the space to share with: /share <space>."),
+            Command::Share(name) => self.share_with(name),
             Command::AppOnly(word) => {
                 self.complain(format!(
                     "{word} is not in x8ai's terminal version yet. Use the app for it for now."
@@ -540,14 +572,43 @@ impl App {
     fn start_shell(&mut self, size: TerminalSize) -> Result<Slot, String> {
         let program = Program::LoginShell {
             cwd: self.current.root.clone(),
-            env: self
-                .current
-                .id
-                .iter()
-                .map(|id| ("X8AI_SPACE".to_owned(), id.clone()))
-                .collect(),
+            env: self.shell_env(),
         };
         self.start(&program, Kind::Shell, size)
+    }
+
+    /// What a new shell of the open space starts with: its id, and its
+    /// add-ons (ADR 0019), exactly as the app's terminals have them.
+    fn shell_env(&mut self) -> Vec<(String, String)> {
+        let root = self.current.root.clone();
+        let space = match self.spaces.space(root.as_deref()) {
+            Ok(space) => space,
+            Err(_) => {
+                return self
+                    .current
+                    .id
+                    .iter()
+                    .map(|id| ("X8AI_SPACE".to_owned(), id.clone()))
+                    .collect();
+            }
+        };
+        let trusted = root.as_deref().is_none_or(|r| self.spaces.is_trusted(r));
+        let title = format!("{} ({})", self.current.name, space.id);
+        let (env, problem) = x8ai_addons::terminal_env(
+            &x8ai_addons::SpaceTerminal {
+                id: &space.id,
+                title: &title,
+                addons: &space.addons,
+                trusted,
+            },
+            &self.mac(),
+            x8ai_addons::is_zsh(&x8ai_pty::user_shell()),
+            self.spaces.data_dir(),
+        );
+        if let Some(problem) = problem {
+            self.complain(problem);
+        }
+        env
     }
 
     /// The size a new pane in view `at` gets: a tab of its own, or half the
@@ -772,6 +833,7 @@ impl App {
             Mode::Normal => match self.view().map(|v| (v.focus, v.sidebar)) {
                 Some((Focus::Sidebar, Sidebar::Files)) => self.files_key(key),
                 Some((Focus::Sidebar, Sidebar::Agents)) => self.agents_key(key),
+                Some((Focus::Sidebar, sidebar)) if sidebar.is_list() => self.list_key(key),
                 Some(_) => self.pane_key(key),
                 None => {}
             },
@@ -823,6 +885,10 @@ impl App {
             }
             KeyCode::Char('f') => self.toggle_files(),
             KeyCode::Char('a') => self.toggle_agents(),
+            KeyCode::Char('m') => self.toggle_list(Sidebar::Models),
+            KeyCode::Char('u') => self.toggle_list(Sidebar::Mcp),
+            KeyCode::Char('k') => self.toggle_list(Sidebar::Catalog),
+            KeyCode::Char('e') => self.toggle_list(Sidebar::Addons),
             // Ctrl-g twice: the program gets one.
             _ if prefix => {
                 if let Some(slot) = self.views[at].focused_slot() {
@@ -849,7 +915,7 @@ impl App {
                 match slot.kind {
                     Kind::Agent(session, _) => self.run_session(session, Some(id)),
                     Kind::Shell => self.restart(id),
-                    Kind::Editor(_) | Kind::Review(..) => self.close(id),
+                    Kind::Editor(_) | Kind::Review(..) | Kind::Install { .. } => self.close(id),
                 }
             }
             return;
@@ -973,7 +1039,7 @@ impl App {
     // The mouse
 
     fn mouse(&mut self, event: MouseEvent) {
-        if self.screen != Screen::Space || self.question.is_some() {
+        if self.screen != Screen::Space || self.question.is_some() || self.dialog.is_some() {
             return;
         }
         if self.mode == Mode::Help {
@@ -1117,6 +1183,15 @@ impl App {
             }
             return true;
         }
+        if view.sidebar.is_list() {
+            if let Some(rows) = layout.sidebar_rows()
+                && rows.contains(cell)
+                && let Some(row) = view.list.row_at(usize::from(cell.y - rows.y))
+            {
+                view.list.selected = row;
+            }
+            return true;
+        }
         let mut open = None;
         if let (Some(files), Some(rows)) = (view.files.as_mut(), layout.sidebar_rows())
             && rows.contains(cell)
@@ -1156,6 +1231,7 @@ impl App {
                         files.scroll(if up { -3 } else { 3 }, height);
                     }
                 }
+                sidebar if sidebar.is_list() => view.list.scroll(if up { -3 } else { 3 }, height),
                 _ => {
                     view.panel.move_by(if up { -1 } else { 1 });
                     view.panel.keep_in_view(height);
@@ -1240,13 +1316,41 @@ impl App {
             Ask::ClosePane(id) => self.close(id),
             Ask::Trust(root, then) => self.trust(&root, then),
             Ask::Untrust(root) => self.untrust(&root),
-            Ask::Approve(plan, then) => self.approve(&plan, then),
+            Ask::Approve(plan, agent, servers, then) => self.approve(&plan, agent, &servers, then),
             Ask::Remove(session, discard) => self.remove_session(session, discard),
+            Ask::RemoveKey(provider) => {
+                match self.services.remove_key(&provider) {
+                    Ok(()) => self.say("The key is deleted from your Keychain."),
+                    Err(error) => self.complain(error),
+                }
+                self.refresh_list();
+            }
+            Ask::RemoveMcp(id) => {
+                match self.services.mcp_remove(&id) {
+                    Ok(server) => self.say(format!("{} is removed.", server.name)),
+                    Err(error) => self.complain(error),
+                }
+                self.refresh_list();
+            }
+            Ask::RemoveSkill(id) => {
+                match self.services.skill_remove(&id) {
+                    Ok(skill) => self.say(format!("The skill {} is removed.", skill.name)),
+                    Err(error) => self.complain(error),
+                }
+                self.refresh_list();
+            }
+            Ask::Install {
+                addons,
+                root,
+                name,
+                script,
+            } => self.install(addons, root, name, script),
         }
     }
 
     /// Hangs up every program, and kills what does not exit.
     pub fn shut_down(&mut self) {
+        self.services.shut_down();
         self.views.clear();
         self.sessions.shutdown(SHUTDOWN_GRACE);
     }
@@ -1258,6 +1362,8 @@ impl App {
             Msg::Input(Event::Key(key)) if key.kind != KeyEventKind::Release => {
                 if self.question.is_some() {
                     self.question_key(key);
+                } else if self.dialog.is_some() {
+                    self.dialog_key(key);
                 } else {
                     match self.screen {
                         Screen::Welcome => self.welcome_key(key),
@@ -1266,7 +1372,11 @@ impl App {
                 }
             }
             Msg::Input(Event::Mouse(event)) => self.mouse(event),
-            Msg::Input(Event::Paste(text)) => self.paste(&text),
+            Msg::Input(Event::Paste(text)) => match &mut self.dialog {
+                Some(Dialog::Form(form)) => form.paste(&text),
+                Some(Dialog::Picker(_)) => {}
+                None => self.paste(&text),
+            },
             Msg::Input(Event::Resize(cols, rows)) => self.size = (cols, rows),
             Msg::Input(_) => {}
             Msg::InputClosed(error) => {
@@ -1287,12 +1397,17 @@ impl App {
                 // A program that ended well takes its pane with it, as closing a
                 // terminal tab does; one that failed stays, to be read. An agent
                 // stays either way: Enter runs it again in its session.
-                let agent = self
+                let kind = self
                     .views
                     .iter()
                     .find_map(|v| v.slot(id))
-                    .is_some_and(|s| matches!(s.kind, Kind::Agent(..)));
-                if exit.code == 0 && exit.signal.is_none() && !agent {
+                    .map(|s| s.kind.clone());
+                let agent = matches!(kind, Some(Kind::Agent(..)));
+                let clean = exit.code == 0 && exit.signal.is_none();
+                if clean && let Some(Kind::Install { addons, root, name }) = &kind {
+                    self.installed(addons, root.as_deref(), name);
+                }
+                if clean && !agent {
                     self.close(id);
                 } else if let Some(slot) = self.slot_mut(id) {
                     slot.pane.exited(exit);
@@ -1302,6 +1417,11 @@ impl App {
                 if agent {
                     self.refresh_panel();
                 }
+            }
+            Msg::Local(detection) => {
+                self.services.set_local(detection);
+                self.say("Looked for local models.");
+                self.refresh_list();
             }
             Msg::FilesChanged(root) => {
                 for view in &mut self.views {
@@ -1358,6 +1478,7 @@ impl App {
     fn wanted_cursor(&self) -> Option<(CursorShape, bool)> {
         if self.screen != Screen::Space
             || self.question.is_some()
+            || self.dialog.is_some()
             || !matches!(self.mode, Mode::Normal | Mode::Prefix)
         {
             return None;

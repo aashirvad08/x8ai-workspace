@@ -15,6 +15,7 @@ use crate::agents::{AgentRow, Isolated};
 use crate::app::Msg;
 use crate::files::FileList;
 use crate::layout::{Axis, Layout, PaneArea, Tree};
+use crate::listing::Listing;
 use crate::pane::{Pane, PaneId};
 use crate::spaces::SpaceInfo;
 
@@ -34,6 +35,13 @@ pub enum Kind {
     Agent(AgentSessionId, String),
     /// A pager on what a session's agent changed.
     Review(AgentSessionId, String),
+    /// An add-on install: the add-ons it adds to the space of `root` when it
+    /// ends well and they are found.
+    Install {
+        addons: Vec<&'static str>,
+        root: Option<PathBuf>,
+        name: String,
+    },
 }
 
 pub struct Slot {
@@ -56,6 +64,7 @@ impl Slot {
         let title = match &self.kind {
             Kind::Agent(_, name) => name.clone(),
             Kind::Review(_, name) => format!("changes: {name}"),
+            Kind::Install { name, .. } => format!("install: {name}"),
             Kind::Editor(path) => path.file_name().map_or_else(
                 || path.display().to_string(),
                 |n| n.to_string_lossy().into_owned(),
@@ -97,6 +106,36 @@ pub enum Sidebar {
     Hidden,
     Files,
     Agents,
+    Models,
+    Mcp,
+    Catalog,
+    Addons,
+}
+
+impl Sidebar {
+    /// The panels that show a [`Listing`] (`list`).
+    pub fn is_list(self) -> bool {
+        matches!(
+            self,
+            Self::Models | Self::Mcp | Self::Catalog | Self::Addons
+        )
+    }
+}
+
+/// What a row of a list panel is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListKey {
+    Provider(String),
+    /// A provider's model, and whether the user added it.
+    Model {
+        provider: String,
+        model: String,
+        added: bool,
+    },
+    Mcp(String),
+    /// A catalog item, by its catalog id (`model.anthropic.claude-sonnet-5`).
+    Catalog(String),
+    Addon(&'static str),
 }
 
 /// A row of the Agents panel: an agent to launch, or one of the space's
@@ -115,6 +154,8 @@ pub struct AgentsPanel {
     pub selected: usize,
     pub offset: usize,
     pub isolated: Option<Isolated>,
+    /// What each agent's next launch gets, in a few words, by agent id.
+    pub drafts: std::collections::HashMap<String, String>,
 }
 
 /// A line of the Agents panel, top to bottom.
@@ -128,6 +169,8 @@ pub enum PanelLine {
     Heading(&'static str),
     /// Row `n` of `rows`, which can be selected.
     Row(usize),
+    /// What agent row `n`'s next launch gets, under it.
+    Draft(usize),
     /// Said when a section is empty.
     Empty(&'static str),
 }
@@ -155,7 +198,14 @@ impl AgentsPanel {
         if agents == 0 {
             lines.push(PanelLine::Empty("No agents."));
         }
-        lines.extend((0..agents).map(PanelLine::Row));
+        for row in 0..agents {
+            lines.push(PanelLine::Row(row));
+            if let Some(PanelRow::Agent(agent)) = self.rows.get(row)
+                && self.drafts.contains_key(agent.definition.id.as_str())
+            {
+                lines.push(PanelLine::Draft(row));
+            }
+        }
         lines.push(PanelLine::Blank);
         lines.push(PanelLine::Heading("SESSIONS"));
         if agents == self.rows.len() {
@@ -237,6 +287,8 @@ pub struct SpaceView {
     pub files: Option<FileList>,
     pub sidebar: Sidebar,
     pub panel: AgentsPanel,
+    /// The list of the Models, MCP, Catalog or Add-ons panel, whichever shows.
+    pub list: Listing<ListKey>,
     pub focus: Focus,
     _watcher: Option<Watcher>,
 }
@@ -264,6 +316,7 @@ impl SpaceView {
             files,
             sidebar: Sidebar::Hidden,
             panel: AgentsPanel::default(),
+            list: Listing::default(),
             focus: Focus::Panes,
             _watcher: watcher,
         }
@@ -463,7 +516,11 @@ impl SpaceView {
     fn split_body(&self, body: Rect) -> (Option<Rect>, Rect) {
         let width = match self.sidebar {
             Sidebar::Files if self.files.is_some() => Some((body.width / 4).clamp(18, 36)),
-            Sidebar::Agents => Some((body.width / 3).clamp(30, 48)),
+            Sidebar::Agents
+            | Sidebar::Models
+            | Sidebar::Mcp
+            | Sidebar::Catalog
+            | Sidebar::Addons => Some((body.width * 2 / 5).clamp(32, 56)),
             _ => None,
         };
         let sidebar = width

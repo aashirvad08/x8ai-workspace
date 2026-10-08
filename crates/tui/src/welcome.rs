@@ -34,6 +34,11 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "a new, empty space in ~/Workspaces",
     },
     CommandInfo {
+        name: "/share",
+        usage: "/share <space>",
+        description: "give another space this one's add-ons",
+    },
+    CommandInfo {
         name: "/home",
         usage: "/home",
         description: "the workspace with no folder open",
@@ -51,13 +56,14 @@ pub const COMMANDS: &[CommandInfo] = &[
 ];
 
 /// The app's commands that the terminal version does not have yet.
-const APP_ONLY: &[&str] = &["/share", "/get", "/give"];
+const APP_ONLY: &[&str] = &["/get", "/give"];
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command<'a> {
     Empty,
     Cd(&'a str),
     New(&'a str),
+    Share(&'a str),
     Home,
     Name(&'a str),
     Quit,
@@ -77,6 +83,7 @@ pub fn parse(text: &str) -> Command<'_> {
     match word {
         "/cd" => Command::Cd(arg),
         "/new" => Command::New(arg),
+        "/share" => Command::Share(arg),
         "/home" => Command::Home,
         "/name" => Command::Name(arg),
         "/quit" | "/exit" => Command::Quit,
@@ -383,7 +390,8 @@ mod tests {
         assert_eq!(parse("/home"), Command::Home);
         assert_eq!(parse("/name Ada"), Command::Name("Ada"));
         assert_eq!(parse("/quit"), Command::Quit);
-        assert_eq!(parse("/share ws-abcdef"), Command::AppOnly("/share"));
+        assert_eq!(parse("/share ws-abcdef"), Command::Share("ws-abcdef"));
+        assert_eq!(parse("/get"), Command::AppOnly("/get"));
         assert_eq!(parse("ls -la"), Command::Unknown("ls"));
     }
 
@@ -467,7 +475,7 @@ mod tests {
         // Commands, with a space after those that take an argument.
         assert_eq!(
             completions("/"),
-            ["/cd ", "/new ", "/home", "/name ", "/quit"]
+            ["/cd ", "/new ", "/share ", "/home", "/name ", "/quit"]
         );
         assert_eq!(completions("/h"), ["/home"]);
         // Recent spaces by path, then folders for a path, not files or hidden

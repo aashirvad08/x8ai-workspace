@@ -10,8 +10,10 @@ use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::agents::Isolated;
-use crate::app::{App, Mode, Question, Screen};
+use crate::app::{App, Dialog, Mode, Question, Screen};
+use crate::dialog::{FieldKind, Form, Picker};
 use crate::layout::Axis;
+use crate::listing::{Item, Tone};
 use crate::space::{Focus, Label, PanelLine, PanelRow, Sidebar, SpaceLayout, SpaceView, clip};
 use crate::welcome::tilde;
 
@@ -34,6 +36,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     }
     if app.mode == Mode::Help && app.screen == Screen::Space {
         help(frame, app);
+    }
+    if let Some(dialog) = &app.dialog {
+        match dialog {
+            Dialog::Form(form) => form_box(frame, app, form),
+            Dialog::Picker(picker) => picker_box(frame, app, picker),
+        }
     }
     if let Some(question) = &app.question {
         ask(frame, app, question);
@@ -248,7 +256,8 @@ fn space(frame: &mut Frame<'_>, app: &App) {
         match view.sidebar {
             Sidebar::Files => file_list(frame, app, view, area),
             Sidebar::Agents => agents_panel(frame, app, view, area),
-            Sidebar::Hidden => {}
+            sidebar if sidebar.is_list() => list_panel(frame, app, view, area),
+            _ => {}
         }
     }
 
@@ -492,6 +501,20 @@ fn agents_panel(frame: &mut Frame<'_>, app: &App, view: &SpaceView, area: Rect) 
                 Line::styled(format!(" {text}"), muted().add_modifier(Modifier::BOLD))
             }
             PanelLine::Empty(text) => Line::styled(clip(&format!("   {text}"), width), muted()),
+            PanelLine::Draft(index) => {
+                let summary = match &panel.rows[index] {
+                    PanelRow::Agent(agent) => panel
+                        .drafts
+                        .get(agent.definition.id.as_str())
+                        .cloned()
+                        .unwrap_or_default(),
+                    PanelRow::Session(_) => String::new(),
+                };
+                Line::styled(
+                    clip(&format!("   → {summary}"), width),
+                    Style::new().fg(theme.accent()),
+                )
+            }
             PanelLine::Row(index) => {
                 let (name, detail, dim) = match &panel.rows[index] {
                     PanelRow::Agent(agent) => {
@@ -500,6 +523,7 @@ fn agents_panel(frame: &mut Frame<'_>, app: &App, view: &SpaceView, area: Rect) 
                             (Ok(_), true) => "allowed".to_owned(),
                             (Ok(_), false) => "installed".to_owned(),
                         };
+
                         (
                             agent.definition.name.clone(),
                             detail,
@@ -566,12 +590,11 @@ fn session_detail(session: &x8ai_agents::AgentSession) -> String {
             Some(format!(" · {}:{} UTC", &time[..2], &time[2..4]))
         })
         .unwrap_or_else(|| " · in your folder".to_owned());
-    let app = if crate::agents::runs_here(session) {
-        ""
-    } else {
-        " · app"
-    };
-    format!("{state}{when}{app}")
+    let model = session
+        .model
+        .as_ref()
+        .map_or_else(String::new, |m| format!(" · {}", m.model));
+    format!("{state}{when}{model}")
 }
 
 fn status_bar(app: &App, view: &SpaceView) -> Paragraph<'static> {
@@ -633,10 +656,35 @@ fn status_bar(app: &App, view: &SpaceView) -> Paragraph<'static> {
             key("esc"),
             text(" back"),
         ]),
+        _ if view.focus == Focus::Sidebar
+            && view.sidebar == Sidebar::Agents
+            && matches!(view.panel.row(), Some(PanelRow::Agent(_))) =>
+        {
+            Line::from(vec![
+                text(" "),
+                key("enter"),
+                text(" launch  "),
+                key("m"),
+                text(" model  "),
+                key("u"),
+                text(" MCP  "),
+                key("l"),
+                text(" skills  "),
+                key("t"),
+                text(" trust  "),
+                key("r"),
+                text(" revoke  "),
+                key("esc"),
+                text(" back"),
+            ])
+        }
+        _ if view.focus == Focus::Sidebar && view.sidebar.is_list() => {
+            list_hints(view, &key, &text)
+        }
         _ if view.focus == Focus::Sidebar && view.sidebar == Sidebar::Agents => Line::from(vec![
             text(" "),
             key("enter"),
-            text(" launch, open  "),
+            text(" open, run again  "),
             key("c"),
             text(" changes  "),
             key("o"),
@@ -703,6 +751,10 @@ fn help(frame: &mut Frame<'_>, app: &App) {
         ("x", "close the pane"),
         ("f", "the file list: Enter opens a file in $EDITOR"),
         ("a", "agents: launch, review, stop and remove sessions"),
+        ("m", "models: API keys, model ids, local models"),
+        ("u", "MCP servers: add, change, secrets, on and off"),
+        ("k", "the catalog: everything, and your own skills"),
+        ("e", "add-ons for this space's terminals"),
         ("s", "scroll back"),
         ("h", "the Welcome screen (the space keeps running)"),
         ("q", "quit"),
@@ -799,8 +851,289 @@ fn wrapped_rows(line: &Line<'_>, width: usize) -> u16 {
     u16::try_from(rows).unwrap_or(u16::MAX)
 }
 
+/// The Models, MCP, Catalog or Add-ons panel: a list.
+fn list_panel(frame: &mut Frame<'_>, app: &App, view: &SpaceView, area: Rect) {
+    let theme = app.theme;
+    let list = &view.list;
+    let focused = view.focus == Focus::Sidebar;
+    let width = usize::from(area.width.saturating_sub(1));
+    let title = match view.sidebar {
+        Sidebar::Models => " MODELS".to_owned(),
+        Sidebar::Mcp => " MCP SERVERS".to_owned(),
+        Sidebar::Catalog if list.filtering => format!(" CATALOG  /{}▏", list.filter),
+        Sidebar::Catalog => " CATALOG".to_owned(),
+        Sidebar::Addons => format!(" ADD-ONS · {}", view.info.name),
+        _ => String::new(),
+    };
+    let title_style = if focused {
+        Style::new().fg(theme.accent()).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().add_modifier(Modifier::BOLD)
+    };
+    let mut lines = vec![Line::styled(clip(&title, width), title_style)];
+    let height = usize::from(area.height.saturating_sub(1));
+    let mut row = list.items[..list.offset.min(list.items.len())]
+        .iter()
+        .filter(|i| matches!(i, Item::Row { .. }))
+        .count();
+    for item in list.items.iter().skip(list.offset).take(height) {
+        lines.push(match item {
+            Item::Heading(text) => {
+                Line::styled(format!(" {text}"), muted().add_modifier(Modifier::BOLD))
+            }
+            Item::Note(text) => Line::styled(clip(&format!(" {text}"), width), muted()),
+            Item::Blank => Line::raw(""),
+            Item::Row {
+                label,
+                detail,
+                tone,
+                nested,
+                ..
+            } => {
+                let selected = row == list.selected;
+                row += 1;
+                let indent = if *nested { "     " } else { "   " };
+                let label = format!("{indent}{label}");
+                let label_width = label.width();
+                let detail_room = width.saturating_sub(label_width + 2);
+                let detail = clip(detail, detail_room);
+                let pad = width.saturating_sub(label_width + 2 + detail.width());
+                let detail_style = match tone {
+                    Tone::Good => Style::new().fg(theme.ok()),
+                    Tone::Wanting => Style::new().fg(theme.highlight()),
+                    Tone::Muted => muted(),
+                    Tone::Plain => Style::new(),
+                };
+                if selected && focused {
+                    let text = clip(&format!("{label}  {detail}{}", " ".repeat(pad)), width);
+                    Line::styled(
+                        text,
+                        Style::new()
+                            .fg(theme.accent())
+                            .add_modifier(Modifier::REVERSED),
+                    )
+                } else {
+                    let label_style = if selected {
+                        Style::new().fg(theme.accent())
+                    } else if *nested {
+                        muted()
+                    } else {
+                        Style::new()
+                    };
+                    Line::from(vec![
+                        Span::styled(clip(&label, width), label_style),
+                        Span::raw("  "),
+                        Span::styled(detail, detail_style),
+                    ])
+                }
+            }
+        });
+    }
+    let inner = Rect {
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    frame.render_widget(Paragraph::new(lines), inner);
+    for y in area.top()..area.bottom() {
+        if let Some(cell) = frame
+            .buffer_mut()
+            .cell_mut((area.right().saturating_sub(1), y))
+        {
+            cell.set_symbol("│").set_style(muted());
+        }
+    }
+}
+
+/// The keys of the list panel that has them, for the status bar.
+fn list_hints(
+    view: &SpaceView,
+    key: &dyn Fn(&str) -> Span<'static>,
+    text: &dyn Fn(&str) -> Span<'static>,
+) -> Line<'static> {
+    let pairs: &[(&str, &str)] = match view.sidebar {
+        Sidebar::Models => &[
+            ("enter", "use a model"),
+            ("s", "save a key"),
+            ("d", "delete"),
+            ("a", "add a model id"),
+            ("r", "look for local"),
+        ],
+        Sidebar::Mcp => &[
+            ("n", "new"),
+            ("enter", "change"),
+            ("space", "on/off"),
+            ("s", "secret"),
+            ("l", "for the next launch"),
+            ("d", "remove"),
+        ],
+        Sidebar::Catalog if view.list.filtering => {
+            &[("enter", "keep the filter"), ("esc", "clear it")]
+        }
+        Sidebar::Catalog => &[
+            ("enter", "use, open"),
+            ("/", "filter"),
+            ("n", "new skill"),
+            ("e", "change"),
+            ("d", "remove"),
+        ],
+        Sidebar::Addons => &[
+            ("enter", "add, install"),
+            ("d", "remove"),
+            ("s", "share with a space"),
+            ("r", "check again"),
+        ],
+        _ => &[],
+    };
+    let mut spans = vec![text(" ")];
+    for (k, t) in pairs {
+        spans.push(key(k));
+        spans.push(text(&format!(" {t}  ")));
+    }
+    spans.push(key("esc"));
+    spans.push(text(" back"));
+    Line::from(spans)
+}
+
+/// A form: its fields, the focused one's hint, and why it was refused.
+fn form_box(frame: &mut Frame<'_>, app: &App, form: &Form) {
+    let theme = app.theme;
+    let mut lines = vec![
+        Line::styled(
+            form.title.clone(),
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+    ];
+    if let Some(note) = &form.note {
+        lines.push(Line::styled(note.clone(), muted()));
+        lines.push(Line::raw(""));
+    }
+    let mut caret = None;
+    for (index, field) in form.fields.iter().enumerate() {
+        let focused = index == form.focus;
+        let label_style = if focused {
+            Style::new().fg(theme.accent()).add_modifier(Modifier::BOLD)
+        } else {
+            muted()
+        };
+        lines.push(Line::styled(field.label.to_owned(), label_style));
+        let shown = match &field.kind {
+            FieldKind::Text => field.line.text().to_owned(),
+            FieldKind::Secret => "•".repeat(field.line.text().chars().count()),
+            FieldKind::Choice(options, chosen) => options
+                .iter()
+                .enumerate()
+                .map(|(i, o)| {
+                    if i == *chosen {
+                        format!("[{o}]")
+                    } else {
+                        o.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("  "),
+        };
+        if focused && !matches!(field.kind, FieldKind::Choice(..)) {
+            let column = match field.kind {
+                FieldKind::Secret => field.line.text()[..]
+                    .chars()
+                    .count()
+                    .min(field.line.caret_column()),
+                _ => field.line.caret_column(),
+            };
+            caret = Some((lines.len(), column + 2));
+        }
+        lines.push(Line::from(vec![
+            Span::styled(
+                "› ",
+                Style::new().fg(if focused {
+                    theme.highlight()
+                } else {
+                    Color::Reset
+                }),
+            ),
+            Span::raw(shown),
+        ]));
+        if focused && !field.hint.is_empty() {
+            lines.push(Line::styled(field.hint.to_owned(), muted()));
+        }
+    }
+    if let Some(error) = &form.error {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(error.clone(), Style::new().fg(theme.error())));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "enter",
+            Style::new().fg(theme.accent()).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" save   "),
+        Span::styled(
+            "tab",
+            Style::new().fg(theme.accent()).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" next field   "),
+        Span::styled(
+            "esc",
+            Style::new().fg(theme.accent()).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" cancel"),
+    ]));
+    let inner = dialog(frame, lines.clone(), theme.accent(), 72);
+    if let Some((line, column)) = caret {
+        let width = usize::from(inner.width).max(1);
+        let row: u16 = lines[..line].iter().map(|l| wrapped_rows(l, width)).sum();
+        let x = inner.x + u16::try_from(column).unwrap_or(0);
+        let y = inner.y + row;
+        if x < inner.right() && y < inner.bottom() {
+            frame.set_cursor_position(Position::new(x, y));
+        }
+    }
+}
+
+/// A picker: one of a list, or several ticked.
+fn picker_box(frame: &mut Frame<'_>, app: &App, picker: &Picker) {
+    let theme = app.theme;
+    let mut lines = vec![
+        Line::styled(
+            picker.title.clone(),
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+    ];
+    for (index, option) in picker.options.iter().enumerate() {
+        let mark = match (picker.multi, option.chosen) {
+            (true, true) => "[x] ",
+            (true, false) => "[ ] ",
+            (false, _) => "",
+        };
+        let selected = index == picker.selected;
+        let style = if selected {
+            Style::new()
+                .fg(theme.accent())
+                .add_modifier(Modifier::REVERSED)
+        } else {
+            Style::new()
+        };
+        let mut spans = vec![Span::styled(format!(" {mark}{}", option.label), style)];
+        if !option.detail.is_empty() {
+            spans.push(Span::styled(format!("  {}", option.detail), muted()));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::raw(""));
+    let keys = if picker.multi {
+        "space ticks   enter done   esc cancel"
+    } else {
+        "↑↓ move   enter choose   esc cancel"
+    };
+    lines.push(Line::styled(keys, muted()));
+    dialog(frame, lines, theme.accent(), 72);
+}
+
 /// A box in the middle of the screen.
-fn dialog(frame: &mut Frame<'_>, lines: Vec<Line<'static>>, border: Color, most: u16) {
+fn dialog(frame: &mut Frame<'_>, lines: Vec<Line<'static>>, border: Color, most: u16) -> Rect {
     let area = frame.area();
     let width = area.width.saturating_sub(4).min(most);
     let inner = usize::from(width.saturating_sub(4)).max(1);
@@ -816,8 +1149,10 @@ fn dialog(frame: &mut Frame<'_>, lines: Vec<Line<'static>>, border: Color, most:
     let block = Block::bordered()
         .border_style(Style::new().fg(border))
         .padding(ratatui::widgets::Padding::horizontal(1));
+    let inner = block.inner(rect);
     frame.render_widget(
         Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
         rect,
     );
+    inner
 }

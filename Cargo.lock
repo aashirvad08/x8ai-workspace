@@ -5498,7 +5498,7 @@ dependencies = [
 
 [[package]]
 name = "x8ai"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "alacritty_terminal",
  "nix",
@@ -5507,11 +5507,16 @@ dependencies = [
  "serde_json",
  "tempfile",
  "unicode-width",
+ "x8ai-addons",
  "x8ai-agents",
+ "x8ai-catalog",
  "x8ai-core",
  "x8ai-git",
  "x8ai-mcp",
+ "x8ai-providers",
  "x8ai-pty",
+ "x8ai-secrets",
+ "x8ai-skills",
  "x8ai-workspace",
 ]
 

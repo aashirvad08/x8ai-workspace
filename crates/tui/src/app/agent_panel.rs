@@ -14,12 +14,21 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
-use x8ai_agents::{AgentSession, Denied, LaunchPlan, SessionState};
-use x8ai_core::agent::AgentSessionId;
-use x8ai_pty::{Environment, Program};
+use std::sync::Arc;
 
-use super::{App, Ask, Question, Then};
-use crate::agents::{Isolated, runs_here};
+use x8ai_agents::adapter;
+use x8ai_agents::{AgentSession, LaunchPlan, SessionState};
+use x8ai_core::agent::{AgentSessionId, SessionConfiguration};
+use x8ai_core::mcp::{McpEnvSource, McpScope};
+use x8ai_core::model::CredentialState;
+use x8ai_core::skill::SkillScope;
+use x8ai_core::terminal::TerminalExit;
+use x8ai_mcp::{MaterialTransport, McpRuntime, Prepared, Selection};
+use x8ai_pty::{Environment, Program, SessionEvents};
+
+use super::{App, Ask, Dialog, Question, Then};
+use crate::agents::{Isolated, Key};
+use crate::dialog::{PickFor, PickOption, Picker};
 use crate::pane::{Pane, PaneId};
 use crate::space::{Focus, Kind, PanelRow, Sidebar, Slot};
 use crate::welcome::tilde;
@@ -74,6 +83,14 @@ impl App {
             );
         }
         let trusted = spaces.is_trusted(&root);
+        let drafts = agents
+            .definitions()
+            .iter()
+            .filter_map(|d| {
+                let id = d.id.as_str();
+                Some((id.to_owned(), self.draft_summary(id)?))
+            })
+            .collect();
         let isolated = Some(agents.isolation_of(&root));
 
         self.current.trusted = trusted;
@@ -87,6 +104,7 @@ impl App {
             .min(rows.len().saturating_sub(1));
         panel.rows = rows;
         panel.isolated = isolated;
+        panel.drafts = drafts;
     }
 
     /// Keys for the Agents panel.
@@ -118,6 +136,21 @@ impl App {
             KeyCode::Char('r') => {
                 if let Some(PanelRow::Agent(agent)) = row {
                     self.revoke(agent.definition.id.as_str(), &agent.definition.name);
+                }
+            }
+            KeyCode::Char('m') => {
+                if let Some(PanelRow::Agent(agent)) = row {
+                    self.pick_model(agent.definition.id.as_str());
+                }
+            }
+            KeyCode::Char('u') => {
+                if let Some(PanelRow::Agent(agent)) = row {
+                    self.pick_mcp(agent.definition.id.as_str());
+                }
+            }
+            KeyCode::Char('l') => {
+                if let Some(PanelRow::Agent(agent)) = row {
+                    self.pick_skills(agent.definition.id.as_str());
                 }
             }
             KeyCode::Char('c') => {
@@ -157,32 +190,77 @@ impl App {
 
     // Launching and running
 
-    /// Enter on an agent: a new session for it, after asking to trust the
-    /// folder and to allow the agent there, when needed.
+    /// Enter on an agent: a new session for it, with what was chosen for its
+    /// next launch (a model, MCP servers, skills), after asking to trust the
+    /// folder and to allow what is not allowed there yet.
     fn launch(&mut self, agent: &str) {
         let Some(root) = self.current.root.clone() else {
             return;
         };
-        let plan = match self.agents.plan(agent, &root) {
+        let Some(definition) = self.agents.definition(agent).cloned() else {
+            return;
+        };
+        let draft = self.drafts.get(agent).cloned().unwrap_or_default();
+        let then = Then::Launch(agent.to_owned());
+        if !self.spaces.is_trusted(&root) {
+            self.ask_trust(root, Some(then));
+            return;
+        }
+        let plan = match self.agents.plan_with(
+            agent,
+            &root,
+            draft.model.as_ref(),
+            &self.services,
+            Key::Present,
+        ) {
             Ok(plan) => plan,
             Err(error) => {
                 self.complain(error);
                 return;
             }
         };
-        let then = Then::Launch(agent.to_owned());
-        if !self.spaces.is_trusted(&root) {
-            self.ask_trust(root, Some(then));
+        let selection =
+            match self
+                .agents
+                .mcp_new(&definition, &root, &draft.mcp, &mut self.services)
+            {
+                Ok(selection) => selection,
+                Err(error) => {
+                    self.complain(error);
+                    return;
+                }
+            };
+        let skills =
+            match self
+                .agents
+                .skills_new(&definition, &root, &draft.skills, &mut self.services)
+            {
+                Ok(skills) => skills,
+                Err(error) => {
+                    self.complain(error);
+                    return;
+                }
+            };
+        let names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+        if !self.approved_or_ask(&plan, &selection, &names, then) {
             return;
         }
-        if !self.spaces.is_approved(&plan) {
-            self.ask_approve(plan, then);
-            return;
-        }
+        let trust = self.spaces.trust_store();
+        let approvals = self.services.mcp_approvals();
         if let Err(denied) = self.spaces.authorize(&plan) {
             self.complain(denied.to_string());
             return;
         }
+        if let Err(denied) = x8ai_mcp::authorize(&root, &selection.prepared, &trust, &approvals) {
+            self.complain(denied.to_string());
+            return;
+        }
+        let mut plan = plan;
+        plan.mcp = selection.attached.clone();
+        plan.skills = skills
+            .iter()
+            .map(x8ai_core::skill::Skill::reference)
+            .collect();
         match self.agents.create(&plan) {
             Ok(session) => {
                 self.refresh_panel();
@@ -190,6 +268,30 @@ impl App {
             }
             Err(error) => self.complain(format!("Could not start {}: {error}", plan.name)),
         }
+    }
+
+    /// Asks to allow what is not allowed yet in the plan's folder: the
+    /// agent's launch (its program, and its provider if a model was chosen),
+    /// and MCP servers as they would run. Returns whether all is allowed.
+    fn approved_or_ask(
+        &mut self,
+        plan: &LaunchPlan,
+        selection: &Selection,
+        skills: &[String],
+        then: Then,
+    ) -> bool {
+        let agent = !self.spaces.is_approved(plan);
+        let approvals = self.services.mcp_approvals();
+        let servers: Vec<Prepared> =
+            x8ai_mcp::unapproved(&plan.workspace, &selection.prepared, &approvals)
+                .into_iter()
+                .cloned()
+                .collect();
+        if !agent && servers.is_empty() {
+            return true;
+        }
+        self.ask_approve(plan.clone(), agent, servers, skills, then);
+        false
     }
 
     /// Enter on a session: its agent's pane, or its agent run again.
@@ -204,7 +306,8 @@ impl App {
     }
 
     /// Runs session `id`'s agent on a new pane, in a tab of its own or in place
-    /// of pane `replace` (its ended agent). Trust and approval are checked
+    /// of pane `replace` (its ended agent), with its model, the MCP servers it
+    /// still has and its skills as recorded. Trust and approval are checked
     /// again first, and asked for if they are missing.
     pub(super) fn run_session(&mut self, id: AgentSessionId, replace: Option<PaneId>) {
         let Some(at) = self.view_at() else {
@@ -214,39 +317,97 @@ impl App {
             self.complain("That session is gone.");
             return;
         };
-        if !runs_here(&record) {
-            self.complain(format!(
-                "This {} session was made in the app with a model, MCP servers or skills: run it from the app for now. They come to x8ai in the next step.",
-                record.name
-            ));
-            return;
-        }
         if self.current.root.as_deref() != Some(record.workspace.as_path()) {
             self.complain("That session belongs to another folder.");
             return;
         }
-        let plan = match self.agents.plan(record.agent.as_str(), &record.workspace) {
+        let Some(definition) = self.agents.definition(record.agent.as_str()).cloned() else {
+            return;
+        };
+        let root = record.workspace.clone();
+        let fail = |app: &mut App, error: String| {
+            app.agents.runtime.fail(id, error.clone());
+            app.complain(error);
+        };
+        if !self.spaces.is_trusted(&root) {
+            self.ask_trust(root, Some(Then::Run(id)));
+            return;
+        }
+        // What would run, without reading the key, to ask about.
+        let asked = match self.agents.plan_with(
+            record.agent.as_str(),
+            &root,
+            record.model.as_ref(),
+            &self.services,
+            Key::Present,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => return fail(self, error),
+        };
+        let selection = self
+            .agents
+            .mcp_run(&definition, &root, &record.mcp, &mut self.services);
+        let skill_names: Vec<String> = {
+            let all = self.services.skills();
+            record
+                .skills
+                .iter()
+                .map(|r| {
+                    all.iter()
+                        .find(|s| s.id == r.id)
+                        .map_or_else(|| r.id.to_string(), |s| s.name.clone())
+                })
+                .collect()
+        };
+        if !self.approved_or_ask(&asked, &selection, &skill_names, Then::Run(id)) {
+            return;
+        }
+        // Its skills exactly as recorded: a removed or changed one stops it here.
+        let skills = match crate::agents::Agents::skills_run(&mut self.services, &record.skills) {
+            Ok(skills) => skills,
+            Err(error) => return fail(self, error),
+        };
+        // The session's model, with the key as saved now.
+        let plan = match self.agents.plan_with(
+            record.agent.as_str(),
+            &root,
+            record.model.as_ref(),
+            &self.services,
+            Key::Read,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => return fail(self, error),
+        };
+        let trust = self.spaces.trust_store();
+        let approvals = self.services.mcp_approvals();
+        if let Err(denied) = x8ai_mcp::authorize(&root, &selection.prepared, &trust, &approvals) {
+            return fail(self, denied.to_string());
+        }
+        let plan = match self.agents.start_mcp(
+            &self.services,
+            id,
+            &definition,
+            plan,
+            &record.cwd,
+            &selection,
+            &trust,
+            &approvals,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => return fail(self, error),
+        };
+        let plan = match adapter::attach_skills(plan, &skills) {
             Ok(plan) => plan,
             Err(error) => {
-                self.agents.runtime.fail(id, error.clone());
-                self.complain(error);
-                return;
+                self.services.mcp.stop(id.0);
+                return fail(self, error.to_string());
             }
         };
         let authorized = match self.spaces.authorize(&plan) {
             Ok(authorized) => authorized,
-            Err(Denied::Untrusted(root)) => {
-                self.ask_trust(root, Some(Then::Run(id)));
-                return;
-            }
-            Err(Denied::NotApproved { .. }) => {
-                self.ask_approve(plan.clone(), Then::Run(id));
-                return;
-            }
-            Err(other) => {
-                self.agents.runtime.fail(id, other.to_string());
-                self.complain(other.to_string());
-                return;
+            Err(denied) => {
+                self.services.mcp.stop(id.0);
+                return fail(self, denied.to_string());
             }
         };
         let size = replace
@@ -261,13 +422,21 @@ impl App {
             .unwrap_or_else(|| self.new_pane_size(at, None));
         let pane = PaneId(self.next_pane);
         self.next_pane += 1;
-        let events = crate::pane::events(pane, self.tx.clone());
+        let events = Arc::new(AgentEvents {
+            pane: crate::pane::events(pane, self.tx.clone()),
+            mcp: self.services.mcp.clone(),
+            session: id.0,
+            run: self.services.mcp.run_token(id.0),
+        });
         match self
             .agents
             .runtime
             .run(&self.sessions, id, authorized, size, events)
         {
             Ok(session) => {
+                if let Some(pid) = session.pid() {
+                    self.services.mcp.set_owner(id.0, pid);
+                }
                 let slot = Slot {
                     pane: Pane::new(pane, session, size),
                     kind: Kind::Agent(id, record.name.clone()),
@@ -283,9 +452,173 @@ impl App {
                     None => view.add_tab(slot),
                 }
             }
-            Err(error) => self.complain(format!("{} could not start: {error}", record.name)),
+            Err(error) => {
+                self.services.mcp.stop(id.0);
+                self.complain(format!("{} could not start: {error}", record.name));
+            }
         }
         self.refresh_panel();
+    }
+
+    // What the next launch gets
+
+    fn pick_model(&mut self, agent: &str) {
+        let Some(definition) = self.agents.definition(agent).cloned() else {
+            return;
+        };
+        let current = self.drafts.get(agent).and_then(|d| d.model.clone());
+        let mut options = vec![PickOption {
+            value: String::new(),
+            label: "Its own configuration".to_owned(),
+            detail: "its settings and your shell".to_owned(),
+            chosen: false,
+        }];
+        for provider in self.services.provider_statuses() {
+            let Some(found) = self.services.provider(provider.id.as_str()) else {
+                continue;
+            };
+            if adapter::support(agent, found).is_err() {
+                continue;
+            }
+            let key = match provider.credential {
+                CredentialState::InKeychain => "key saved",
+                CredentialState::Missing => "no key: Ctrl-g m saves one",
+                CredentialState::NotNeeded => "no key needed",
+            };
+            for model in &provider.models {
+                options.push(PickOption {
+                    value: format!("{}\t{}", provider.id, model.id),
+                    label: format!("{} · {}", provider.name, model.id),
+                    detail: key.to_owned(),
+                    chosen: false,
+                });
+            }
+        }
+        let selected = current
+            .and_then(|m| {
+                options
+                    .iter()
+                    .position(|o| o.value == format!("{}\t{}", m.provider, m.model))
+            })
+            .unwrap_or(0);
+        self.dialog = Some(Dialog::Picker(Picker {
+            title: format!("{}'s model for its next session", definition.name),
+            options,
+            multi: false,
+            selected,
+            purpose: PickFor::Model(agent.to_owned()),
+        }));
+    }
+
+    fn pick_mcp(&mut self, agent: &str) {
+        let Some(definition) = self.agents.definition(agent).cloned() else {
+            return;
+        };
+        let transports = &definition.capabilities.mcp_transports;
+        if let Err(reason) = adapter::mcp_support(agent, transports) {
+            self.say(format!(
+                "{} cannot use MCP servers from x8ai: {reason}",
+                definition.name
+            ));
+            return;
+        }
+        let chosen = self
+            .drafts
+            .get(agent)
+            .map(|d| d.mcp.clone())
+            .unwrap_or_default();
+        let options: Vec<PickOption> = self
+            .services
+            .mcp_servers()
+            .into_iter()
+            .filter(|s| {
+                s.enabled
+                    && s.scope == McpScope::Session
+                    && transports.contains(&s.transport.kind())
+            })
+            .map(|s| PickOption {
+                chosen: chosen.contains(&s.id),
+                value: s.id.as_str().to_owned(),
+                label: s.name.clone(),
+                detail: s.description.clone(),
+            })
+            .collect();
+        if options.is_empty() {
+            self.say("No MCP server is chosen at launch. Ctrl-g u adds one (attached to: chosen at launch); the others attach by themselves.");
+            return;
+        }
+        self.dialog = Some(Dialog::Picker(Picker {
+            title: format!(
+                "MCP servers for {}'s next session (space ticks)",
+                definition.name
+            ),
+            options,
+            multi: true,
+            selected: 0,
+            purpose: PickFor::Mcp(agent.to_owned()),
+        }));
+    }
+
+    fn pick_skills(&mut self, agent: &str) {
+        let Some(definition) = self.agents.definition(agent).cloned() else {
+            return;
+        };
+        if let Err(reason) = adapter::skills_support(agent) {
+            self.say(format!(
+                "{} cannot take skills from x8ai: {reason}",
+                definition.name
+            ));
+            return;
+        }
+        let chosen = self
+            .drafts
+            .get(agent)
+            .map(|d| d.skills.clone())
+            .unwrap_or_default();
+        let options: Vec<PickOption> = self
+            .services
+            .skills()
+            .into_iter()
+            .filter(|s| s.scope == SkillScope::Session)
+            .map(|s| PickOption {
+                chosen: chosen.contains(&s.id),
+                value: s.id.as_str().to_owned(),
+                label: s.name.clone(),
+                detail: s.description.clone(),
+            })
+            .collect();
+        if options.is_empty() {
+            self.say("No skill is chosen at launch. Ctrl-g k, then n, writes one.");
+            return;
+        }
+        self.dialog = Some(Dialog::Picker(Picker {
+            title: format!(
+                "Skills for {}'s next session (space ticks)",
+                definition.name
+            ),
+            options,
+            multi: true,
+            selected: 0,
+            purpose: PickFor::Skills(agent.to_owned()),
+        }));
+    }
+
+    /// What an agent's next launch gets, in a few words, for its row.
+    pub fn draft_summary(&self, agent: &str) -> Option<String> {
+        let draft = self.drafts.get(agent)?;
+        let mut parts = Vec::new();
+        if let Some(model) = &draft.model {
+            parts.push(model.model.clone());
+        }
+        if !draft.mcp.is_empty() {
+            parts.push(format!("{} MCP", draft.mcp.len()));
+        }
+        match draft.skills.len() {
+            0 => {}
+            1 => parts.push("1 skill".to_owned()),
+            n => parts.push(format!("{n} skills")),
+        }
+        (!parts.is_empty()).then(|| parts.join(" · "))
     }
 
     // Questions
@@ -321,34 +654,79 @@ impl App {
         });
     }
 
-    fn ask_approve(&mut self, plan: LaunchPlan, then: Then) {
+    fn ask_approve(
+        &mut self,
+        plan: LaunchPlan,
+        agent: bool,
+        servers: Vec<Prepared>,
+        skills: &[String],
+        then: Then,
+    ) {
         let name = plan.name.clone();
         let folder = tilde(&plan.workspace, self.spaces.home());
-        let command = std::iter::once(plan.program.display().to_string())
-            .chain(plan.args.iter().cloned())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let place = match self.agents.isolation_of(&plan.workspace) {
-            Isolated::Worktrees { .. } => {
-                "Each session works in a Git worktree of its own, on its own branch: your working tree and branch are not touched.".to_owned()
-            }
-            Isolated::Shared(reason) => {
-                format!("Not isolated ({reason}): it works directly in your files, one agent at a time.")
-            }
-        };
-        self.question = Some(Question {
-            title: format!("Allow {name} to work in “{}”?", self.current.name),
-            lines: vec![
-                format!("Folder: {folder}"),
-                format!("Program: {command}"),
-                format!("Model: {name}'s own configuration (its settings and your shell)."),
-                place,
+        let mut lines = vec![format!("Folder: {folder}")];
+        if agent {
+            let command = std::iter::once(plan.program.display().to_string())
+                .chain(plan.args.iter().cloned())
+                .collect::<Vec<_>>()
+                .join(" ");
+            lines.push(format!("Program: {command}"));
+            lines.push(match &plan.configuration {
+                SessionConfiguration::App {
+                    provider_name,
+                    model,
+                    endpoint,
+                    credential,
+                    ..
+                } => format!(
+                    "Model: {model} from {provider_name}, at {endpoint}. {name} sends your code and prompts there{}; x8ai's setting replaces any in your shell for these sessions.",
+                    if *credential == CredentialState::InKeychain { ", with your saved key" } else { "" }
+                ),
+                SessionConfiguration::Agent { .. } => {
+                    format!("Model: {name}'s own configuration (its settings and your shell).")
+                }
+            });
+            lines.push(match self.agents.isolation_of(&plan.workspace) {
+                Isolated::Worktrees { .. } => {
+                    "Each session works in a Git worktree of its own, on its own branch: your working tree and branch are not touched.".to_owned()
+                }
+                Isolated::Shared(reason) => {
+                    format!("Not isolated ({reason}): it works directly in your files, one agent at a time.")
+                }
+            });
+        }
+        for prepared in &servers {
+            lines.push(describe_server(prepared, &name));
+        }
+        if !skills.is_empty() {
+            lines.push(format!(
+                "Skills: {} (instructions only: they run nothing).",
+                skills.join(", ")
+            ));
+        }
+        let (title, last) = if agent {
+            (
+                format!("Allow {name} to work in “{}”?", self.current.name),
                 format!(
                     "{name} runs as you, with access to your files, network and credentials, as if you started it in a terminal yourself. This allows it in this folder only: r in the Agents panel takes it back."
                 ),
-            ],
+            )
+        } else {
+            let what = match servers.as_slice() {
+                [one] => format!("the MCP server {}", one.server.name),
+                many => format!("{} MCP servers", many.len()),
+            };
+            (
+                format!("Allow {what} in “{}”?", self.current.name),
+                "MCP servers run as you. This allows exactly this configuration in this folder only: a change to a server's command, arguments, URL or variables asks again.".to_owned(),
+            )
+        };
+        lines.push(last);
+        self.question = Some(Question {
+            title,
+            lines,
             yes: "allow",
-            ask: Ask::Approve(Box::new(plan), then),
+            ask: Ask::Approve(Box::new(plan), agent, servers, then),
         });
     }
 
@@ -390,15 +768,31 @@ impl App {
 
     /// y to "Allow …?": records the approval, if the folder is still the one
     /// open and still trusted, then goes on.
-    pub(super) fn approve(&mut self, plan: &LaunchPlan, then: Then) {
+    pub(super) fn approve(
+        &mut self,
+        plan: &LaunchPlan,
+        agent: bool,
+        servers: &[Prepared],
+        then: Then,
+    ) {
         let root = &plan.workspace;
         if self.current.root.as_deref() != Some(root.as_path()) || !self.spaces.is_trusted(root) {
             self.complain("The folder changed while asking; nothing was allowed.");
             return;
         }
-        if let Err(error) = self.spaces.approve(plan) {
+        if agent && let Err(error) = self.spaces.approve(plan) {
             self.complain(format!("Could not allow it: {error}"));
             return;
+        }
+        if !servers.is_empty() {
+            let pairs: Vec<(&str, &x8ai_mcp::Material)> = servers
+                .iter()
+                .map(|p| (p.server.id.as_str(), &p.material))
+                .collect();
+            if let Err(error) = self.services.mcp_approvals().approve(root, &pairs) {
+                self.complain(format!("Could not allow the MCP servers: {error}"));
+                return;
+            }
         }
         self.go_on(Some(then));
     }
@@ -672,6 +1066,77 @@ impl App {
         ended |= self.ending.len() != before;
         if ended {
             self.refresh_panel();
+        }
+    }
+}
+
+/// A running agent's terminal events, and the end of the MCP servers started
+/// for this run when it exits.
+struct AgentEvents {
+    pane: Arc<dyn SessionEvents>,
+    mcp: Arc<McpRuntime>,
+    session: u32,
+    run: Option<u64>,
+}
+
+impl SessionEvents for AgentEvents {
+    fn output(&self, bytes: Vec<u8>) {
+        self.pane.output(bytes);
+    }
+
+    fn error(&self, message: String) {
+        self.pane.error(message);
+    }
+
+    fn exited(&self, exit: TerminalExit) {
+        self.pane.exited(exit);
+        // Off the terminal's thread: stopping waits for the servers to exit.
+        // Only this run's: a restart may have started another already.
+        if let Some(token) = self.run {
+            let (mcp, session) = (self.mcp.clone(), self.session);
+            std::thread::spawn(move || mcp.stop_run(session, token));
+        }
+    }
+}
+
+/// What the approval says about an MCP server: how it runs, exactly.
+fn describe_server(prepared: &Prepared, agent: &str) -> String {
+    let server = &prepared.server;
+    match &prepared.material.transport {
+        MaterialTransport::Stdio { program, args } => {
+            let command = std::iter::once(program.display().to_string())
+                .chain(args.iter().map(|a| {
+                    if a.is_empty() || a.contains(char::is_whitespace) {
+                        format!("“{a}”")
+                    } else {
+                        a.clone()
+                    }
+                }))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let variables: Vec<String> = server
+                .env
+                .iter()
+                .map(|v| match v.source {
+                    McpEnvSource::Secret => format!("{} (saved secret)", v.name),
+                    McpEnvSource::Inherit => format!("{} (from your shell)", v.name),
+                })
+                .collect();
+            let variables = if variables.is_empty() {
+                String::new()
+            } else {
+                format!(" Variables: {}.", variables.join(", "))
+            };
+            format!(
+                "MCP server {} (stdio): {command}. Started by x8ai when {agent} connects, with no other variables of yours.{variables}",
+                server.name
+            )
+        }
+        MaterialTransport::StreamableHttp { url } => {
+            format!(
+                "MCP server {} (HTTP): {url}. {agent} connects to it directly.",
+                server.name
+            )
         }
     }
 }

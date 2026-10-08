@@ -11,11 +11,14 @@
 mod agents;
 mod app;
 mod clipboard;
+mod dialog;
 mod files;
 mod keys;
 mod layout;
+mod listing;
 mod mouse;
 mod pane;
+mod services;
 mod space;
 mod spaces;
 mod theme;
@@ -52,6 +55,7 @@ On the Welcome screen:
   /new <name>     a new, empty space in ~/Workspaces
   /home           the workspace with no folder open
   /name <name>    how the welcome greets you
+  /share <space>  give the open space's add-ons to another space
   /quit           leave x8ai
   Esc             go back to the open space
 
@@ -64,7 +68,12 @@ In a space, press Ctrl-g, then:
   x               close the pane
   f               the file list: Enter opens a file in $EDITOR
   a               agents: start one in its own Git worktree, review what it
-                  changed, stop it, remove its session
+                  changed, stop it, remove its session; m u l choose the
+                  model, MCP servers and skills of its next launch
+  m               models: providers, their API keys, local models
+  u               MCP servers and their secrets
+  k               the catalog: agents, models, MCP servers, skills
+  e               add-ons for this space's terminals
   s               scroll back through the output
   h               the Welcome screen (the space keeps running)
   q               quit
@@ -80,6 +89,13 @@ Options:
 ";
 
 fn main() -> ExitCode {
+    // Run as an agent's bridge to an MCP server's socket (docs/mcp.md): before
+    // anything else, and with nothing of the terminal touched.
+    let mut args = std::env::args_os().skip(1);
+    if args.next().is_some_and(|a| a == x8ai_mcp::bridge::FLAG) {
+        let code = x8ai_mcp::bridge::run_with_args(args);
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
     let mut folder = None;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {

@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use x8ai_agents::{Authorized, Denied, LaunchPlan};
 use x8ai_core::workspace::RecentWorkspace;
 use x8ai_workspace::{
-    ApprovalStore, Error, NEW_SPACE_NAME_RULE, NEW_SPACES_FOLDER, RecentWorkspaces, SpaceStore,
-    TrustStore, Workspace, new_space_name,
+    ApprovalStore, Error, NEW_SPACE_NAME_RULE, NEW_SPACES_FOLDER, RecentWorkspaces, Space,
+    SpaceStore, TrustStore, Workspace, new_space_name,
 };
 
 use crate::welcome::{MAX_NAME_LENGTH, tilde};
@@ -28,6 +28,7 @@ const SETTINGS_FILE: &str = "terminal.json";
 
 /// The app's stores of trusted folders and agent approvals.
 const TRUST_FILE: &str = "trusted-workspaces.json";
+const SPACES_FILE: &str = "spaces.json";
 const APPROVALS_FILE: &str = "agent-approvals.json";
 
 /// An open space.
@@ -60,6 +61,11 @@ impl Spaces {
         &self.home
     }
 
+    /// The app's data folder.
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
     /// Problems reading or writing the stores since last asked. The space
     /// still opens; only remembering it failed.
     pub fn take_warnings(&mut self) -> Vec<String> {
@@ -69,7 +75,7 @@ impl Spaces {
     /// The recent spaces, most recent first, with their ids.
     pub fn recent(&mut self) -> Vec<RecentWorkspace> {
         let recent = self.load(RecentWorkspaces::load, "recent-workspaces.json");
-        let spaces = self.load(SpaceStore::load, "spaces.json");
+        let spaces = self.load(SpaceStore::load, SPACES_FILE);
         recent
             .list()
             .into_iter()
@@ -138,7 +144,7 @@ impl Spaces {
             let mut recent = self.load(RecentWorkspaces::load, "recent-workspaces.json");
             self.remember(recent.record(root));
         }
-        let mut spaces = self.load(SpaceStore::load, "spaces.json");
+        let mut spaces = self.load(SpaceStore::load, SPACES_FILE);
         let id = spaces.ensure(root).map(|s| s.id);
         let id = self.remember(id);
         let trusted = root.is_some_and(|root| self.is_trusted(root));
@@ -157,6 +163,44 @@ impl Spaces {
             name,
             trusted,
         }
+    }
+
+    /// The space of `root` (`None`: the workspace with no folder), with its
+    /// add-ons, given an id now if it has none.
+    pub fn space(&mut self, root: Option<&Path>) -> Result<Space, String> {
+        self.load(SpaceStore::load, SPACES_FILE)
+            .ensure(root)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Every space with an id.
+    pub fn all_spaces(&mut self) -> Vec<Space> {
+        self.load(SpaceStore::load, SPACES_FILE).list()
+    }
+
+    /// Adds add-ons to the space of `root`, after those it has.
+    pub fn add_addons(&mut self, root: Option<&Path>, addons: &[&str]) -> Result<Space, String> {
+        self.load(SpaceStore::load, SPACES_FILE)
+            .add(root, addons)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Adds add-ons to the space with id `id`, as sharing does.
+    pub fn add_addons_to(&mut self, id: &str, addons: &[&str]) -> Result<Space, String> {
+        self.load(SpaceStore::load, SPACES_FILE)
+            .add_to(id, addons)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn remove_addon(&mut self, root: Option<&Path>, addon: &str) -> Result<Space, String> {
+        self.load(SpaceStore::load, SPACES_FILE)
+            .remove(root, addon)
+            .map_err(|e| e.to_string())
+    }
+
+    /// The trusted folders, as the app's store holds them now.
+    pub fn trust_store(&mut self) -> TrustStore {
+        self.load(TrustStore::load, TRUST_FILE)
     }
 
     /// Whether the user trusted exactly this folder (ADR 0010).

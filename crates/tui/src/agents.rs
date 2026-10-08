@@ -1,8 +1,8 @@
 //! Agents in `x8ai`: the app's agent runtime (`x8ai-agents`), the same
 //! definitions, worktrees and approvals (docs/agent-runtime.md,
-//! docs/multi-agent.md). In this step agents run with their own configuration:
-//! a model, MCP servers or skills chosen for a session come with step 4, so a
-//! session the app made with them is listed but run from the app.
+//! docs/multi-agent.md). A session gets the model, MCP servers and skills
+//! chosen for it (ADR 0023): the key from the Keychain, the servers through
+//! `x8ai`'s own MCP runtime and bridge, the skills in its prompt.
 //!
 //! This module plans, creates and inspects sessions; the app asks the user and
 //! runs them on panes (`app.rs`). Trust and approvals are checked through the
@@ -10,12 +10,21 @@
 
 use std::path::{Path, PathBuf};
 
+use x8ai_agents::adapter::{self, AgentMcpServer, AgentMcpTransport, AgentSkill, ConfigureError};
 use x8ai_agents::discovery::find_executable;
 use x8ai_agents::environment::var;
 use x8ai_agents::isolation::{self, Isolation};
 use x8ai_agents::{AgentRuntime, AgentSession, Denied, LaunchPlan, plan};
 use x8ai_core::agent::{AgentDefinition, AgentSessionId, SessionConfiguration};
+use x8ai_core::id::IntegrationId;
+use x8ai_core::mcp::McpServerTransport;
+use x8ai_core::model::ModelSelection;
+use x8ai_core::skill::{Skill, SkillRef};
 use x8ai_git::{Changes, FileStatus, Git, Repository};
+use x8ai_mcp::{Launch, Selection, selection};
+use x8ai_workspace::TrustStore;
+
+use crate::services::Services;
 
 /// An agent as the Agents panel lists it.
 #[derive(Debug, Clone)]
@@ -61,6 +70,10 @@ impl Agents {
     /// The environment agents and their tools are started with.
     pub fn env(&self) -> &[(String, String)] {
         &self.env
+    }
+
+    pub fn definitions(&self) -> &[AgentDefinition] {
+        &self.definitions
     }
 
     pub fn definition(&self, id: &str) -> Option<&AgentDefinition> {
@@ -151,7 +164,7 @@ impl Agents {
                     .definition(&agent)
                     .map_or_else(|| agent.clone(), |d| d.name.clone());
                 let configuration = SessionConfiguration::Agent {
-                    shell_variables: x8ai_agents::adapter::shell_variables(&agent, env),
+                    shell_variables: adapter::shell_variables(&agent, env),
                 };
                 let cwd = cwd_in(&worktree.path, &repo);
                 self.runtime
@@ -175,7 +188,14 @@ impl Agents {
             (Some(git), Some(repo)) => {
                 let worktree = self
                     .isolation
-                    .create(git, &repo, &plan.agent, None, &[], &[])
+                    .create(
+                        git,
+                        &repo,
+                        &plan.agent,
+                        plan.model.as_ref(),
+                        &plan.mcp,
+                        &plan.skills,
+                    )
                     .map_err(|e| e.to_string())?;
                 (cwd_in(&worktree.path, &repo), Some(worktree))
             }
@@ -184,6 +204,198 @@ impl Agents {
         self.runtime
             .create(plan, cwd, worktree)
             .map_err(|e| e.to_string())
+    }
+
+    /// The launch of agent `id` in `root`: with its own configuration, or
+    /// pointed at `model` through its adapter. `Key::Read` reads the provider's
+    /// key from the Keychain, to start the agent; `Key::Present` only checks
+    /// one is saved, to ask approval or record a session.
+    pub fn plan_with(
+        &self,
+        id: &str,
+        root: &Path,
+        model: Option<&ModelSelection>,
+        services: &Services,
+        key: Key,
+    ) -> Result<LaunchPlan, String> {
+        let plan = self.plan(id, root)?;
+        let Some(model) = model else {
+            return Ok(plan);
+        };
+        let provider = services
+            .provider(model.provider.as_str())
+            .ok_or_else(|| format!("There is no provider {}.", model.provider))?;
+        // Checked before the key is read: an unsupported choice never touches it.
+        adapter::support(id, provider).map_err(|reason| {
+            ConfigureError::Unsupported {
+                agent: plan.name.clone(),
+                provider: provider.name.clone(),
+                reason,
+            }
+            .to_string()
+        })?;
+        if key == Key::Present {
+            return adapter::route(
+                plan,
+                provider,
+                &model.model,
+                services.credential_state(provider),
+            )
+            .map_err(|e| e.to_string());
+        }
+        let credential = services.credential(provider)?;
+        adapter::configure(plan, provider, &model.model, credential.as_ref())
+            .map_err(|e| e.to_string())
+    }
+
+    /// The MCP servers a new session of `definition` in `root` gets: the
+    /// global and folder ones it can use, and the session ones `chosen`.
+    pub fn mcp_new(
+        &self,
+        definition: &AgentDefinition,
+        root: &Path,
+        chosen: &[IntegrationId],
+        services: &mut Services,
+    ) -> Result<Selection, String> {
+        let servers = services.mcp_servers();
+        selection::for_new_session(
+            &servers,
+            &agent_mcp(definition),
+            root,
+            chosen,
+            services.mcp_secrets(),
+            var(&self.env, "PATH"),
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    /// The MCP servers another run of a session uses: those it was made with
+    /// that still exist, are on, and can run.
+    pub fn mcp_run(
+        &self,
+        definition: &AgentDefinition,
+        root: &Path,
+        attached: &[IntegrationId],
+        services: &mut Services,
+    ) -> Selection {
+        let servers = services.mcp_servers();
+        selection::for_run(
+            &servers,
+            &agent_mcp(definition),
+            root,
+            attached,
+            services.mcp_secrets(),
+            var(&self.env, "PATH"),
+        )
+    }
+
+    /// The skills a new session gets: the global and folder ones, and the
+    /// session ones `chosen`. For an agent that cannot take skills, choosing
+    /// one is refused and the others are not attached.
+    pub fn skills_new(
+        &self,
+        definition: &AgentDefinition,
+        root: &Path,
+        chosen: &[IntegrationId],
+        services: &mut Services,
+    ) -> Result<Vec<Skill>, String> {
+        if let Err(reason) = adapter::skills_support(definition.id.as_str()) {
+            if chosen.is_empty() {
+                return Ok(Vec::new());
+            }
+            return Err(ConfigureError::SkillsUnsupported {
+                agent: definition.name.clone(),
+                reason,
+            }
+            .to_string());
+        }
+        let all = services.skills();
+        let attached = x8ai_skills::attach(&all, root, chosen).map_err(|e| e.to_string())?;
+        Ok(attached.into_iter().cloned().collect())
+    }
+
+    /// The skills exactly as a session recorded them; refused, with the reason,
+    /// when one was removed or changed since.
+    pub fn skills_run(
+        services: &mut Services,
+        recorded: &[SkillRef],
+    ) -> Result<Vec<AgentSkill>, String> {
+        let all = services.skills();
+        let resolved = x8ai_skills::resolve(&all, recorded).map_err(|e| format!("Skills: {e}"))?;
+        Ok(resolved
+            .into_iter()
+            .map(|s| AgentSkill {
+                reference: s.reference(),
+                name: s.name.clone(),
+                instructions: s.instructions.clone(),
+            })
+            .collect())
+    }
+
+    /// The plan with its MCP servers ready: a socket for each stdio server,
+    /// where it starts when the agent connects, and the agent told where each
+    /// server is, through its adapter. `x8ai` itself is the agent's bridge to
+    /// a socket (`--mcp-bridge`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_mcp(
+        &self,
+        services: &Services,
+        session: AgentSessionId,
+        definition: &AgentDefinition,
+        plan: LaunchPlan,
+        cwd: &Path,
+        selection: &Selection,
+        trust: &TrustStore,
+        approvals: &x8ai_mcp::Approvals,
+    ) -> Result<LaunchPlan, String> {
+        // An earlier run of this session stops first.
+        services.mcp.stop(session.0);
+        let mut launches = Vec::new();
+        for prepared in &selection.prepared {
+            let env = x8ai_mcp::environment(&prepared.server, &self.env, services.mcp_secrets())
+                .map_err(|e| format!("MCP: {e}"))?;
+            launches.extend(Launch::new(prepared, env, cwd.to_owned()));
+        }
+        let endpoints = if launches.is_empty() {
+            Vec::new()
+        } else {
+            let authorized =
+                x8ai_mcp::authorize(&plan.workspace, &selection.prepared, trust, approvals)
+                    .map_err(|e| e.to_string())?;
+            services
+                .mcp
+                .start(session.0, &authorized, launches)
+                .map_err(|e| format!("MCP: {e}"))?
+        };
+        let bridge =
+            std::env::current_exe().map_err(|e| format!("cannot find x8ai itself: {e}"))?;
+        let servers: Vec<AgentMcpServer> = selection
+            .prepared
+            .iter()
+            .map(|prepared| AgentMcpServer {
+                id: prepared.server.id.clone(),
+                transport: match &prepared.server.transport {
+                    McpServerTransport::StreamableHttp { url } => {
+                        AgentMcpTransport::StreamableHttp { url: url.clone() }
+                    }
+                    McpServerTransport::Stdio { .. } => {
+                        let socket = endpoints
+                            .iter()
+                            .find(|e| e.id == prepared.server.id)
+                            .map(|e| e.socket.display().to_string())
+                            .unwrap_or_default();
+                        AgentMcpTransport::Stdio {
+                            command: bridge.clone(),
+                            args: vec![x8ai_mcp::bridge::FLAG.to_owned(), socket],
+                        }
+                    }
+                },
+            })
+            .collect();
+        adapter::attach_mcp(plan, &definition.capabilities.mcp_transports, &servers).map_err(|e| {
+            services.mcp.stop(session.0);
+            e.to_string()
+        })
     }
 
     /// What the agent of `session` changed in its worktree since it started.
@@ -224,6 +436,26 @@ impl Agents {
     }
 }
 
+/// Whether a launch plan is for starting the agent (`Read`: the provider's key
+/// from the Keychain) or for asking approval or recording a session
+/// (`Present`: only whether one is saved). The Keychain may ask the user each
+/// time a key is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    Read,
+    Present,
+}
+
+/// What `definition`'s agent can do with MCP servers, as its adapter says.
+fn agent_mcp(definition: &AgentDefinition) -> selection::AgentMcp<'_> {
+    let transports = &definition.capabilities.mcp_transports;
+    selection::AgentMcp {
+        name: &definition.name,
+        support: adapter::mcp_support(definition.id.as_str(), transports),
+        transports,
+    }
+}
+
 /// Where the agent runs in a worktree: the same folder inside it as the
 /// workspace is inside its repository, if the worktree has it.
 fn cwd_in(worktree: &Path, repo: &Repository) -> PathBuf {
@@ -233,12 +465,6 @@ fn cwd_in(worktree: &Path, repo: &Repository) -> PathBuf {
     } else {
         inside
     }
-}
-
-/// Whether a session can run in `x8ai` now: one made in the app with a
-/// model, MCP servers or skills needs what comes with step 4.
-pub fn runs_here(session: &AgentSession) -> bool {
-    session.model.is_none() && session.mcp.is_empty() && session.skills.is_empty()
 }
 
 /// The review of a session's changes, as text for a pager: what changed, then
