@@ -12,6 +12,7 @@ members = [
     "crates/catalog",
     "crates/agents",
     "crates/addons",
+    "crates/tui",
     "src-tauri",
 ]
 
@@ -97,3 +98,12 @@ tempfile = "3"
 # interpret. The ones we use (try_from/into on string newtypes, deny_unknown_fields)
 # do not change the TypeScript shape; review generated diffs when adding new ones.
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
+
+# The terminal host (`x8ai`, crates/tui; see docs/decisions/0020). ratatui draws
+# the screens, through crossterm, which it re-exports; default features off: no
+# extra widgets or macros.
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
+# Emulates each terminal the TUI shows, as xterm.js does in the app: parses the
+# program's output into a grid and answers its queries. From the Alacritty
+# project; Zed's terminal uses it too.
+alacritty_terminal = "0.26"
