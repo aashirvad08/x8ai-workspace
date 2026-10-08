@@ -1,321 +1,223 @@
 # x8ai Workspace
 
-**A terminal-first workspace for coding with AI agents, on macOS.**
+**A workspace for coding with AI agents, in your own terminal, on macOS.**
 
-x8ai Workspace puts your terminals, your code and the coding agents you already
-use in one window. Open a project, pick an agent such as Claude Code, OpenCode or
-Codex, choose the model it should use, and let it work. Each agent gets its own
-copy of your repository, so it never touches your checkout while it works, and
-you review what it changed.
-
-The app doesn't come with its own AI. It runs the agents and models you choose,
-and it doesn't favor any vendor.
-
----
-
-## What you can do
-
-- **Or stay in your terminal.** `brew install aashirvad08/tap/x8ai`, then run
-  `x8ai`: the same Welcome screen, spaces, agents, models, MCP servers, skills
-  and add-ons, in the terminal you already use. Close the terminal and your
-  shells and agents keep running; `x8ai` brings them back (see
-  [x8ai in your terminal](#x8ai-in-your-terminal)).
-- **Start from the Welcome screen.** Type `/cd` to open a folder as your space
-  and `/home` for the workspace with no folder; ⇧⌘H brings it back any time.
-- **Work in real terminals.** Full terminals with tabs and split panes, running
-  your own shell.
-- **Browse, search and edit your code.** A file explorer, search across the
-  folder, quick open (⌘P) and an editor with syntax highlighting.
-- **Run coding agents safely.** Agents run only in folders you trust, and only
-  after you approve the exact program and settings. In a Git repository each
-  agent session works in a Git worktree of its own, on its own branch.
-- **Run several agents at once** and see what each one changed, file by file,
-  before you merge anything.
-- **Choose the model.** Save an API key once for Anthropic, OpenAI, Google or
-  OpenRouter, or use local models with Ollama, and pick a model for each session.
-- **Give agents tools with MCP servers.** Add a server once and attach it to the
-  sessions that need it.
-- **Attach skills.** Skills are reusable instructions, such as "write a failing
-  test first", that you add to a session.
-- **Browse everything in one place.** The Catalog lists every agent, model, MCP
-  server and skill, whether it's ready, and what it still needs.
-
-## Supported agents and providers
-
-| Agent | Choose its model in the app | MCP servers | Skills |
-| --- | --- | --- | --- |
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic, OpenRouter, Ollama | ✓ | ✓ |
-| [OpenCode](https://opencode.ai) | Anthropic, OpenAI, Google, OpenRouter, Ollama | ✓ | — |
-| [Codex](https://github.com/openai/codex) | OpenAI | — | — |
-
-Any agent can also use its own configuration, exactly as it does in your
-terminal. You install the agents yourself; the app finds them on your `PATH`.
-Any other command-line tool runs in the app's terminals as usual.
-
----
-
-## Install
-
-### In your terminal
+`x8ai` turns the terminal you already use into a workspace: your shells in tabs
+and split panes, your project's files, your editor, and the coding agents you
+already use, such as Claude Code, OpenCode and Codex. Pick an agent, choose the
+model it should use, and let it work. Each agent gets its own copy of your
+repository, so it never touches your checkout, and you review what it changed.
+Close the terminal and everything keeps running; run `x8ai` again and it's all
+there.
 
 ```sh
 brew install aashirvad08/tap/x8ai
 x8ai
 ```
 
-`x8ai` runs on macOS 13 or later, on Apple silicon and Intel. It is the
-workspace as a full-screen program in the terminal you already use (see
-[x8ai in your terminal](#x8ai-in-your-terminal)): agents, with the model, MCP
-servers and skills you choose, and add-ons. `brew upgrade x8ai` updates it;
-then quit x8ai (Ctrl-g q), or run `x8ai --stop`, so the new version starts.
-
-### The app
-
-There is no downloadable release of the app yet, so you build it from source.
-The build takes a few minutes the first time.
-
-**You need:**
-
-- macOS 13 or later
-- Xcode Command Line Tools: `xcode-select --install`. These include Git.
-- [Node.js](https://nodejs.org) 22.12 or later
-- [Rust](https://rustup.rs), installed with rustup. The right version is picked
-  up automatically.
-
-**Build it:**
-
-```sh
-git clone https://github.com/aashirvad08/x8ai-workspace.git
-cd x8ai-workspace
-corepack enable          # provides pnpm
-pnpm install
-pnpm tauri build
-```
-
-The app is created at `target/release/bundle/macos/x8ai Workspace.app`. Drag it
-into your Applications folder, or open it right away:
-
-```sh
-open "target/release/bundle/macos/x8ai Workspace.app"
-```
-
-**Install an agent** if you don't have one yet, for example Claude Code, OpenCode
-or Codex. Follow each agent's own instructions. The app doesn't install them.
+x8ai doesn't come with its own AI. It runs the agents and models you choose,
+and it doesn't favor any vendor.
 
 ---
 
-## x8ai in your terminal
+## What you can do
 
-`x8ai` starts on the Welcome screen. Type a command:
+- **Start from the Welcome screen.** Type `/cd` to open a folder as your space,
+  `/new` for a new one, or `/home` for your home folder.
+- **Work in real terminals.** Your own shell, in tabs and split panes, with the
+  mouse: click, drag the line between panes, scroll, select to copy.
+- **Browse your code and edit it.** A file list of the folder, and your own
+  editor (`$EDITOR`, such as vim, Neovim or Helix) one keypress away.
+- **Run coding agents safely.** Agents run only in folders you trust, and only
+  after you approve the exact program and settings. In a Git repository each
+  agent session works in a Git worktree of its own, on its own branch.
+- **Run several agents at once** and review what each one changed, commit by
+  commit and file by file, before you merge anything.
+- **Choose the model.** Save an API key once for Anthropic, OpenAI, Google or
+  OpenRouter, or use local models with Ollama, and pick a model for each launch.
+- **Give agents tools with MCP servers.** Add a server once and attach it to the
+  sessions that need it.
+- **Attach skills.** Skills are reusable instructions, such as "write a failing
+  test first", that you give to a session.
+- **See everything in one place.** The Catalog lists every agent, model, MCP
+  server and skill, whether it's ready, and what it still needs.
+- **Set up a space's terminals with add-ons**, such as Starship, fzf or
+  ripgrep, without editing your `~/.zshrc`.
+- **Close the terminal; nothing stops.** Your shells and agents keep running in
+  the background, and `x8ai` brings them back, in this terminal or another.
 
-| Command | What it does |
-| --- | --- |
-| `/cd <folder>` | Opens a space: a recent one by its name or path (`/cd gym`), or any folder (`/cd ~/code/app`, `/cd ../app`; relative to where you started `x8ai`). Tab completes folders. |
-| `/new <name>` | Makes a new, empty space in `~/Workspaces/<name>` and opens it. |
-| `/home` | The workspace with no folder, with a shell in your home folder. |
-| `/name <your name>` | How the Welcome greets you. |
-| `/share <space>` | Gives the open space's add-ons to another space. |
-| `/detach` | Leaves `x8ai` running in the background (below). |
-| `/quit` | Quits `x8ai`, ending its shells and agents (asking first while one runs). So does Ctrl-c on an empty line. |
+## Supported agents and providers
 
-On an empty line, ↑↓ and Enter open one of your recent spaces, and Esc goes
-back to the space that is open. `x8ai <folder>` opens a folder right away.
+| Agent | Choose its model in x8ai | MCP servers | Skills |
+| --- | --- | --- | --- |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic, OpenRouter, Ollama | ✓ | ✓ |
+| [OpenCode](https://opencode.ai) | Anthropic, OpenAI, Google, OpenRouter, Ollama | ✓ | — |
+| [Codex](https://github.com/openai/codex) | OpenAI | — | — |
 
-A space opens with a shell in its folder. Every key goes to the program in the
-focused pane except **Ctrl-g**, after which:
+Any agent can also use its own configuration, exactly as it does in your
+terminal. You install the agents yourself; x8ai finds them on your `PATH`. Any
+other command-line tool runs in x8ai's shells as usual.
 
-| Key | What it does |
-| --- | --- |
-| `t` | A new tab, with a shell. `n` and `p` go to the next and previous tab, `1`–`9` to that one. |
-| `\|` and `-` | Split the pane: a new shell to the right, or below. |
-| ←→↑↓ and `o` | The pane beside, or the next one. |
-| `z` | The pane alone, or back with the others. |
-| `x` | Close the pane. If a program is still running in it, you're asked first. |
-| `f` | The file list. ↑↓ move, ←→ close and open folders, Enter opens a file in your editor (`$VISUAL`, `$EDITOR`, or `vi`) in a tab of its own, Esc goes back. |
-| `a` | The Agents panel (below). |
-| `m` `u` `k` `e` | The Models, MCP, Catalog and Add-ons panels (below). |
-| `s` | Scroll back through the output (↑↓, PgUp PgDn, `g` `G`; Esc to go back). |
-| `h` | The Welcome screen. The space keeps running, and `/cd` back finds it as you left it. |
-| `d` | Detach: `x8ai` keeps running in the background (below). |
-| `q` | Quit, ending every shell and agent. If a program is still running, you're asked first. |
-| `?` | Every key. |
-| Ctrl-g | Sends Ctrl-g to the program. |
+---
 
-A pane closes when its program ends well (`exit`, or quitting the editor); one
-that fails stays so you can read it.
+## Install
 
-**Agents.** Ctrl-g `a` lists Claude Code, OpenCode and Codex (whichever you
-have installed) and the space's agent sessions. Enter on an agent starts a
-session: the first time, `x8ai` asks you to trust the folder and to allow that
-agent there, showing the exact program, as the app does. In a Git repository
-each session works in a worktree of its own, on its own branch, so your working
-tree is never touched. On a session: Enter shows it (or runs it again), `c`
-shows what it changed, `o` opens a shell in its worktree, `s` stops it, `d`
-removes it (saying what is discarded; a branch with commits is kept). `t`
-trusts the folder, or stops trusting it, and `r` takes an agent's approval
-back. On an agent, `m`, `u` and `l` choose the model, MCP servers and skills of
-its next launch; they are shown under it, and the question that allows it lists
-them all. Approvals and sessions are shared with the app.
+**You need** macOS 13 or later (Apple silicon or Intel) and
+[Homebrew](https://brew.sh).
 
-**Models, MCP servers, skills and add-ons.** Each has a panel, with its keys
-shown at the bottom:
+```sh
+brew install aashirvad08/tap/x8ai
+x8ai
+```
 
-| Ctrl-g | Panel | What you can do |
-| --- | --- | --- |
-| `m` | Models | `s` saves a provider's API key in your Keychain (typed as dots, never shown again), `a` adds a model id, `d` removes either, `r` looks for local models (Ollama), Enter gives a model to an agent's next launch. |
-| `u` | MCP | `n` adds a server (a command, or a URL), Enter edits it, space turns it on or off, `s` saves a secret it needs, `d` removes it, `l` gives it to an agent's next launch. |
-| `k` | Catalog | Agents, models, MCP servers and skills in one list. `/` filters, Enter uses the one selected, `n` writes a skill, `e` and `d` change and remove yours. |
-| `e` | Add-ons | Tools for this space's terminals. Enter adds one; one that is not installed is installed with Homebrew in a tab, after you see the exact command and agree. `d` removes one, `s` gives them to another space. |
+**Install an agent** if you don't have one yet, for example Claude Code,
+OpenCode or Codex, following its own instructions. x8ai doesn't install them.
 
-`x8ai` runs the MCP servers of the sessions it starts, and stops them with the
-session. Keys, servers, skills and add-ons are the app's own: one saved in
-either is there in both. macOS may ask once whether `x8ai` may read a key the
-app saved.
+x8ai works in any terminal: Terminal, iTerm2, Ghostty, kitty, WezTerm, the
+terminal in your editor. Colors are richest in one that shows 24-bit color.
 
-The mouse works too: click a pane or a tab, drag the line between panes to
-resize them, and scroll with the wheel. Dragging over text selects it and
-copies it to the clipboard (hold Shift in a program that uses the mouse, such
-as vim). Your terminal's own selection still works with its modifier (Option in
-iTerm2 and Terminal.app).
+**Update:**
 
-**Close the terminal; nothing stops.** `x8ai` keeps your spaces, shells and
-agents in a background process of its own. Close the terminal window, press
-Ctrl-g d, or type `/detach`, and they keep running: an agent goes on working.
-Run `x8ai` again, in this terminal or another, and everything is as you left
-it (`x8ai <folder>` also opens that folder). One terminal shows it at a time:
-opening `x8ai` in a second one moves it there. Quitting (Ctrl-g q) is what
-ends it all. `x8ai --stop` does the same from a script, or after an update. It
-ends by itself when nothing is open, and when you log out.
+```sh
+brew upgrade x8ai
+x8ai --stop     # ends the old version running in the background, with its shells and agents
+x8ai
+```
 
-`x8ai` shares the app's recent spaces, space ids and trust, so a folder opened
-in one is recent in the other.
+Until you stop it (or quit it with Ctrl-g q), the version already running stays,
+and x8ai tells you a newer one is installed.
+
+**Uninstall:**
+
+```sh
+x8ai --stop
+brew uninstall x8ai
+```
+
+To remove your data too, see [Where your data lives](#where-your-data-lives).
+
+---
 
 ## Getting started
 
-### 1. Open a space from the Welcome screen
+### 1. Open a space
 
-The app starts on the **Welcome** screen, its head: a greeting and a command
-line. Each folder you work in is a *space*, and one space is open at a time.
+`x8ai` starts on the **Welcome** screen: a greeting and a command line. Each
+folder you work in is a *space*. Type a command:
 
 | Command | What it does |
 | --- | --- |
-| `/cd <folder>` | Opens a space. A recent one opens at once, by its path or the start of its name (`/cd gymRL`, `/cd gym`, `/cd ~/code/app`). Any other folder opens the macOS folder picker at that place, where you choose it. `/cd` alone opens the picker. |
-| `/new <name>` | Makes a new, empty space in `~/Workspaces/<name>` and opens it (see step 9). |
-| `/share <space>` | Gives another space this space's add-ons, by its name or id (see step 9). |
-| `/home` | The workspace with no folder open, and a new terminal in your home folder. |
-| `/name <your name>` | How the Welcome greets you. `/name` alone goes back to your Mac account's name. |
-| `/get [agent]` | Gives an agent what the other sessions did (see step 8). |
-| `/give [agent]` | Passes an agent's work to another session (see step 8). |
+| `/cd <folder>` | Opens a space: a recent one by its name or path (`/cd gym`), or any folder (`/cd ~/code/app`, `/cd ../app`, relative to where you ran `x8ai`). Tab completes folders. |
+| `/new <name>` | Makes a new, empty space in `~/Workspaces/<name>` and opens it. |
+| `/home` | The workspace with no folder, with a shell in your home folder. |
 
-Typing `/` lists the commands; after `/cd `, your recent spaces (Tab completes,
-↑↓ choose). **Esc** goes to the space as it is, and **⇧⌘H** (or **⌂** in the
-status bar) brings the Welcome back while everything keeps running. The
-app reopens your last space behind the Welcome when it starts. **⌘O** and
-**⌃R** open folders from the workspace too.
+Typing `/` lists every command. On an empty line, ↑↓ and Enter open one of your
+recent spaces, and Esc goes back to the space that is open. `x8ai <folder>`
+opens a folder right away.
 
-### 2. Trust the folder
+### 2. Get around a space
 
-Agents run only in folders you trust. The status bar shows **Untrusted** until
-you trust the folder. Open **Agents** (**⇧⌘A**) and click **Trust Folder…**, then
-confirm. Trust a folder only if you trust its contents: a repository can contain
-files that try to steer an agent.
+A space opens with your shell in its folder. Every key goes to the program in
+the focused pane, except **Ctrl-g**: press it, then a key.
 
-### 3. Launch an agent
+- **Ctrl-g t** opens a tab, **Ctrl-g |** and **Ctrl-g -** split the pane, and
+  **Ctrl-g ←→↑↓** move between panes.
+- **Ctrl-g f** shows the folder's files: Enter opens one in your editor, in a
+  tab of its own.
+- **Ctrl-g h** shows the Welcome screen while the space keeps running; `/cd`
+  back finds it as you left it.
+- **Ctrl-g ?** lists every key. They are all in [Keys](#keys) below.
 
-In **Agents**, find your agent's card, for example Claude Code, and click
-**Launch**. Before anything runs, a dialog shows:
+The mouse works too: click a pane or a tab, drag the line between panes to
+resize them, and scroll with the wheel. Dragging over text copies it to the
+clipboard (hold Shift in a program that uses the mouse, such as vim).
+
+### 3. Trust the folder and launch an agent
+
+Press **Ctrl-g a** for the Agents panel. It lists Claude Code, OpenCode and
+Codex (whichever you have installed) and the space's agent sessions. Choose an
+agent and press **Enter**.
+
+The first time, x8ai asks you to **trust the folder**: agents run only in
+folders you trust. Trust a folder only if you trust its contents, since a
+repository can contain files that try to steer an agent. Then it asks you to
+**allow the agent** there, and shows:
 
 - the folder and the exact program that will run,
-- the model provider it will talk to, if you chose one,
+- the model and provider it will use, if you chose one,
 - the MCP servers it gets, with their exact commands,
 - the skills attached to the session.
 
-Click **Allow**. The agent starts in a terminal tab of its own. You're asked
-again only if something that runs changes, for example a different program or
-another provider.
+Press **y**. The agent starts in a tab of its own. You're asked again only if
+something that runs changes, for example a different program or another
+provider. Only you, at your keyboard, can answer these questions: a program in
+a pane can't.
 
 ### 4. Review what it did
 
 In a Git repository, each session works in its own worktree on a branch named
-`agent/<agent>/<date>-…`, so your working tree and your current branch are never
-changed. In the session's card:
+`agent/<agent>/<date>-…`, so your working tree and your current branch are
+never changed. In the Agents panel, on a session:
 
-- **Changes** lists the changed files and commits; click a file to read it.
-- **Show** brings back the agent's terminal, and **Start** runs an ended
-  session again. **Stop** and **Restart** appear while it runs.
-- **Remove** deletes the session's worktree. It asks first if there is
-  uncommitted work. If the agent made commits, its branch is kept.
+- **c** shows what it changed: its branch, commits, files and the diff, in a
+  pager (`q` closes it).
+- **Enter** shows the agent, or runs an ended session again.
+- **o** opens a shell in its worktree.
+- **s** stops it.
+- **d** removes the session and its worktree. It asks first, and says what is
+  discarded; if the agent made commits, its branch is kept.
 
 To bring an agent's work into your branch, use Git as usual, for example
 `git merge agent/claude-code/…`.
 
-In a folder that isn't a Git repository, one agent works directly in the folder at
-a time, and the app tells you that the agent isn't isolated.
+In a folder that isn't a Git repository, one agent works directly in the folder
+at a time, and x8ai tells you that the agent isn't isolated.
 
 ### 5. Choose a model (optional)
 
-By default an agent uses its own settings. To pick a model in the app instead:
+By default an agent uses its own settings. To pick a model in x8ai instead:
 
-1. Open **Models** (**⇧⌘M**) and paste an API key for a provider. It is saved in
-   your macOS Keychain, and the app never shows it again.
-2. Back in **Agents**, choose the model in the agent's card before you click
-   **Launch**.
+1. Press **Ctrl-g m** for Models. On a provider, press **s** and paste its API
+   key. It is saved in your macOS Keychain, typed as dots, and never shown
+   again. **a** adds a model id the provider serves.
+2. Choose a model and press **Enter**, then the agent that should use it: its
+   next launch does. (Or, in the Agents panel, press **m** on the agent.)
 
 For **local models**, install and start [Ollama](https://ollama.com) yourself,
-then click refresh in Models. The app looks for Ollama only when you ask.
+then press **r** in Models. x8ai looks for Ollama only when you ask.
 
 ### 6. Add MCP servers (optional)
 
-Open **MCP** (**⇧⌘U**) and click **+**:
+Press **Ctrl-g u** for MCP, then **n**:
 
 - **stdio:** a program on your Mac, with its arguments, for example `npx` and a
   package name.
-- **HTTP:** a server at a URL.
-- **Variables:** list them by name. Each value is either a secret, saved in the
-  Keychain, or taken from your shell.
-- **Scope:** every new session, sessions in this folder, or only when you choose
-  it at launch.
+- **http:** a server at a URL.
+- **Variables:** list them by name. `NAME` is a secret, which you then save in
+  the Keychain with **s**; `NAME=shell` takes the value from your shell.
+- **Attached to:** every session, sessions in this folder, or only when you
+  choose it at launch (**l** in MCP, or **u** on an agent in the Agents panel).
 
-A server runs only for an agent session, after you approve it in the launch
-dialog. It gets the basics every program needs (such as `PATH` and `HOME`) plus
-the variables you listed, nothing else, and it stops with the agent.
+A server runs only for an agent session, after you approve it. It gets the
+basics every program needs (such as `PATH` and `HOME`) plus the variables you
+listed, nothing else, and it stops with the agent.
 
 ### 7. Use skills and the Catalog (optional)
 
-Open **Catalog** (**⇧⌘K**) to see everything in one place. Search it, filter it
-by category (Agents, Models, MCP, Skills) or by status, and open an item to see
-its details and what it needs.
+Press **Ctrl-g k** for the Catalog: every agent, model, MCP server and skill,
+whether it's ready and what it still needs. **/** filters it. **Enter** uses
+the item selected: a model, server or skill for an agent's next launch, or the
+panel where you set it up.
 
-- **Drag a model onto the terminal** (or click **Open in a terminal**) to open it
-  right away, in the agent that can use it: an OpenAI model in Codex, an
-  Anthropic one in Claude Code. The launch dialog appears as usual. A model can
-  be dragged once its provider's key is saved.
-- **Use for the next launch** and **Attach to the next launch** fill in the
-  agent's card for you. Nothing starts until you click **Launch**.
-- **+** in the Catalog's header creates your own skill: a name and
-  instructions, which are plain text and never a secret. Skills are attached to
-  every new session, to sessions in one folder, or only when you choose them.
+**n** writes your own skill: a name and instructions, which are plain text and
+never a secret. A skill is attached to every new session, to sessions in one
+folder, or only when you choose it (**l** on an agent in the Agents panel).
 
-The Catalog installs nothing, runs nothing and doesn't go online. It shows what
-the app knows and takes you to the right place to set things up.
+The Catalog installs nothing, runs nothing and doesn't go online.
 
-### 8. Hand work from one agent to another (optional)
+### 8. Set up a space's terminals with add-ons (optional)
 
-Switching agents mid-task, for example from Claude Code to Codex? Type `/get
-codex` on the Welcome screen, or click **Get context…** on Codex's session card.
-Choose which sessions it comes from and what to include: what changed (files and
-line counts), the diff, the last lines of their terminals, and a note. You see
-the exact text before anything is sent. **Put in its input** pastes it into
-Codex's input; you read it there and press Enter. `/give` (or **Give context…**)
-works the other way round, from one session to another.
-
-Everything in the text goes to the receiving agent and its model provider, and
-terminal output can contain secrets, so read it first. The app never reads an
-agent's own history files.
-
-### 9. Set up a space's terminal with add-ons (optional)
-
-Open **Add-ons** (**⇧⌘X**) and click **Add** (or **Install**) next to a tool:
+Press **Ctrl-g e** for Add-ons, choose a tool and press **Enter**:
 
 | Group | Add-ons |
 | --- | --- |
@@ -324,36 +226,85 @@ Open **Add-ons** (**⇧⌘X**) and click **Add** (or **Install**) next to a tool
 | Tools | ripgrep, fd, lazygit, bat, Memray |
 | Look | JetBrains Mono Nerd Font |
 
-If it isn't on your Mac yet, a dialog shows the exact Homebrew commands first
-(`brew install starship`), and the install runs in a terminal tab you can watch.
-Homebrew must be installed (brew.sh); the app never uses `sudo`.
+If it isn't on your Mac yet, x8ai shows the exact Homebrew command first
+(`brew install starship`), and runs it in a tab you can watch once you press
+**y**. It never uses `sudo`.
 
-An add-on is on **only in the space you add it to**. Its new terminals start with
-it; other spaces don't change, and your own `~/.zshrc` is never edited. (If your
-`~/.zshrc` already turns a tool on, it stays on everywhere; the list tells you.)
-Programs such as ripgrep work in every terminal once installed. Starship runs Git
-in the folder, so it turns on once you trust the folder. **Remove** takes an
-add-on out of a space without uninstalling it.
+An add-on is on **only in the space you add it to**. New shells there start
+with it; other spaces don't change, and your own `~/.zshrc` is never edited.
+(If your `~/.zshrc` already turns a tool on, it stays on everywhere; the list
+tells you.) Starship runs Git in the folder, so it turns on once you trust the
+folder. **d** takes an add-on out of a space without uninstalling it.
 
-Every space has an id, shown on the Welcome screen (`gymRL ws-k3f9qa`):
+Every space has an id, shown on the Welcome screen (`gymRL ws-k3f9qa`).
+`/share <space>` on the Welcome screen, or **s** in Add-ons, gives another space
+this one's add-ons.
 
-- `/share <space>` gives another space this one's add-ons. Press Enter to give
-  all of them, or press ↓, then Space to uncheck some first.
-- `/new <name>` makes a new, empty space in `~/Workspaces/<name>`, with no
-  add-ons.
+### 9. Close the terminal; nothing stops
+
+x8ai keeps your spaces, shells and agents in a background process of its own.
+Close the terminal window, press **Ctrl-g d**, or type `/detach`, and they keep
+running: an agent goes on working. Run `x8ai` again, in this terminal or
+another, and everything is as you left it (`x8ai <folder>` also opens that
+folder). One terminal shows x8ai at a time: opening it in a second one moves it
+there.
+
+**Ctrl-g q** (or `/quit`) quits: it ends every shell and agent, and asks first
+while something is running. `x8ai --stop` does the same from outside. x8ai also
+ends by itself when nothing is open, and when you log out.
 
 ---
 
-## Keyboard shortcuts
+## Keys
 
-| | |
+**On the Welcome screen**
+
+| Command | What it does |
 | --- | --- |
-| **Welcome** | ⇧⌘H Show Welcome · on it: `/cd <folder>` · `/new <name>` · `/share <space>` · `/home` · `/get [agent]` · `/give [agent]` · `/name <your name>` · Esc back to the space |
-| **Folders and files** | ⌘O Open Folder · ⌃R Open Recent · ⌘P Go to File · ⌘N New File · ⌘S Save · ⌥⌘S Save All · ⌘W Close Editor · ⌘F Find in File |
-| **Panels** | ⇧⌘E Files · ⇧⌘F Search in Folder · ⇧⌘A Agents · ⇧⌘M Models · ⇧⌘U MCP · ⇧⌘K Catalog · ⇧⌘X Add-ons · ⌘B Toggle Sidebar |
-| **Terminal** | ⌃\` Show or Hide Terminal · ⌃⇧\` New Terminal · ⌘D Split Right · ⇧⌘D Split Down · ⌘] / ⌘[ Next / Previous Pane · ⌘W Close Pane |
-| **Explorer** | Arrow keys and Enter to move and open · F2 Rename · ⌘⌫ Move to Trash |
-| **Everything else** | ⇧⌘P All Commands |
+| `/cd <folder>` | Open a folder as your space (a recent one by its name). |
+| `/new <name>` | A new, empty space in `~/Workspaces`. |
+| `/home` | The workspace with no folder open. |
+| `/share <space>` | Give the open space's add-ons to another space. |
+| `/name <your name>` | How the Welcome greets you. |
+| `/detach` | Leave x8ai running in the background. |
+| `/quit` | Quit x8ai, ending its shells and agents. So does Ctrl-c on an empty line. |
+| Esc | Back to the space that is open. |
+
+**In a space, after Ctrl-g**
+
+| Key | What it does |
+| --- | --- |
+| `t` | A new tab, with a shell. `n` and `p` go to the next and previous tab, `1`–`9` to that one. |
+| `\|` and `-` | Split the pane: a new shell to the right, or below. |
+| ←→↑↓ and `o` | The pane beside, or the next one. |
+| `z` | The pane alone, or back with the others. |
+| `x` | Close the pane. If a program is still running in it, you're asked first. |
+| `f` | The file list. ↑↓ move, ←→ close and open folders, Enter opens a file in your editor (`$VISUAL`, `$EDITOR`, or `vi`), Esc goes back. |
+| `a` | Agents. |
+| `m` | Models. |
+| `u` | MCP servers. |
+| `k` | The Catalog. |
+| `e` | Add-ons. |
+| `s` | Scroll back through the output (↑↓, PgUp PgDn, `g` `G`; Esc to go back). |
+| `h` | The Welcome screen. The space keeps running. |
+| `d` | Detach: x8ai keeps running in the background. |
+| `q` | Quit, ending every shell and agent. If something is still running, you're asked first. |
+| `?` | Every key. |
+| Ctrl-g | Sends Ctrl-g to the program. |
+
+A pane closes when its program ends well (`exit`, or quitting the editor); one
+that fails stays so you can read it.
+
+**In the panels** (each shows its keys at the bottom; ↑↓ move, Esc goes back to
+the panes)
+
+| Panel | Keys |
+| --- | --- |
+| Agents | On an agent: Enter launch, `m` model, `u` MCP servers, `l` skills for its next launch, `r` take its approval back. On a session: Enter show or run again, `c` changes, `o` shell in its worktree, `s` stop, `d` remove. Anywhere: `t` trust or stop trusting the folder. |
+| Models | `s` save a key, `a` add a model id, `d` delete, `r` look for local models, Enter use a model. |
+| MCP | `n` new, Enter change, space on or off, `s` save a secret, `l` for the next launch, `d` remove. |
+| Catalog | `/` filter, Enter use or open, `n` new skill, `e` change, `d` remove. |
+| Add-ons | Enter add or install, `d` remove, `s` share with a space, `r` check again. |
 
 ---
 
@@ -361,84 +312,95 @@ Every space has an id, shown on the Welcome screen (`gymRL ws-k3f9qa`):
 
 - **Nothing runs without you.** Agents and MCP servers start only in folders you
   trusted, after you approve exactly what will run. A repository can't trust or
-  approve anything for itself.
-- **Your keys stay in the Keychain.** API keys and MCP secrets are never written
-  to files, logs or your projects. An agent gets a key only for the session you
-  chose it for.
+  approve anything for itself, and a program in a pane can't answer x8ai's
+  questions.
+- **Your keys stay in the Keychain.** API keys and MCP secrets are never shown,
+  and never written to files, logs or your projects. An agent gets a key only
+  for the session you chose it for.
 - **MCP servers get only what you list.** Apart from basics such as `PATH`, they
   receive only the variables you listed: never your provider keys or other
   secrets from your shell.
-- **No surprise network traffic.** The app makes no network connections when it
-  starts. It contacts Ollama on your own Mac only when you ask. Agents talk to
-  their providers themselves.
-- **Your agent settings stay yours.** The app never edits `~/.claude`, OpenCode's
+- **No surprise network traffic.** x8ai itself makes no network connections. It
+  looks for Ollama on your own Mac only when you ask, and add-ons download only
+  through Homebrew, after you agree. Agents talk to their providers themselves.
+- **Only you reach the background x8ai.** It listens on a socket in a folder
+  only your account can open, answers only your own processes, and opens no
+  network port.
+- **Your agent settings stay yours.** x8ai never edits `~/.claude`, OpenCode's
   or Codex's global configuration. It gives agents their settings per session
   only.
 - **Agents run as you.** Like any program you start in a terminal, an agent can
-  read your files and reach the network. The app doesn't sandbox agents, so trust
+  read your files and reach the network. x8ai doesn't sandbox agents, so trust
   folders and approve agents deliberately.
 
-Closing a terminal, or quitting the app while a program or an agent is running,
-asks you first.
+Closing a pane, or quitting x8ai, while a program or an agent is running asks
+you first.
 
 ## Where your data lives
 
 | What | Where |
 | --- | --- |
 | Recent and trusted folders, approvals, providers, MCP servers, skills, spaces and their add-ons (no secrets) | `~/Library/Application Support/com.x8ai.workspace/` |
-| Each space's terminal setup for its add-ons, rewritten for every new terminal | `~/Library/Application Support/com.x8ai.workspace/spaces/<id>/zsh/` |
+| Each space's shell setup for its add-ons, rewritten for every new shell | `~/Library/Application Support/com.x8ai.workspace/spaces/<id>/zsh/` |
 | LazyVim, when added | `~/.config/x8ai-lazyvim/` (your `~/.config/nvim` is untouched) |
 | API keys and MCP secrets | macOS Keychain, under `com.x8ai.workspace.providers` and `com.x8ai.workspace.mcp` |
 | Agent worktrees | `~/.x8ai/worktrees/` |
-| MCP sockets of running sessions (the app's, and one folder per `x8ai`) | `~/.x8ai/mcp/`, `~/.x8ai/mcp-<pid>/` |
-| The background `x8ai`: its socket, lock, process id and log (yours alone) | `~/.x8ai/server/` |
+| The background x8ai: its socket, lock, process id and log (yours alone) | `~/.x8ai/server/` |
+| MCP sockets of running agent sessions | `~/.x8ai/mcp-<process id>/` |
 
-To start over, quit the app, delete that Application Support folder, and remove
-the Keychain items in Keychain Access.
+To start over: run `x8ai --stop`, delete
+`~/Library/Application Support/com.x8ai.workspace/` and `~/.x8ai/`, and remove
+the Keychain items in Keychain Access. Deleting `~/.x8ai/` also deletes agents'
+worktrees; merge any work you want to keep first.
 
 ## Troubleshooting
 
-- **An agent says "Not installed".** Install it, and check that its command
-  works in a new terminal window. The app uses the `PATH` from your login shell.
-  Then click refresh in Agents.
-- **Launch is disabled.** Open a folder first, then trust it.
-- **Ollama shows "Not found" or "not running".** Install Ollama or start it, then
-  click refresh in Models.
+- **An agent shows "not installed".** Check that its command works in a new
+  terminal window. x8ai gives agents the environment of the terminal it was
+  started from; if you changed your `PATH`, run `x8ai --stop` and start `x8ai`
+  again from a new terminal.
 - **I can't choose a model for my agent.** Save a key for a provider that agent
   supports (see the table above), or add a model id in Models.
-- **An MCP server shows as not configured.** Save its secret variables in MCP,
-  and check that its command is installed.
+- **An MCP server isn't ready.** Save its secrets in MCP (**s**), and check that
+  its command is installed.
+- **An add-on won't install.** It needs Homebrew (brew.sh).
+- **macOS asks whether x8ai may use a key in your Keychain.** Choose Always
+  Allow. It may ask again after an update.
+- **"Make the window wider to show the sidebar."** Panels need a terminal at
+  least 60 columns wide.
+- **"x8ai … is installed; this is …, started before."** You updated x8ai while
+  it was running. Quit it (Ctrl-g q) or run `x8ai --stop`, then run `x8ai`.
+- **"The background x8ai stopped unexpectedly."** What it said is in
+  `~/.x8ai/server/log`. Please open an issue with it.
+- **"This terminal is inside x8ai already."** You ran `x8ai` in one of its own
+  shells. Press Ctrl-g h for its Welcome screen instead.
 
 ---
 
 ## For contributors
 
 ```sh
-pnpm tauri dev      # run the app with hot reload
-cargo run -p x8ai   # run x8ai, the terminal version, in this terminal
-pnpm check          # everything CI checks: types, tests, formatting, lints
-pnpm test           # frontend tests only
-cargo test --workspace
+cargo run -p x8ai         # run x8ai from source, in this terminal
+cargo test -p x8ai        # its tests, including end-to-end tests on a PTY
+pnpm check                # everything CI checks: types, tests, formatting, lints
 ```
 
-`pnpm tauri build --bundles dmg` also builds a DMG. It drives Finder, so your
-terminal needs permission to control Finder (System Settings → Privacy &
-Security → Automation).
+`cargo run -p x8ai` starts a background x8ai from your build. Run
+`cargo run -p x8ai -- --stop` before switching back to the installed one.
 
-To release `x8ai`, bump the version in `Cargo.toml` and push a tag `v<version>`.
-CI builds a universal binary (`scripts/release/build-x8ai.sh`), publishes it as
-a GitHub release, and updates the formula in `aashirvad08/homebrew-tap` when
-the `HOMEBREW_TAP_TOKEN` secret is set (`.github/workflows/release.yml`).
-
-The app is a [Tauri](https://tauri.app) app with a Rust core and a React +
-TypeScript interface:
+To release `x8ai`, bump the version in `crates/tui/Cargo.toml` and push a tag
+`v<version>`. CI builds a universal binary (`scripts/release/build-x8ai.sh`),
+publishes it as a GitHub release, and updates the formula in
+`aashirvad08/homebrew-tap` when the `HOMEBREW_TAP_TOKEN` secret is set
+(`.github/workflows/release.yml`).
 
 ```
+crates/tui/  x8ai: the Welcome screen, spaces, panes and panels, the background
+             process and the terminal that attaches to it
 crates/      the Rust core: terminals, workspace files, agents, Git, Keychain,
-             providers, MCP, skills and the catalog (none of it depends on Tauri)
-crates/tui/  x8ai, the terminal version: the same core in a full-screen program
-src-tauri/   the desktop app: window, native commands and their permissions
-src/         the interface (React + TypeScript)
+             providers, MCP, skills, the catalog and add-ons
+src-tauri/   a desktop app on the same core (Tauri), built from source with
+src/         `pnpm install && pnpm tauri build`; it shares x8ai's data
 docs/        design documents and decision records
 ```
 
@@ -446,15 +408,16 @@ To learn how it works, read [Architecture](docs/architecture.md),
 [Security](docs/security.md), [Agents](docs/agent-runtime.md),
 [Agent sessions and worktrees](docs/multi-agent.md), [Models](docs/models.md),
 [MCP servers](docs/mcp.md), [Catalog and skills](docs/catalog.md) and the
-[decision records](docs/decisions/).
+[decision records](docs/decisions/) (x8ai's start at
+[0020](docs/decisions/0020-terminal-version.md)).
 
 **Ground rules**
 
-1. Keep parts separate: no business logic in UI components.
+1. Keep parts separate: rules belong in the crates, not in what draws them.
 2. Prefer simple designs, and justify every new dependency.
 3. Keep commits small and buildable, and never hide errors.
 4. No mock implementations posing as real features.
-5. Never hard-code credentials, and never tie the app to one agent, provider or
+5. Never hard-code credentials, and never tie x8ai to one agent, provider or
    MCP server.
-6. Changes to `src-tauri/capabilities/` are security changes. Review them as
-   such.
+6. Changes to who can start programs, or reach x8ai's socket, are security
+   changes. Review them as such.
