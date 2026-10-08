@@ -29,7 +29,7 @@ the phases. Each step is pushed and released before the next starts.
 | T2 | Split panes and tabs, the file list and `$EDITOR` | **Complete** |
 | T3 | Agents: trust, the launch dialog, sessions and reviewing changes | **Complete** |
 | T4 | Models, MCP, skills, the catalog and add-ons | **Complete** |
-| T5 | A background process: spaces outlive the window, and `x8ai` reattaches | Next |
+| T5 | A background process: spaces outlive the window, and `x8ai` reattaches | **Complete** |
 
 ---
 
@@ -480,3 +480,28 @@ Logic both hosts need moved into the crates: a session's MCP servers
 - End-to-end tests of the real binary, with secrets in a file (debug builds
   only): the key, model, skill and an MCP server's secret reach a stand-in
   agent; add-ons are added, removed and shared.
+
+## Terminal step T5 — the background `x8ai`
+
+**Objective.** Closing the terminal stops nothing: spaces, shells and agents
+keep running, and `x8ai` comes back to them, from any terminal (ADR 0024).
+
+**Major components.** The background `x8ai` (`server.rs`): the same binary,
+in a session of its own, holding the app and drawing for the terminal
+attached; `x8ai` in a terminal as its client (`client.rs`); the frames between
+them (`wire.rs`); a private folder `~/.x8ai/server/` with its socket, lock,
+process id and log.
+
+**Acceptance criteria.**
+- Closing the terminal leaves a space's shell and its agent running; the next
+  `x8ai` shows them as they were, the agent further on.
+- Ctrl-g d and `/detach` leave it running; `x8ai` in another terminal takes it
+  over and the first one returns to its shell; `x8ai <folder>` opens that
+  folder when attaching.
+- Quitting, and `x8ai --stop`, end every program before the terminal is given
+  back; with nothing open it ends by itself.
+- Only the user's own processes reach it; one runs per user; a terminal of
+  another protocol is told how to go on; `x8ai` inside one of its own panes
+  refuses to attach to itself.
+- End-to-end tests of the real binary on a PTY: hanging up, coming back,
+  taking over, detaching, stopping, ending by itself, a refused protocol.

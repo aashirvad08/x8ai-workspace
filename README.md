@@ -17,7 +17,8 @@ and it doesn't favor any vendor.
 
 - **Or stay in your terminal.** `brew install aashirvad08/tap/x8ai`, then run
   `x8ai`: the same Welcome screen, spaces, agents, models, MCP servers, skills
-  and add-ons, in the terminal you already use (see
+  and add-ons, in the terminal you already use. Close the terminal and your
+  shells and agents keep running; `x8ai` brings them back (see
   [x8ai in your terminal](#x8ai-in-your-terminal)).
 - **Start from the Welcome screen.** Type `/cd` to open a folder as your space
   and `/home` for the workspace with no folder; ⇧⌘H brings it back any time.
@@ -65,7 +66,8 @@ x8ai
 `x8ai` runs on macOS 13 or later, on Apple silicon and Intel. It is the
 workspace as a full-screen program in the terminal you already use (see
 [x8ai in your terminal](#x8ai-in-your-terminal)): agents, with the model, MCP
-servers and skills you choose, and add-ons. `brew upgrade x8ai` updates it.
+servers and skills you choose, and add-ons. `brew upgrade x8ai` updates it;
+then quit x8ai (Ctrl-g q), or run `x8ai --stop`, so the new version starts.
 
 ### The app
 
@@ -113,7 +115,8 @@ or Codex. Follow each agent's own instructions. The app doesn't install them.
 | `/home` | The workspace with no folder, with a shell in your home folder. |
 | `/name <your name>` | How the Welcome greets you. |
 | `/share <space>` | Gives the open space's add-ons to another space. |
-| `/quit` | Leaves `x8ai`. So does Ctrl-c on an empty line. |
+| `/detach` | Leaves `x8ai` running in the background (below). |
+| `/quit` | Quits `x8ai`, ending its shells and agents (asking first while one runs). So does Ctrl-c on an empty line. |
 
 On an empty line, ↑↓ and Enter open one of your recent spaces, and Esc goes
 back to the space that is open. `x8ai <folder>` opens a folder right away.
@@ -133,7 +136,8 @@ focused pane except **Ctrl-g**, after which:
 | `m` `u` `k` `e` | The Models, MCP, Catalog and Add-ons panels (below). |
 | `s` | Scroll back through the output (↑↓, PgUp PgDn, `g` `G`; Esc to go back). |
 | `h` | The Welcome screen. The space keeps running, and `/cd` back finds it as you left it. |
-| `q` | Quit. If a program is still running, you're asked first. |
+| `d` | Detach: `x8ai` keeps running in the background (below). |
+| `q` | Quit, ending every shell and agent. If a program is still running, you're asked first. |
 | `?` | Every key. |
 | Ctrl-g | Sends Ctrl-g to the program. |
 
@@ -173,6 +177,15 @@ resize them, and scroll with the wheel. Dragging over text selects it and
 copies it to the clipboard (hold Shift in a program that uses the mouse, such
 as vim). Your terminal's own selection still works with its modifier (Option in
 iTerm2 and Terminal.app).
+
+**Close the terminal; nothing stops.** `x8ai` keeps your spaces, shells and
+agents in a background process of its own. Close the terminal window, press
+Ctrl-g d, or type `/detach`, and they keep running: an agent goes on working.
+Run `x8ai` again, in this terminal or another, and everything is as you left
+it (`x8ai <folder>` also opens that folder). One terminal shows it at a time:
+opening `x8ai` in a second one moves it there. Quitting (Ctrl-g q) is what
+ends it all. `x8ai --stop` does the same from a script, or after an update. It
+ends by itself when nothing is open, and when you log out.
 
 `x8ai` shares the app's recent spaces, space ids and trust, so a folder opened
 in one is recent in the other.
@@ -378,6 +391,7 @@ asks you first.
 | API keys and MCP secrets | macOS Keychain, under `com.x8ai.workspace.providers` and `com.x8ai.workspace.mcp` |
 | Agent worktrees | `~/.x8ai/worktrees/` |
 | MCP sockets of running sessions (the app's, and one folder per `x8ai`) | `~/.x8ai/mcp/`, `~/.x8ai/mcp-<pid>/` |
+| The background `x8ai`: its socket, lock, process id and log (yours alone) | `~/.x8ai/server/` |
 
 To start over, quit the app, delete that Application Support folder, and remove
 the Keychain items in Keychain Access.
