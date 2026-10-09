@@ -74,7 +74,9 @@ x8ai
 OpenCode or Codex, following its own instructions. x8ai doesn't install them.
 
 x8ai works in any terminal: Terminal, iTerm2, Ghostty, kitty, WezTerm, the
-terminal in your editor. Colors are richest in one that shows 24-bit color.
+terminal in your editor. It paints the app's own colors, dark or light as macOS
+is, so it looks the same in each; they are exact in a terminal that shows
+24-bit color, as all of these do.
 
 **Update:**
 

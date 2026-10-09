@@ -32,3 +32,4 @@ NNNN), **Context**, **Decision**, **Consequences**, and **Alternatives considere
 | [0022](0022-agents-in-x8ai.md) | Agents in `x8ai` | Accepted |
 | [0023](0023-models-mcp-skills-and-add-ons-in-x8ai.md) | Models, MCP, skills, the catalog and add-ons in `x8ai` | Accepted |
 | [0024](0024-x8ai-in-the-background.md) | `x8ai` in the background: closing the terminal stops nothing | Accepted |
+| [0025](0025-the-apps-look-in-x8ai.md) | The app's look in `x8ai` | Accepted |

@@ -30,6 +30,7 @@ the phases. Each step is pushed and released before the next starts.
 | T3 | Agents: trust, the launch dialog, sessions and reviewing changes | **Complete** |
 | T4 | Models, MCP, skills, the catalog and add-ons | **Complete** |
 | T5 | A background process: spaces outlive the window, and `x8ai` reattaches | **Complete** |
+| T6 | The app's look: its palette, greeting, bars, panels and dialogs | **Complete** |
 
 ---
 
@@ -505,3 +506,24 @@ process id and log.
   refuses to attach to itself.
 - End-to-end tests of the real binary on a PTY: hanging up, coming back,
   taking over, detaching, stopping, ending by itself, a refused protocol.
+
+## Terminal step T6 — the app's look
+
+**Objective.** `x8ai` looks like the app in every terminal (ADR 0025).
+
+**Major components.** The app's palette in `theme.rs` (dark and light, as
+macOS is; 24-bit or the nearest of 256), painted on every cell by `ui.rs`; the
+app's terminal palette for panes; the terminal's own background and cursor set
+on attach and given back on leaving.
+
+**Acceptance criteria.**
+- The Welcome: WELCOME, SIR drawn in lines with the raspberry cursor, the name
+  in spaced capitals, the command line in a raised box with the indigo bar,
+  keys as chips, RECENT SPACES, and the app's status bar.
+- A space: a raised tab bar, the raised sidebar, selections on the active
+  grey, the status bar with the space and its trust.
+- Questions, forms and pickers as the app's dialogs, the agreeing button in
+  indigo.
+- Shells in panes show the app's terminal colors.
+- Tests: the palette and the greeting's shape (unit), and every end-to-end
+  test against the new screens.
