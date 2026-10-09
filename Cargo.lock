@@ -5499,7 +5499,7 @@ dependencies = [
 
 [[package]]
 name = "x8ai"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "alacritty_terminal",
  "crossterm",

@@ -216,6 +216,15 @@ impl X8ai {
         }
     }
 
+    /// Waits until a space is shown (its tab bar, " x8ai <name>", on top)
+    /// with `status` in its status bar, such as "proj  Untrusted"; the
+    /// Welcome's status bar says the same, so it alone is not enough.
+    pub fn wait_for_space(&mut self, status: &str) -> String {
+        self.wait_until(&format!("the space with {status:?}"), |s| {
+            s.starts_with(" x8ai ") && s.contains(status)
+        })
+    }
+
     pub fn wait_for_exit(&mut self) -> TerminalExit {
         let deadline = Instant::now() + TIMEOUT;
         while self.exit.is_none() {

@@ -283,10 +283,6 @@ impl App {
         self.chosen_name.as_deref().or(self.account_name.as_deref())
     }
 
-    pub fn home(&self) -> &Path {
-        self.spaces.home()
-    }
-
     // The terminal attached
 
     /// A terminal attached: drawn for at its size and colors, its folder the
@@ -294,7 +290,8 @@ impl App {
     pub fn attach(&mut self, hello: &Hello) {
         self.cwd = hello.cwd.clone();
         self.size = hello.size;
-        self.theme = Theme::new(hello.truecolor);
+        // The app's colors, dark or light as macOS is now.
+        self.theme = Theme::new(hello.truecolor, crate::theme::dark_here());
         // A new terminal shows its own cursor, and has nothing held down.
         self.cursor = None;
         self.drag = None;

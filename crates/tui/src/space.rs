@@ -448,14 +448,13 @@ impl SpaceView {
 
     /// The header's right end: where the space is, and whether it is trusted.
     /// At most `width` columns: a long path loses its start, never the trust.
+    /// The tab bar's right end: the space's folder (its trust is in the
+    /// status bar, as in the app).
     pub fn right_text(&self, width: usize) -> String {
-        let trust = match (&self.info.root, self.info.trusted) {
-            (None, _) => "no folder",
-            (Some(_), true) => "trusted",
-            (Some(_), false) => "not trusted",
-        };
-        let room = width.saturating_sub(trust.width() + 4);
-        format!("{} · {trust} ", clip_start(&self.place, room))
+        if self.info.root.is_none() {
+            return "no folder ".to_owned();
+        }
+        format!("{} ", clip_start(&self.place, width.saturating_sub(2)))
     }
 
     /// Places the header, the file list, the open tab's panes and the status

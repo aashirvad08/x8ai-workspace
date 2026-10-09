@@ -111,7 +111,7 @@ fn models_mcp_servers_and_skills_reach_the_agent() {
             ),
         ],
     );
-    x8ai.wait_for("~/proj · not trusted");
+    x8ai.wait_for_space("proj  Untrusted");
 
     // Models: Anthropic's key, saved and never shown, and a model id of ours.
     x8ai.keys(&format!("{CTRL_G}m"));

@@ -87,7 +87,7 @@ fn a_shell_and_an_agent_outlive_the_terminal() {
         "#!/bin/sh\ni=0\nwhile true; do i=$((i+1)); echo \"TICK $i\"; sleep 0.1; done\n",
     );
     let mut first = X8ai::start_with(&home, &["proj"], &env(&bin));
-    first.wait_for("~/proj · not trusted");
+    first.wait_for_space("proj  Untrusted");
     // A shell variable: only this shell has it.
     first.keys("MARK=ONE; printf 'SET-%s\\n' \"$MARK\"\r");
     first.wait_for("SET-ONE");
@@ -116,7 +116,7 @@ fn a_shell_and_an_agent_outlive_the_terminal() {
     let screen = second.wait_until("the agent seen again, further on", |s| {
         last_tick(s) >= before + 5
     });
-    assert!(screen.contains("~/proj · trusted"), "{screen}");
+    assert!(screen.contains("proj  Trusted"), "{screen}");
     // The shell too: the same one, with its variable.
     second.keys(&format!("{CTRL_G}1"));
     second.wait_until("the shell shown", |s| !s.contains("TICK"));
@@ -143,7 +143,7 @@ fn one_terminal_at_a_time_detached_and_stopped() {
     let bin = home.join("bin");
     fs::create_dir(&bin).unwrap();
     let mut first = X8ai::start_with(&home, &["proj"], &env(&bin));
-    first.wait_for("~/proj · not trusted");
+    first.wait_for_space("proj  Untrusted");
 
     // A terminal of another protocol is told how to go on, and nothing else
     // changes.
@@ -162,7 +162,7 @@ fn one_terminal_at_a_time_detached_and_stopped() {
 
     // Another terminal takes it over; the first one lets go.
     let mut second = X8ai::start_with(&home, &[], &env(&bin));
-    second.wait_for("~/proj · not trusted");
+    second.wait_for_space("proj  Untrusted");
     first.wait_for("x8ai is open in another terminal now.");
     assert_eq!(first.wait_for_exit().code, 0);
 
@@ -174,9 +174,9 @@ fn one_terminal_at_a_time_detached_and_stopped() {
 
     // x8ai <folder> comes back and opens it; /detach on the Welcome lets go.
     let mut third = X8ai::start_with(&home, &["other"], &env(&bin));
-    third.wait_for("~/other · not trusted");
+    third.wait_for_space("other  Untrusted");
     third.keys(&format!("{CTRL_G}h"));
-    third.wait_for("W E L C O M E");
+    third.wait_for("Type a command");
     third.keys("/detach\r");
     third.wait_for("x8ai keeps running in the background.");
     assert_eq!(third.wait_for_exit().code, 0);
@@ -199,7 +199,7 @@ fn with_nothing_open_it_ends_by_itself() {
 
     // Detaching with nothing open ends it: there is nothing to keep.
     let mut x8ai = X8ai::start(&home, &[]);
-    x8ai.wait_for("W E L C O M E");
+    x8ai.wait_for("Type a command");
     x8ai.keys("/detach\r");
     x8ai.wait_for("Nothing is open, so x8ai ends.");
     assert_eq!(x8ai.wait_for_exit().code, 0);
@@ -207,7 +207,7 @@ fn with_nothing_open_it_ends_by_itself() {
 
     // Its terminal closed with nothing open: it ends soon after.
     let mut x8ai = X8ai::start(&home, &[]);
-    x8ai.wait_for("W E L C O M E");
+    x8ai.wait_for("Type a command");
     assert!(server_pid(&home).is_some());
     x8ai.hang_up();
     eventually("the background x8ai ended", || server_pid(&home).is_none());

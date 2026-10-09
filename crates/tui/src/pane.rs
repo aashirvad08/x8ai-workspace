@@ -340,7 +340,7 @@ impl Pane {
             out.bg = color(cell.bg, content.colors, theme);
             out.modifier = modifier(cell.flags);
             if selection.is_some_and(|s| s.contains(indexed.point)) {
-                out.modifier.toggle(Modifier::REVERSED);
+                out.bg = theme.selection();
             }
         }
         let point = content.cursor.point;
@@ -418,38 +418,44 @@ impl SessionEvents for Forward {
 }
 
 /// A cell's color: what the program set, through the palette it may have
-/// changed (OSC 4), else the user's terminal's own.
+/// changed (OSC 4), else the app's terminal colors (ADR 0025).
 fn color(color: TermColor, colors: &Colors, theme: Theme) -> Color {
     let custom = |index: usize| colors[index].map(|rgb| theme.rgb(rgb.r, rgb.g, rgb.b));
     match color {
         TermColor::Spec(rgb) => theme.rgb(rgb.r, rgb.g, rgb.b),
-        TermColor::Indexed(i) => custom(usize::from(i)).unwrap_or(Color::Indexed(i)),
-        TermColor::Named(name) => custom(name as usize).unwrap_or_else(|| named(name)),
+        TermColor::Indexed(i) => custom(usize::from(i)).unwrap_or_else(|| {
+            if i < 16 {
+                theme.ansi(i)
+            } else {
+                Color::Indexed(i)
+            }
+        }),
+        TermColor::Named(name) => custom(name as usize).unwrap_or_else(|| named(name, theme)),
     }
 }
 
-fn named(name: NamedColor) -> Color {
+fn named(name: NamedColor, theme: Theme) -> Color {
     use NamedColor as N;
     match name {
-        N::Black | N::DimBlack => Color::Black,
-        N::Red | N::DimRed => Color::Red,
-        N::Green | N::DimGreen => Color::Green,
-        N::Yellow | N::DimYellow => Color::Yellow,
-        N::Blue | N::DimBlue => Color::Blue,
-        N::Magenta | N::DimMagenta => Color::Magenta,
-        N::Cyan | N::DimCyan => Color::Cyan,
-        N::White | N::DimWhite => Color::Gray,
-        N::BrightBlack => Color::DarkGray,
-        N::BrightRed => Color::LightRed,
-        N::BrightGreen => Color::LightGreen,
-        N::BrightYellow => Color::LightYellow,
-        N::BrightBlue => Color::LightBlue,
-        N::BrightMagenta => Color::LightMagenta,
-        N::BrightCyan => Color::LightCyan,
-        N::BrightWhite => Color::White,
-        N::Foreground | N::Background | N::Cursor | N::BrightForeground | N::DimForeground => {
-            Color::Reset
-        }
+        N::Black | N::DimBlack => theme.ansi(0),
+        N::Red | N::DimRed => theme.ansi(1),
+        N::Green | N::DimGreen => theme.ansi(2),
+        N::Yellow | N::DimYellow => theme.ansi(3),
+        N::Blue | N::DimBlue => theme.ansi(4),
+        N::Magenta | N::DimMagenta => theme.ansi(5),
+        N::Cyan | N::DimCyan => theme.ansi(6),
+        N::White | N::DimWhite => theme.ansi(7),
+        N::BrightBlack => theme.ansi(8),
+        N::BrightRed => theme.ansi(9),
+        N::BrightGreen => theme.ansi(10),
+        N::BrightYellow => theme.ansi(11),
+        N::BrightBlue => theme.ansi(12),
+        N::BrightMagenta => theme.ansi(13),
+        N::BrightCyan => theme.ansi(14),
+        N::BrightWhite => theme.ansi(15),
+        N::Foreground | N::BrightForeground | N::Cursor => theme.text(),
+        N::DimForeground => theme.muted(),
+        N::Background => theme.bg(),
     }
 }
 
@@ -501,7 +507,7 @@ mod tests {
                 Ok(_) => {}
                 Err(_) => panic!("no {done:?} on the screen"),
             }
-            pane.render(area, &mut buf, Theme::detect());
+            pane.render(area, &mut buf, Theme::new(true, true));
             if screen(&buf).contains(done) {
                 return (pane, buf);
             }
@@ -529,9 +535,10 @@ mod tests {
         assert!(text.starts_with("plain red"), "{text}");
         let red = &buf[(6, 0)];
         assert_eq!(red.symbol(), "r");
-        assert_eq!(red.fg, Color::Red);
+        // The app's red, and its text color for the rest (dark).
+        assert_eq!(red.fg, Color::Rgb(0xff, 0x6b, 0x6b));
         assert!(red.modifier.contains(Modifier::BOLD));
-        assert_eq!(buf[(0, 0)].fg, Color::Reset);
+        assert_eq!(buf[(0, 0)].fg, Color::Rgb(0xe8, 0xe8, 0xe8));
     }
 
     #[test]

@@ -69,7 +69,7 @@ fn an_agent_is_trusted_allowed_run_reviewed_and_removed() {
             ("GIT_CONFIG_GLOBAL", "/dev/null".to_owned()),
         ],
     );
-    x8ai.wait_for("~/proj · not trusted");
+    x8ai.wait_for_space("proj  Untrusted");
 
     // Ctrl-g a: the panel.
     x8ai.keys(&format!("{CTRL_G}a"));

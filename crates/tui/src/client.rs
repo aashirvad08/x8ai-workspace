@@ -39,6 +39,10 @@ const START_TIMEOUT: Duration = Duration::from_secs(10);
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
+/// The terminal's own background and cursor colors, as they were before the
+/// background `x8ai` set the app's (OSC 111 and 112).
+const COLORS_BACK: &str = "\x1b]111\x07\x1b]112\x07";
+
 pub fn run(folder: Option<String>) -> ExitCode {
     if !io::stdin().is_terminal() || !stdout().is_terminal() {
         eprintln!("x8ai: needs a terminal: run it in Terminal, iTerm2, Ghostty or the like.");
@@ -221,6 +225,7 @@ fn leave() {
     let _ = execute!(
         stdout(),
         Print(MOUSE_OFF),
+        Print(COLORS_BACK),
         DisableBracketedPaste,
         SetCursorStyle::DefaultUserShape,
         LeaveAlternateScreen,

@@ -29,7 +29,7 @@ fn addons_are_added_removed_and_shared() {
             format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display()),
         )],
     );
-    x8ai.wait_for("~/proj · not trusted");
+    x8ai.wait_for_space("proj  Untrusted");
 
     x8ai.keys(&format!("{CTRL_G}e"));
     let screen = x8ai.wait_for(" ADD-ONS · proj");
@@ -64,15 +64,15 @@ fn addons_are_added_removed_and_shared() {
 
     // A space's add-ons go to another space with /share.
     x8ai.keys(&format!("{CTRL_G}h"));
-    x8ai.wait_for("W E L C O M E");
+    x8ai.wait_for("Type a command");
     x8ai.keys("/new other\r");
-    x8ai.wait_for("~/Workspaces/other · not trusted");
+    x8ai.wait_for_space("other  Untrusted");
     x8ai.keys(&format!("{CTRL_G}h"));
-    x8ai.wait_for("W E L C O M E");
+    x8ai.wait_for("Type a command");
     x8ai.keys("/cd proj\r");
-    x8ai.wait_for("~/proj · not trusted");
+    x8ai.wait_for_space("proj  Untrusted");
     x8ai.keys(&format!("{CTRL_G}h"));
-    x8ai.wait_for("W E L C O M E");
+    x8ai.wait_for("Type a command");
     x8ai.keys("/share other\r");
     let screen = x8ai.wait_until("shared", |s| s.contains("now has proj's add-ons: ripgrep."));
     assert!(screen.contains("ws-"), "{screen}");
@@ -81,9 +81,7 @@ fn addons_are_added_removed_and_shared() {
     // a space keeps its sidebar.
     x8ai.keys("\x1b");
     x8ai.wait_until("back with the panel", |s| {
-        s.contains("~/proj · not trusted")
-            && s.contains(" ADD-ONS · proj")
-            && s.contains("ripgrep  on")
+        s.contains("proj  Untrusted") && s.contains(" ADD-ONS · proj") && s.contains("ripgrep  on")
     });
     let (col, row) = x8ai.find("ripgrep  on").unwrap();
     x8ai.click(col, row);

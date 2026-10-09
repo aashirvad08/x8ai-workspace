@@ -397,6 +397,12 @@ fn run(app: &mut App, rx: &Receiver<Msg>) -> io::Result<(Option<Attached>, Optio
             app.refresh_states();
             let (cols, rows) = app.size();
             if state.drawn != Some((cols, rows)) {
+                if state.drawn.is_none() {
+                    // A terminal just attached: its own background (around
+                    // the grid) and cursor in the app's colors.
+                    let mut out = sink.clone();
+                    std::io::Write::write_all(&mut out, app.theme.terminal_colors().as_bytes())?;
+                }
                 // A terminal just attached, or resized: drawn whole.
                 canvas.resize(Rect::new(0, 0, cols, rows))?;
                 state.drawn = Some((cols, rows));

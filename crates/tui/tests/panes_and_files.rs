@@ -48,7 +48,7 @@ fn tabs_panes_files_and_the_editor() {
             ),
         ],
     );
-    x8ai.wait_for("~/proj · not trusted");
+    x8ai.wait_for_space("proj  Untrusted");
 
     // Ctrl-g |: a shell to the right, which gets the keys.
     x8ai.keys(&format!("{CTRL_G}|"));
