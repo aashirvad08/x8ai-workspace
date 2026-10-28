@@ -1,6 +1,6 @@
 //! `x8ai` end to end, step 5: the background `x8ai`. Closing the terminal
-//! leaves a space's shell and its agent running, and the next `x8ai` comes
-//! back to them as they were; one terminal at a time has it; Ctrl-g d and
+//! leaves a space's shell and its agent running, and the next `x8ai` opens
+//! on the Welcome, over them as they were; one terminal at a time has it; Ctrl-g d and
 //! `/detach` let go of it; `x8ai --stop` ends it; with nothing open, it ends
 //! by itself; and a terminal of another protocol is told what to do.
 
@@ -111,8 +111,13 @@ fn a_shell_and_an_agent_outlive_the_terminal() {
     std::thread::sleep(std::time::Duration::from_millis(800));
     assert_eq!(server_pid(&home), Some(pid));
 
-    // The next x8ai comes back to it as it was left: the agent went on.
+    // The next x8ai opens on the Welcome, over the space it left; Esc goes
+    // back to it as it was left: the agent went on.
     let mut second = X8ai::start_with(&home, &[], &env(&bin));
+    second.wait_until("the Welcome, over proj", |s| {
+        s.contains("Type a command") && s.contains("Space  proj")
+    });
+    second.keys("\x1b");
     let screen = second.wait_until("the agent seen again, further on", |s| {
         last_tick(s) >= before + 5
     });
@@ -160,9 +165,18 @@ fn one_terminal_at_a_time_detached_and_stopped() {
     assert!(reply.contains("cannot talk to x8ai 9.9.9"), "{reply}");
     assert!(reply.contains("x8ai --stop"), "{reply}");
 
-    // Another terminal takes it over; the first one lets go.
-    let mut second = X8ai::start_with(&home, &[], &env(&bin));
-    second.wait_for_space("proj  Untrusted");
+    // Another terminal takes it over; the first one lets go. It opens on the
+    // Welcome, where Enter opens the folder it was run in.
+    let mut second = X8ai::start_in(&home.join("other"), &home, &[], &env(&bin));
+    let screen = second.wait_for("Enter opens other, or type a command");
+    assert!(screen.contains("Here  other  ~/other"), "{screen}");
+    second.keys("\r");
+    second.wait_for_space("other  Untrusted");
+    // Once a space is shown, Enter on the Welcome goes back to it.
+    second.keys(&format!("{CTRL_G}h"));
+    second.wait_for("Type a command");
+    second.keys("\r");
+    second.wait_for_space("other  Untrusted");
     first.wait_for("x8ai is open in another terminal now.");
     assert_eq!(first.wait_for_exit().code, 0);
 

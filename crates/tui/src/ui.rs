@@ -275,6 +275,14 @@ fn welcome(frame: &mut Frame<'_>, app: &App) {
     let caret = Span::styled("  ›  ", Style::new().fg(theme.highlight()));
     let prompt = if typed {
         Line::from(vec![caret, Span::raw(app.line.text().to_owned())])
+    } else if let Some((name, _)) = app.here_shown() {
+        Line::from(vec![
+            caret,
+            Span::styled(
+                format!("Enter opens {name}, or type a command…"),
+                faint(theme),
+            ),
+        ])
     } else {
         Line::from(vec![
             caret,
@@ -390,11 +398,21 @@ fn welcome(frame: &mut Frame<'_>, app: &App) {
     }
 }
 
-/// Under the command line: the space Esc goes back to.
+/// Under the command line: the folder `x8ai` was run in, which Enter opens,
+/// or else the space Esc goes back to.
 fn context(app: &App) -> Line<'static> {
     let theme = app.theme;
     let space = &app.current;
     let kind = Style::new().fg(theme.accent());
+    if let Some((name, place)) = app.here_shown() {
+        return Line::from(vec![
+            Span::styled("Here", kind),
+            Span::raw("  "),
+            Span::raw(name),
+            Span::raw("  "),
+            Span::styled(place, faint(theme)),
+        ]);
+    }
     match &space.root {
         Some(_) => {
             let mut detail = space.id.clone().unwrap_or_default();

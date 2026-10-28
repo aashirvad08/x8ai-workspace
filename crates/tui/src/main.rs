@@ -39,7 +39,7 @@ x8ai Workspace in your terminal.
 
 Usage: x8ai [FOLDER]
 
-  x8ai            Open the Welcome screen, or come back to x8ai as you left it.
+  x8ai            Open the Welcome screen; Esc goes back to x8ai as you left it.
   x8ai FOLDER     Open FOLDER as your space.
   x8ai --stop     Stop x8ai running in the background, with its shells and
                   agents (to start the new version after an update).
@@ -55,6 +55,8 @@ On the Welcome screen:
   /share <space>  give the open space's add-ons to another space
   /detach         leave x8ai running in the background
   /quit           quit x8ai, ending its shells and agents
+  Enter           on an empty line: open the folder you ran x8ai in, or
+                  go back to the open space
   Esc             go back to the open space
 
 In a space, press Ctrl-g, then:

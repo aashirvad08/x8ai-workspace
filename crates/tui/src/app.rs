@@ -227,6 +227,9 @@ pub struct App {
     quit: bool,
     /// Ctrl-g d: the terminal lets go, everything keeps running.
     detach: bool,
+    /// The folder `x8ai` was run in, offered on the Welcome until a space is
+    /// shown: Enter on an empty line opens it.
+    here: Option<PathBuf>,
 }
 
 impl App {
@@ -272,6 +275,7 @@ impl App {
             drag: None,
             quit: false,
             detach: false,
+            here: None,
         };
         app.refresh_recent();
         app.show_warnings();
@@ -286,7 +290,9 @@ impl App {
     // The terminal attached
 
     /// A terminal attached: drawn for at its size and colors, its folder the
-    /// one relative paths start from, and `x8ai <folder>` opened.
+    /// one relative paths start from, and `x8ai <folder>` opened. `x8ai`
+    /// alone opens on the Welcome, whatever was shown before: the open space
+    /// keeps running behind it, and Esc goes back to it.
     pub fn attach(&mut self, hello: &Hello) {
         self.cwd = hello.cwd.clone();
         self.size = hello.size;
@@ -295,7 +301,12 @@ impl App {
         // A new terminal shows its own cursor, and has nothing held down.
         self.cursor = None;
         self.drag = None;
-        self.refresh_recent();
+        if hello.folder.is_none() {
+            self.show_welcome();
+            self.here = self.offered_here();
+        } else {
+            self.refresh_recent();
+        }
         if hello.version != env!("CARGO_PKG_VERSION") {
             self.say(format!(
                 "x8ai {} is installed; this is {}, started before. Quit it (Ctrl-g q) and run x8ai to use the new one.",
@@ -306,6 +317,29 @@ impl App {
         if let Some(folder) = &hello.folder {
             self.open_at_start(folder);
         }
+    }
+
+    /// The folder offered on the Welcome, as its name and where it is.
+    pub fn here_shown(&self) -> Option<(String, String)> {
+        let here = self.here.as_deref()?;
+        let name = here.file_name().map_or_else(
+            || here.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        Some((name, welcome::tilde(here, self.spaces.home())))
+    }
+
+    /// The folder `x8ai` was run in, to offer on the Welcome: not the home
+    /// folder, nor the open space or a folder inside it, where Enter already
+    /// goes back to that space.
+    fn offered_here(&self) -> Option<PathBuf> {
+        let inside_open = self
+            .current
+            .root
+            .as_deref()
+            .is_some_and(|root| self.cwd.starts_with(root));
+        (self.cwd != self.spaces.home() && !inside_open && self.cwd.is_dir())
+            .then(|| self.cwd.clone())
     }
 
     pub fn size(&self) -> (u16, u16) {
@@ -427,6 +461,7 @@ impl App {
         self.screen = Screen::Space;
         self.mode = Mode::Normal;
         self.line.take();
+        self.here = None;
     }
 
     /// Opens `space` and goes to it.
@@ -451,7 +486,16 @@ impl App {
         let text = self.line.take();
         self.message = None;
         match welcome::parse(&text) {
-            Command::Empty => self.show_space(),
+            Command::Empty => match self.here.clone() {
+                Some(here) => match self.spaces.open(&here) {
+                    Ok(space) => self.go_to(space),
+                    Err(error) => self.complain(format!(
+                        "Could not open {}: {error}",
+                        welcome::tilde(&here, self.spaces.home())
+                    )),
+                },
+                None => self.show_space(),
+            },
             Command::Cd(arg) => self.cd(arg),
             Command::New("") => {
                 self.complain("Name the new space: /new <name>. It is made in ~/Workspaces.");

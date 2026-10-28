@@ -90,6 +90,12 @@ impl X8ai {
 
     /// With more variables, which replace the defaults of the same name.
     pub fn start_with(home: &Path, args: &[&str], more: &[(&str, String)]) -> Self {
+        Self::start_in(home, home, args, more)
+    }
+
+    /// Run in the folder `cwd`, as after `cd` there; otherwise as
+    /// [`Self::start_with`].
+    pub fn start_in(cwd: &Path, home: &Path, args: &[&str], more: &[(&str, String)]) -> Self {
         let (tx, events) = mpsc::channel();
         let sessions = Sessions::default();
         let mut env: Vec<(String, String)> = vec![
@@ -109,7 +115,7 @@ impl X8ai {
         let program = Program::Exec {
             program: env!("CARGO_BIN_EXE_x8ai").into(),
             args: args.iter().map(Into::into).collect(),
-            cwd: Some(home.to_owned()),
+            cwd: Some(cwd.to_owned()),
             env: Environment::Exactly(env),
         };
         let session = sessions
