@@ -1,6 +1,6 @@
 # 0023. Models, MCP, skills, the catalog and add-ons in `x8ai`
 
-**Status:** Accepted
+**Status:** Accepted. Amended (see the end): Enter turns an add-on off, and programs for the whole Mac say so.
 
 ## Context
 
@@ -118,3 +118,13 @@ bridge, which answers with its secret.
   second place for keys, outside the Keychain (ADR 0014).
 - **Installing add-ons without a tab:** the user could not watch Homebrew, or
   read why it failed.
+
+## Amendment (after testing, 2026-10-28)
+
+Enter on an add-on that is on now turns it off, removing it from the space, as
+the app's On button does; `d` still does too. Before, Enter there did nothing
+that showed, so a user could not turn Neovim off. Neovim, ripgrep, fd, lazygit,
+bat and Memray are programs on the Mac's `PATH` (ADR 0019): no space can turn
+them off. Added, they read "on · in every terminal", and removing one says that
+it stays on the Mac, in every terminal, with the `brew uninstall` command that
+would take it off. x8ai never runs that command itself.

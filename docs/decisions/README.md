@@ -28,8 +28,8 @@ NNNN), **Context**, **Decision**, **Consequences**, and **Alternatives considere
 | [0018](0018-catalog-is-discovery-not-execution.md) | The catalog is discovery and orchestration, not execution | Accepted |
 | [0019](0019-add-ons.md) | Add-ons: tools for one space's terminals, installed when the user adds them | Accepted |
 | [0020](0020-terminal-version.md) | `x8ai`: the workspace in the terminal, installed with Homebrew | Accepted |
-| [0021](0021-panes-files-and-the-editor-in-x8ai.md) | Panes, tabs, the file list and the editor in `x8ai` | Accepted |
+| [0021](0021-panes-files-and-the-editor-in-x8ai.md) | Panes, tabs, the file list and the editor in `x8ai` | Accepted, amended |
 | [0022](0022-agents-in-x8ai.md) | Agents in `x8ai` | Accepted |
-| [0023](0023-models-mcp-skills-and-add-ons-in-x8ai.md) | Models, MCP, skills, the catalog and add-ons in `x8ai` | Accepted |
-| [0024](0024-x8ai-in-the-background.md) | `x8ai` in the background: closing the terminal stops nothing | Accepted |
+| [0023](0023-models-mcp-skills-and-add-ons-in-x8ai.md) | Models, MCP, skills, the catalog and add-ons in `x8ai` | Accepted, amended |
+| [0024](0024-x8ai-in-the-background.md) | `x8ai` in the background: closing the terminal stops nothing | Accepted, amended |
 | [0025](0025-the-apps-look-in-x8ai.md) | The app's look in `x8ai` | Accepted |

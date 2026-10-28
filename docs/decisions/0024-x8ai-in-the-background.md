@@ -1,6 +1,6 @@
 # 0024. `x8ai` in the background
 
-**Status:** Accepted
+**Status:** Accepted. Amended (see the end): `x8ai` alone opens on the Welcome.
 
 ## Context
 
@@ -116,3 +116,15 @@ since in one of its own panes it would attach to itself.
   workspace expect.
 - **Saving programs to disk to restart them:** a running process cannot be
   saved. Keeping it alive is what users want back.
+
+## Amendment (after testing, 2026-10-28)
+
+`x8ai` alone now opens on the Welcome, as it does when nothing runs, instead of
+on the screen the last terminal left. A user who changed to a new folder and ran
+`x8ai` was taken straight into another space, which read as the wrong folder
+opening. Behind the Welcome everything is as it was left, and Esc goes back to
+it. When the terminal's folder is neither the home folder nor in the open space,
+the Welcome offers it ("Enter opens test-space", with the folder under the
+command line), and Enter on the empty line opens it: being in a folder and then
+typing its name again made no sense. Once a space is shown, Enter goes back to
+the open space, as before. `x8ai <folder>` still opens that folder at once.

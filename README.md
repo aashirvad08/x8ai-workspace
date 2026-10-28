@@ -114,8 +114,9 @@ folder you work in is a *space*. Type a command:
 | `/home` | The workspace with no folder, with a shell in your home folder. |
 
 Typing `/` lists every command. On an empty line, ↑↓ and Enter open one of your
-recent spaces, and Esc goes back to the space that is open. `x8ai <folder>`
-opens a folder right away.
+recent spaces, and Esc goes back to the space that is open. Run `x8ai` in a
+folder and the Welcome offers it: Enter on the empty line opens it. `x8ai
+<folder>` (or `x8ai .`) opens a folder right away, without the Welcome.
 
 ### 2. Get around a space
 
@@ -123,7 +124,9 @@ A space opens with your shell in its folder. Every key goes to the program in
 the focused pane, except **Ctrl-g**: press it, then a key.
 
 - **Ctrl-g t** opens a tab, **Ctrl-g |** and **Ctrl-g -** split the pane, and
-  **Ctrl-g ←→↑↓** move between panes.
+  **Ctrl-g ←→↑↓** move between panes. Panes in a row (or a column) share it
+  evenly, and a split that would leave one too small is refused. **Ctrl-g =**
+  arranges a tab's panes in an even grid, and **Ctrl-g x** closes one.
 - **Ctrl-g f** shows the folder's files: Enter opens one in your editor, in a
   tab of its own.
 - **Ctrl-g h** shows the Welcome screen while the space keeps running; `/cd`
@@ -232,11 +235,15 @@ If it isn't on your Mac yet, x8ai shows the exact Homebrew command first
 (`brew install starship`), and runs it in a tab you can watch once you press
 **y**. It never uses `sudo`.
 
-An add-on is on **only in the space you add it to**. New shells there start
-with it; other spaces don't change, and your own `~/.zshrc` is never edited.
-(If your `~/.zshrc` already turns a tool on, it stays on everywhere; the list
-tells you.) Starship runs Git in the folder, so it turns on once you trust the
-folder. **d** takes an add-on out of a space without uninstalling it.
+Shell add-ons, LazyVim and the font are on **only in the space you add them
+to**. New shells there start with them; other spaces don't change, and your own
+`~/.zshrc` is never edited. (If your `~/.zshrc` already turns a tool on, it
+stays on everywhere; the list tells you.) Starship runs Git in the folder, so it
+turns on once you trust the folder. Neovim, ripgrep, fd, lazygit, bat and Memray
+are programs: once installed they work in every terminal on your Mac, and the
+list says "on · in every terminal". **Enter** on an add-on that is on turns it
+off in the space (so does **d**). Nothing is uninstalled: for a program, x8ai
+shows the `brew uninstall` command that would remove it from your Mac.
 
 Every space has an id, shown on the Welcome screen (`gymRL ws-k3f9qa`).
 `/share <space>` on the Welcome screen, or **s** in Add-ons, gives another space
@@ -247,8 +254,8 @@ this one's add-ons.
 x8ai keeps your spaces, shells and agents in a background process of its own.
 Close the terminal window, press **Ctrl-g d**, or type `/detach`, and they keep
 running: an agent goes on working. Run `x8ai` again, in this terminal or
-another, and everything is as you left it (`x8ai <folder>` also opens that
-folder). One terminal shows x8ai at a time: opening it in a second one moves it
+another: it opens on the Welcome, and Esc goes back to everything as you left it
+(`x8ai <folder>` opens that folder instead). One terminal shows x8ai at a time: opening it in a second one moves it
 there.
 
 **Ctrl-g q** (or `/quit`) quits: it ends every shell and agent, and asks first
@@ -277,7 +284,8 @@ ends by itself when nothing is open, and when you log out.
 | Key | What it does |
 | --- | --- |
 | `t` | A new tab, with a shell. `n` and `p` go to the next and previous tab, `1`–`9` to that one. |
-| `\|` and `-` | Split the pane: a new shell to the right, or below. |
+| `\|` and `-` | Split the pane: a new shell to the right, or below. The panes of a row (or a column) share it evenly; one that would be narrower than 20 columns, or shorter than 5 rows, is refused. |
+| `=` | The tab's panes in an even grid: 2×2, 3×2, and so on. |
 | ←→↑↓ and `o` | The pane beside, or the next one. |
 | `z` | The pane alone, or back with the others. |
 | `x` | Close the pane. If a program is still running in it, you're asked first. |
@@ -306,7 +314,7 @@ the panes)
 | Models | `s` save a key, `a` add a model id, `d` delete, `r` look for local models, Enter use a model. |
 | MCP | `n` new, Enter change, space on or off, `s` save a secret, `l` for the next launch, `d` remove. |
 | Catalog | `/` filter, Enter use or open, `n` new skill, `e` change, `d` remove. |
-| Add-ons | Enter add or install, `d` remove, `s` share with a space, `r` check again. |
+| Add-ons | Enter on or off (installing it first if needed), `d` remove, `s` share with a space, `r` check again. |
 
 ---
 

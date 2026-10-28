@@ -1,6 +1,6 @@
 # 0021. Panes, tabs, the file list and the editor in `x8ai`
 
-**Status:** Accepted
+**Status:** Accepted. Amended (see the end): rows of panes are shared out evenly, and tiled.
 
 ## Context
 
@@ -85,3 +85,24 @@ clipboard.
   terminal instead of the program.
 - **A copy mode driven by keys (tmux's):** more to learn; dragging is what
   people try first. Scrolling back with keys stays (Ctrl-g `s`).
+
+## Amendment (after testing, 2026-10-28)
+
+Splitting halved the focused pane, and the new pane took the keys, so
+splitting again and again left a half, a quarter, an eighth, until panes two
+columns wide broke every line. The tree stays (dividers and dragging need it),
+but splits along the same axis, one inside the other, now count as one row
+(or column): splitting a pane, or closing one, shares its row out evenly
+again. Every pane in a row but the last has its line after it, so widths are
+shared out of one column more and come out the same. A row inside another
+is shared out on its own, and a line dragged elsewhere is kept.
+
+A split that would leave the new pane narrower than 20 columns (side by side)
+or shorter than 5 rows (below) is refused, and the message names the other
+way. Ctrl-g | never turns into a split below by itself: a key that did one
+thing in a wide window and another in a narrow one would surprise. Ctrl-g =
+arranges the tab's panes, in reading order, in an even grid (as many columns
+as rows, or one more; the last row takes what is left), like tmux's tiled
+layout.
+
+The app (`src/terminal/panes.ts`) still halves; the model is the same tree.
