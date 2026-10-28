@@ -419,7 +419,7 @@ impl App {
                     rows: body.height.max(1),
                 })
             })
-            .unwrap_or_else(|| self.new_pane_size(at, None));
+            .unwrap_or_else(|| self.new_pane_size(at));
         let pane = PaneId(self.next_pane);
         self.next_pane += 1;
         let events = Arc::new(AgentEvents {
@@ -895,7 +895,7 @@ impl App {
             cwd: Some(session.cwd.clone()),
             env: Environment::Exactly(env),
         };
-        let size = self.new_pane_size(at, None);
+        let size = self.new_pane_size(at);
         match self.start(
             &program,
             Kind::Review(session.id, session.name.clone()),
@@ -920,7 +920,7 @@ impl App {
                 .map(|id| ("X8AI_SPACE".to_owned(), id.clone()))
                 .collect(),
         };
-        let size = self.new_pane_size(at, None);
+        let size = self.new_pane_size(at);
         match self.start(&program, Kind::Shell, size) {
             Ok(slot) => self.views[at].add_tab(slot),
             Err(error) => self.complain(format!("Could not start a shell: {error}")),

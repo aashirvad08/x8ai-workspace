@@ -14,7 +14,7 @@ use x8ai_workspace::{Watcher, Workspace};
 use crate::agents::{AgentRow, Isolated};
 use crate::app::Msg;
 use crate::files::FileList;
-use crate::layout::{Axis, Layout, PaneArea, Tree};
+use crate::layout::{Axis, Layout, MIN_COLS, MIN_ROWS, Tree};
 use crate::listing::Listing;
 use crate::pane::{Pane, PaneId};
 use crate::spaces::SpaceInfo;
@@ -536,28 +536,56 @@ impl SpaceView {
         (sidebar, panes)
     }
 
-    /// The size a new pane gets in the window's `area`: a tab of its own, or
-    /// half the focused pane (`split`), less the title rows splitting adds.
-    pub fn new_pane_size(&self, area: Rect, split: Option<Axis>) -> TerminalSize {
+    /// Where the panes go in the window's `area`: under the header, above the
+    /// status bar, beside the sidebar.
+    fn panes_area(&self, area: Rect) -> Rect {
         let body = Rect {
             y: area.y + 1,
             height: area.height.saturating_sub(2),
             ..area
         };
-        let whole = self.split_body(body).1;
-        let layout = self.layout(area);
-        let focused = self.focused().and_then(|id| layout.panes.area_of(id));
-        let (cols, rows) = match (split, focused.map(PaneArea::whole)) {
-            (Some(Axis::Right), Some(pane)) => (
-                pane.width.saturating_sub(1) / 2,
-                pane.height.saturating_sub(1),
-            ),
-            (Some(Axis::Down), Some(pane)) => (pane.width, (pane.height / 2).saturating_sub(1)),
-            _ => (whole.width, whole.height),
-        };
+        self.split_body(body).1
+    }
+
+    /// The size a new pane in a tab of its own gets in the window's `area`.
+    pub fn new_pane_size(&self, area: Rect) -> TerminalSize {
+        let whole = self.panes_area(area);
         TerminalSize {
-            cols: cols.max(1),
-            rows: rows.max(1),
+            cols: whole.width.max(1),
+            rows: whole.height.max(1),
+        }
+    }
+
+    /// The size the pane a split of the focused one adds gets, its row shared
+    /// out evenly; `None` when that leaves it narrower than [`MIN_COLS`]
+    /// (side by side) or shorter than [`MIN_ROWS`] (below).
+    pub fn split_size(&self, area: Rect, axis: Axis) -> Option<TerminalSize> {
+        let Some(tab) = self.tab() else {
+            return Some(self.new_pane_size(area));
+        };
+        let added = PaneId(u32::MAX);
+        let mut tree = tab.tree.clone();
+        tree.split(tab.focused, added, axis, u32::MAX);
+        let body = tree.layout(self.panes_area(area)).area_of(added)?.body;
+        let fits = match axis {
+            Axis::Right => body.width >= MIN_COLS,
+            Axis::Down => body.height >= MIN_ROWS,
+        };
+        fits.then_some(TerminalSize {
+            cols: body.width,
+            rows: body.height,
+        })
+    }
+
+    /// The open tab's panes in an even grid (Ctrl-g =), each split's id
+    /// counted up from `next_split`.
+    pub fn tile(&mut self, next_split: &mut u32) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        if let Some(tree) = Tree::grid(&tab.tree.panes(), next_split) {
+            tab.tree = tree;
+            tab.zoomed = false;
         }
     }
 

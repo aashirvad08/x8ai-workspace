@@ -63,6 +63,7 @@ In a space, press Ctrl-g, then:
   t               a new tab, with a shell
   n  p  1-9       the next, the previous, or that tab
   |  -            split: a new shell to the right, or below
+  =               the panes in an even grid
   arrows  o       the pane beside, or the next one
   z               the pane alone, or back with the others
   x               close the pane

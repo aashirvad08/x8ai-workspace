@@ -1085,6 +1085,7 @@ fn help(frame: &mut Frame<'_>, app: &App) {
         ("n  p  1-9", "the next, the previous, or that tab"),
         ("|", "split: a new shell to the right"),
         ("-", "split: a new shell below"),
+        ("=", "the panes in an even grid"),
         ("←→↑↓  o", "the pane beside, or the next one"),
         ("z", "the pane alone, or back with the others"),
         ("x", "close the pane"),

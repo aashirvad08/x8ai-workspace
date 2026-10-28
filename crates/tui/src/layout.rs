@@ -4,13 +4,23 @@
 //! Panes side by side are separated by a column of `│`. When a tab has more
 //! than one pane each gets a title row, which also separates panes one above
 //! the other.
+//!
+//! Splits along the same axis, one inside the other, make a row (or a
+//! column): splitting or closing a pane shares its row out evenly again, so
+//! six panes side by side get a sixth each, not a half, a quarter, an eighth.
 
 use ratatui::layout::Rect;
 
 use crate::pane::PaneId;
 
-/// No pane gets less than this share of its split.
+/// Dragging a line leaves no pane less than this share of its split.
 pub const MIN_RATIO: f32 = 0.1;
+
+/// No split makes a pane narrower than this (side by side)…
+pub const MIN_COLS: u16 = 20;
+
+/// …or shorter than this, under its title row (one above the other).
+pub const MIN_ROWS: u16 = 5;
 
 /// Where the second half of a split goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +45,8 @@ pub enum Tree {
     Split {
         id: u32,
         axis: Axis,
-        /// The first half's share, between MIN_RATIO and 1 - MIN_RATIO.
+        /// The first half's share: of its row's members when evened, else
+        /// where the line was dragged to.
         ratio: f32,
         first: Box<Tree>,
         second: Box<Tree>,
@@ -96,9 +107,20 @@ impl Tree {
         }
     }
 
-    /// Splits pane `target` in two: `added` goes right of it or below it.
-    /// Returns whether `target` was found.
+    /// Splits pane `target` in two: `added` goes right of it or below it, and
+    /// the row they are in is shared out evenly. Returns whether `target` was
+    /// found.
     pub fn split(&mut self, target: PaneId, added: PaneId, axis: Axis, id: u32) -> bool {
+        if !self.split_in_two(target, added, axis, id) {
+            return false;
+        }
+        if let Some((row, _)) = self.row_of(added) {
+            self.even(row);
+        }
+        true
+    }
+
+    fn split_in_two(&mut self, target: PaneId, added: PaneId, axis: Axis, id: u32) -> bool {
         match self {
             Self::Pane(pane) if *pane == target => {
                 *self = Self::Split {
@@ -112,7 +134,8 @@ impl Tree {
             }
             Self::Pane(_) => false,
             Self::Split { first, second, .. } => {
-                first.split(target, added, axis, id) || second.split(target, added, axis, id)
+                first.split_in_two(target, added, axis, id)
+                    || second.split_in_two(target, added, axis, id)
             }
         }
     }
@@ -131,9 +154,22 @@ impl Tree {
         }
     }
 
-    /// Removes pane `target`; its sibling takes the space. Returns false when
-    /// `target` was the whole tree, which is then left as it was.
+    /// Removes pane `target`; its sibling takes the space, and what is left of
+    /// its row is shared out evenly. Returns false when `target` was the whole
+    /// tree, which is then left as it was.
     pub fn remove(&mut self, target: PaneId) -> bool {
+        // The row's first split stays unless it was the pane's own.
+        let row = self
+            .row_of(target)
+            .and_then(|(row, own)| (row != own).then_some(row));
+        let removed = self.take_out(target);
+        if let Some(row) = row {
+            self.even(row);
+        }
+        removed
+    }
+
+    fn take_out(&mut self, target: PaneId) -> bool {
         let Self::Split { first, second, .. } = self else {
             return *self != Self::Pane(target);
         };
@@ -148,11 +184,108 @@ impl Tree {
         match kept {
             Some(kept) => *self = kept,
             None => {
-                first.remove(target);
-                second.remove(target);
+                first.take_out(target);
+                second.take_out(target);
             }
         }
         true
+    }
+
+    /// The splits from the top down to pane `target`, its own last.
+    fn path_to(&self, target: PaneId) -> Option<Vec<(u32, Axis)>> {
+        match self {
+            Self::Pane(id) => (*id == target).then(Vec::new),
+            Self::Split {
+                id,
+                axis,
+                first,
+                second,
+                ..
+            } => {
+                let mut path = first.path_to(target).or_else(|| second.path_to(target))?;
+                path.insert(0, (*id, *axis));
+                Some(path)
+            }
+        }
+    }
+
+    /// The row pane `target` is in, as the first of the splits along its own
+    /// split's axis right above it, and its own split.
+    fn row_of(&self, target: PaneId) -> Option<(u32, u32)> {
+        let path = self.path_to(target)?;
+        let &(own, axis) = path.last()?;
+        let (row, _) = path.iter().rev().take_while(|(_, a)| *a == axis).last()?;
+        Some((*row, own))
+    }
+
+    /// Shares out the row whose first split is `id` evenly among its members.
+    fn even(&mut self, id: u32) {
+        match self {
+            Self::Split { id: this, axis, .. } if *this == id => {
+                let axis = *axis;
+                self.balance(axis);
+            }
+            Self::Split { first, second, .. } => {
+                first.even(id);
+                second.even(id);
+            }
+            Self::Pane(_) => {}
+        }
+    }
+
+    /// Gives each half of a row along `along` its members' share, and returns
+    /// how many members it has: panes, or splits along the other axis.
+    fn balance(&mut self, along: Axis) -> u16 {
+        match self {
+            Self::Split {
+                axis,
+                ratio,
+                first,
+                second,
+                ..
+            } if *axis == along => {
+                let (a, b) = (first.balance(along), second.balance(along));
+                *ratio = f32::from(a) / f32::from(a + b);
+                a + b
+            }
+            _ => 1,
+        }
+    }
+
+    /// Panes `ids` in an even grid, in reading order: rows of as many as
+    /// there are rows, or one more, the last row taking what is left. Each
+    /// split's id is `next_id`, counted up first. `None` with no panes.
+    pub fn grid(ids: &[PaneId], next_id: &mut u32) -> Option<Self> {
+        let mut cols = 1;
+        while cols * cols < ids.len() {
+            cols += 1;
+        }
+        let rows = ids
+            .chunks(cols)
+            .filter_map(|row| {
+                let panes = row.iter().map(|&id| Self::Pane(id)).collect();
+                Self::row(panes, Axis::Right, next_id)
+            })
+            .collect();
+        Self::row(rows, Axis::Down, next_id)
+    }
+
+    /// `members` one after the other along `axis`, each with an even share.
+    fn row(members: Vec<Self>, axis: Axis, next_id: &mut u32) -> Option<Self> {
+        let mut members = members.into_iter().rev();
+        let last = members.next()?;
+        let mut row = members.fold(last, |rest, member| {
+            *next_id += 1;
+            Self::Split {
+                id: *next_id,
+                axis,
+                ratio: 0.5,
+                first: Box::new(member),
+                second: Box::new(rest),
+            }
+        });
+        row.balance(axis);
+        Some(row)
     }
 
     /// Sets split `id`'s share, kept between MIN_RATIO and 1 - MIN_RATIO.
@@ -214,8 +347,7 @@ impl Tree {
                 let (first_area, line, second_area) = match axis {
                     Axis::Right => {
                         // One column for the line between them.
-                        let usable = area.width.saturating_sub(1);
-                        let width = share(usable, *ratio);
+                        let width = beside(area.width, *ratio);
                         let line_width = u16::from(area.width > width);
                         (
                             Rect { width, ..area },
@@ -226,7 +358,7 @@ impl Tree {
                             },
                             Rect {
                                 x: area.x + width + line_width,
-                                width: usable - width,
+                                width: area.width - width - line_width,
                                 ..area
                             },
                         )
@@ -259,6 +391,18 @@ impl Tree {
             }
         }
     }
+}
+
+/// The first pane's width of `total` columns at `ratio`, the line after it
+/// taking one. Every pane of a row but the last has its line after it, so the
+/// shares are of one column more, and the panes of an even row come out the
+/// same width. At least one column each when there are three.
+fn beside(total: u16, ratio: f32) -> u16 {
+    if total < 3 {
+        return total / 2;
+    }
+    let first = (f32::from(total + 1) * ratio).round() as u16;
+    first.saturating_sub(1).clamp(1, total - 2)
 }
 
 /// The first half of `total` cells at `ratio`, leaving at least one for each
@@ -326,14 +470,15 @@ impl Layout {
 
 /// The ratio that puts split `divider`'s line at cell `at` (x or y).
 pub fn ratio_at(divider: &Divider, x: u16, y: u16) -> f32 {
-    let (start, length, at) = match divider.axis {
-        Axis::Right => (divider.area.x, divider.area.width.saturating_sub(1), x),
-        Axis::Down => (divider.area.y, divider.area.height, y),
-    };
-    if length == 0 {
-        return 0.5;
+    match divider.axis {
+        // As `beside` shares: the first pane and its line, of one more column.
+        Axis::Right => {
+            let width = x.saturating_sub(divider.area.x);
+            f32::from(width + 1) / f32::from(divider.area.width + 1)
+        }
+        Axis::Down if divider.area.height == 0 => 0.5,
+        Axis::Down => f32::from(y.saturating_sub(divider.area.y)) / f32::from(divider.area.height),
     }
-    f32::from(at.saturating_sub(start)) / f32::from(length)
 }
 
 #[cfg(test)]
@@ -435,9 +580,98 @@ mod tests {
         tree.resize(divider.split, ratio_at(&divider, 20, 5));
         assert_eq!(tree.layout(area).area_of(A).unwrap().body.width, 20);
         tree.resize(divider.split, 0.0);
-        assert_eq!(tree.layout(area).area_of(A).unwrap().body.width, 8);
+        assert_eq!(tree.layout(area).area_of(A).unwrap().body.width, 7);
         tree.resize(divider.split, f32::NAN);
         assert_eq!(tree.layout(area).area_of(A).unwrap().body.width, 40);
+    }
+
+    fn widths(tree: &Tree, area: Rect) -> Vec<u16> {
+        let layout = tree.layout(area);
+        tree.panes()
+            .iter()
+            .map(|&id| layout.area_of(id).unwrap().body.width)
+            .collect()
+    }
+
+    #[test]
+    fn a_row_is_shared_out_evenly_as_it_grows_and_shrinks() {
+        // Splitting the newest pane each time: a quarter each, not a half, a
+        // quarter, an eighth. 83 columns: four panes and three lines.
+        let area = Rect::new(0, 0, 83, 20);
+        let mut tree = Tree::Pane(A);
+        tree.split(A, B, Axis::Right, 10);
+        tree.split(B, C, Axis::Right, 11);
+        tree.split(C, PaneId(4), Axis::Right, 12);
+        assert_eq!(widths(&tree, area), [20, 20, 20, 20]);
+        // Splitting the first pane: it joins the same row.
+        let mut first = Tree::Pane(A);
+        first.split(A, B, Axis::Right, 10);
+        first.split(A, C, Axis::Right, 11);
+        assert_eq!(first.panes(), [A, C, B]);
+        assert_eq!(widths(&first, Rect::new(0, 0, 32, 20)), [10, 10, 10]);
+        // Closing one shares the rest out again, wherever it was.
+        tree.remove(C);
+        assert_eq!(widths(&tree, area), [27, 27, 27]);
+        tree.remove(A);
+        assert_eq!(widths(&tree, area), [41, 41]);
+        // A column, too: each pane is a title row and its body.
+        let mut column = Tree::Pane(A);
+        column.split(A, B, Axis::Down, 10);
+        column.split(B, C, Axis::Down, 11);
+        column.split(C, PaneId(4), Axis::Down, 12);
+        let layout = column.layout(Rect::new(0, 0, 80, 40));
+        for id in column.panes() {
+            assert_eq!(layout.area_of(id).unwrap().whole().height, 10);
+        }
+    }
+
+    #[test]
+    fn a_row_inside_another_is_shared_out_on_its_own() {
+        // A | B, then C below B, then D beside C: A keeps half the width, and
+        // C and D share B's half below it.
+        let mut tree = three();
+        tree.split(C, PaneId(4), Axis::Right, 12);
+        let layout = tree.layout(Rect::new(0, 0, 81, 20));
+        assert_eq!(layout.area_of(A).unwrap().body.width, 40);
+        assert_eq!(layout.area_of(B).unwrap().body.width, 40);
+        assert_eq!(layout.area_of(C).unwrap().body.width, 20);
+        assert_eq!(layout.area_of(PaneId(4)).unwrap().body.width, 19);
+        // A dragged line elsewhere is kept by a split in another row.
+        let mut tree = three();
+        tree.resize(10, 0.3);
+        let before = tree
+            .layout(Rect::new(0, 0, 81, 20))
+            .area_of(A)
+            .unwrap()
+            .body;
+        tree.split(C, PaneId(4), Axis::Right, 12);
+        let after = tree
+            .layout(Rect::new(0, 0, 81, 20))
+            .area_of(A)
+            .unwrap()
+            .body;
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn panes_are_tiled_in_reading_order() {
+        let ids: Vec<PaneId> = (1..=5).map(PaneId).collect();
+        let mut next = 0;
+        let tree = Tree::grid(&ids, &mut next).unwrap();
+        assert_eq!(tree.panes(), ids);
+        assert_eq!(next, 4);
+        // Three above, two below, each row even, the rows the same height.
+        let layout = tree.layout(Rect::new(0, 0, 62, 20));
+        let at = |n: u32| layout.area_of(PaneId(n)).unwrap().whole();
+        assert_eq!([at(1).y, at(2).y, at(3).y], [0, 0, 0]);
+        assert_eq!([at(4).y, at(5).y], [10, 10]);
+        assert_eq!([at(1).width, at(2).width, at(3).width], [20, 20, 20]);
+        assert_eq!([at(4).width, at(5).width], [31, 30]);
+        // Two side by side, one alone, none at all.
+        let two = Tree::grid(&[A, B], &mut next).unwrap();
+        assert_eq!(widths(&two, Rect::new(0, 0, 81, 20)), [40, 40]);
+        assert_eq!(Tree::grid(&[A], &mut next), Some(Tree::Pane(A)));
+        assert_eq!(Tree::grid(&[], &mut next), None);
     }
 
     #[test]

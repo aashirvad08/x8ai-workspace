@@ -449,7 +449,7 @@ impl App {
         // What is known about the space now (its trust may have changed).
         self.views[at].info = self.current.clone();
         if self.views[at].tabs.is_empty() {
-            match self.start_shell(self.new_pane_size(at, None)) {
+            match self.start_shell(self.new_pane_size(at)) {
                 Ok(slot) => self.views[at].add_tab(slot),
                 Err(error) => {
                     self.screen = Screen::Welcome;
@@ -722,27 +722,35 @@ impl App {
         env
     }
 
-    /// The size a new pane in view `at` gets: a tab of its own, or half the
-    /// focused pane.
-    fn new_pane_size(&self, at: usize, split: Option<Axis>) -> TerminalSize {
-        self.views[at].new_pane_size(self.area(), split)
+    /// The size a new pane in a tab of its own in view `at` gets.
+    fn new_pane_size(&self, at: usize) -> TerminalSize {
+        self.views[at].new_pane_size(self.area())
     }
 
     fn new_tab(&mut self) {
         let Some(at) = self.view_at() else {
             return;
         };
-        match self.start_shell(self.new_pane_size(at, None)) {
+        match self.start_shell(self.new_pane_size(at)) {
             Ok(slot) => self.views[at].add_tab(slot),
             Err(error) => self.complain(format!("Could not start a shell: {error}")),
         }
     }
 
+    /// A shell beside or below the focused pane, unless its row would leave
+    /// it too small: then the other way is suggested.
     fn split(&mut self, axis: Axis) {
         let Some(at) = self.view_at() else {
             return;
         };
-        match self.start_shell(self.new_pane_size(at, Some(axis))) {
+        let Some(size) = self.views[at].split_size(self.area(), axis) else {
+            self.complain(match axis {
+                Axis::Right => "Too narrow to split side by side: Ctrl-g - splits below.",
+                Axis::Down => "Too short to split below: Ctrl-g | splits side by side.",
+            });
+            return;
+        };
+        match self.start_shell(size) {
             Ok(slot) => {
                 self.next_split += 1;
                 self.views[at].split(slot, axis, self.next_split);
@@ -772,7 +780,7 @@ impl App {
             cwd: self.current.root.clone(),
             env: Environment::Inherit,
         };
-        let size = self.new_pane_size(at, None);
+        let size = self.new_pane_size(at);
         match self.start(&program, Kind::Editor(path), size) {
             Ok(slot) => self.views[at].add_tab(slot),
             Err(error) => self.complain(format!("Could not start your editor: {error}")),
@@ -837,7 +845,7 @@ impl App {
             return;
         };
         let size = layout.panes.area_of(id).map_or_else(
-            || self.new_pane_size(at, None),
+            || self.new_pane_size(at),
             |area| TerminalSize {
                 cols: area.body.width.max(1),
                 rows: area.body.height.max(1),
@@ -980,6 +988,7 @@ impl App {
             }
             KeyCode::Char('|' | '%' | '\\') => self.split(Axis::Right),
             KeyCode::Char('-' | '"') => self.split(Axis::Down),
+            KeyCode::Char('=') => self.views[at].tile(&mut self.next_split),
             KeyCode::Char('x') => {
                 if let Some(id) = self.views[at].focused() {
                     self.ask_to_close(id);

@@ -1033,7 +1033,7 @@ impl App {
             cwd: Some(self.spaces.home().to_owned()),
             env: Environment::Exactly(self.agents.env().to_vec()),
         };
-        let size = self.new_pane_size(at, None);
+        let size = self.new_pane_size(at);
         match self.start(&program, Kind::Install { addons, root, name }, size) {
             Ok(slot) => self.views[at].add_tab(slot),
             Err(error) => self.complain(format!("Could not start the install: {error}")),

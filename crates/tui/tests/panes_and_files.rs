@@ -1,5 +1,5 @@
 //! `x8ai` end to end, step 2: split panes and tabs, the file list, the user's
-//! editor, and the mouse.
+//! editor, and the mouse; rows of panes shared out evenly, and tiled.
 
 mod common;
 
@@ -127,6 +127,44 @@ fn tabs_panes_files_and_the_editor() {
     x8ai.wait_for("Keys, after ctrl-g");
     x8ai.keys("x");
     x8ai.wait_until("the keys closed", |s| !s.contains("Keys, after ctrl-g"));
+
+    x8ai.keys(&format!("{CTRL_G}q"));
+    assert_eq!(x8ai.wait_for_exit().code, 0);
+}
+
+#[test]
+fn splits_share_the_row_and_tile_into_a_grid() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().canonicalize().unwrap();
+    fs::create_dir(home.join("proj")).unwrap();
+    let mut x8ai = X8ai::start(&home, &["proj"]);
+    x8ai.wait_for_space("proj  Untrusted");
+
+    // Splitting the newest pane each time: four panes of a quarter each, not
+    // a half, a quarter, an eighth.
+    for panes in 2..=4 {
+        x8ai.keys(&format!("{CTRL_G}|"));
+        x8ai.wait_until("another pane", |s| s.matches("─ sh ").count() == panes);
+    }
+    x8ai.keys("stty size\r");
+    x8ai.wait_for("27 24");
+
+    // A fifth would be too narrow: it is refused, and the other way named.
+    x8ai.keys(&format!("{CTRL_G}|"));
+    let screen = x8ai.wait_for("Too narrow to split side by side: Ctrl-g - splits below.");
+    assert_eq!(screen.matches("─ sh ").count(), 4, "{screen}");
+
+    // Ctrl-g =: two rows of two; the focused pane is the last.
+    x8ai.keys(&format!("{CTRL_G}="));
+    x8ai.wait_until("a grid", |s| {
+        s.lines()
+            .filter(|line| line.matches("─ sh ").count() == 2)
+            .count()
+            == 2
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    x8ai.keys("stty size\r");
+    x8ai.wait_for("13 49");
 
     x8ai.keys(&format!("{CTRL_G}q"));
     assert_eq!(x8ai.wait_for_exit().code, 0);
