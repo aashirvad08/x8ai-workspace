@@ -1298,8 +1298,7 @@ fn list_hints(
             ("d", "remove"),
         ],
         Sidebar::Addons => &[
-            ("enter", "add, install"),
-            ("d", "remove"),
+            ("enter", "on/off, install"),
             ("s", "share with a space"),
             ("r", "check again"),
         ],

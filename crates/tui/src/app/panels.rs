@@ -8,9 +8,10 @@
 use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use x8ai_addons::Install;
 use x8ai_agents::adapter;
 use x8ai_agents::environment::var;
-use x8ai_core::addon::AddonGroup;
+use x8ai_core::addon::{AddonGroup, AddonReach};
 use x8ai_core::catalog::{CatalogDetails, CatalogItemType, CatalogStatus};
 use x8ai_core::id::IntegrationId;
 use x8ai_core::mcp::{
@@ -347,6 +348,10 @@ impl App {
                         )
                     } else if addon.zshrc.is_some() && !zsh {
                         ("added · needs zsh".to_owned(), Tone::Muted)
+                    } else if addon.reach == AddonReach::Mac {
+                        // A program on the Mac's PATH, which no space can
+                        // scope (ADR 0019).
+                        ("on · in every terminal".to_owned(), Tone::Good)
                     } else {
                         ("on".to_owned(), Tone::Good)
                     }
@@ -706,6 +711,16 @@ impl App {
                 let Some(addon) = addon else {
                     return;
                 };
+                // Added and installed: Enter turns it off, as the app's On
+                // button does.
+                let added = self
+                    .spaces
+                    .space(root.as_deref())
+                    .is_ok_and(|space| space.addons.iter().any(|a| a == addon.id));
+                if added && self.mac().installed(addon) {
+                    self.remove_addon(addon, root.as_deref());
+                    return;
+                }
                 let set = x8ai_addons::with_requirements([addon.id]);
                 let ids: Vec<&'static str> = set.iter().map(|a| a.id).collect();
                 let commands = match self.mac().install_commands(&set) {
@@ -751,22 +766,39 @@ impl App {
                 });
             }
             KeyCode::Char('d') => {
-                let Some(addon) = addon else {
-                    return;
-                };
-                match self.spaces.remove_addon(root.as_deref(), addon.id) {
-                    Ok(_) => self.say(format!(
-                        "{} is removed from {}. New terminals here start without it.",
-                        addon.name, self.current.name
-                    )),
-                    Err(error) => self.complain(error),
+                if let Some(addon) = addon {
+                    self.remove_addon(addon, root.as_deref());
                 }
-                self.refresh_list();
             }
             KeyCode::Char('s') => self.ask_share(),
             KeyCode::Char('r') => self.refresh_list(),
             _ => {}
         }
+    }
+
+    /// Takes `addon` out of the space of `root`. A program for the whole Mac
+    /// stays installed and in every terminal: the message says so, and how to
+    /// uninstall it.
+    fn remove_addon(&mut self, addon: &x8ai_addons::Addon, root: Option<&Path>) {
+        match self.spaces.remove_addon(root, addon.id) {
+            Ok(_) if addon.reach == AddonReach::Mac => {
+                let uninstall = match addon.install {
+                    Install::Formula(name) => format!(": brew uninstall {name} removes it"),
+                    Install::Cask(name) => format!(": brew uninstall --cask {name} removes it"),
+                    Install::Clone { .. } => String::new(),
+                };
+                self.say(format!(
+                    "{} is removed from {}. It stays on your Mac, in every terminal{uninstall}.",
+                    addon.name, self.current.name
+                ));
+            }
+            Ok(_) => self.say(format!(
+                "{} is removed from {}. New terminals here start without it.",
+                addon.name, self.current.name
+            )),
+            Err(error) => self.complain(error),
+        }
+        self.refresh_list();
     }
 
     // Using things for a launch

@@ -1,8 +1,8 @@
 //! `x8ai` end to end, step 4: add-ons. One that is installed is added to the
 //! space at once; one that is not asks first, showing the exact install
-//! command (declined here: nothing is installed); an added one is removed;
-//! and a space's add-ons are given to another with `/share`. They are the
-//! app's own (spaces.json).
+//! command (declined here: nothing is installed); Enter turns an added one
+//! off, as d does; and a space's add-ons are given to another with `/share`.
+//! They are the app's own (spaces.json).
 
 mod common;
 
@@ -77,14 +77,31 @@ fn addons_are_added_removed_and_shared() {
     let screen = x8ai.wait_until("shared", |s| s.contains("now has proj's add-ons: ripgrep."));
     assert!(screen.contains("ws-"), "{screen}");
 
-    // Removed from this space; the other keeps it. The panel is still open:
-    // a space keeps its sidebar.
+    // Enter on one that is on turns it off in this space; the other keeps it.
+    // A program for the whole Mac stays in every terminal, and the message
+    // says so. The panel is still open: a space keeps its sidebar.
     x8ai.keys("\x1b");
     x8ai.wait_until("back with the panel", |s| {
-        s.contains("proj  Untrusted") && s.contains(" ADD-ONS · proj") && s.contains("ripgrep  on")
+        s.contains("proj  Untrusted")
+            && s.contains(" ADD-ONS · proj")
+            && s.contains("ripgrep  on · in every terminal")
     });
     let (col, row) = x8ai.find("ripgrep  on").unwrap();
     x8ai.click(col, row);
+    x8ai.keys("\r");
+    let screen = x8ai.wait_for("ripgrep is removed from proj.");
+    assert!(
+        screen.contains("It stays on your Mac, in every terminal"),
+        "{screen}"
+    );
+    x8ai.wait_for("ripgrep  installed: Enter adds it");
+    let spaces = fs::read_to_string(home.join(".x8ai-data/spaces.json")).unwrap();
+    assert_eq!(spaces.matches("ripgrep").count(), 1, "{spaces}");
+
+    // Enter adds it again, and d removes it too.
+    x8ai.keys("\r");
+    x8ai.wait_for("ripgrep is added to proj.");
+    x8ai.wait_for("ripgrep  on");
     x8ai.keys("d");
     x8ai.wait_for("ripgrep is removed from proj.");
     x8ai.wait_for("ripgrep  installed: Enter adds it");
