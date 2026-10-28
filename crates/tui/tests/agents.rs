@@ -71,12 +71,14 @@ fn an_agent_is_trusted_allowed_run_reviewed_and_removed() {
     );
     x8ai.wait_for_space("proj  Untrusted");
 
-    // Ctrl-g a: the panel.
+    // Ctrl-g a: the panel, drawn whole (a read can end partway through it).
     x8ai.keys(&format!("{CTRL_G}a"));
-    let screen = x8ai.wait_for("Claude Code  installed");
-    assert!(screen.contains("○ not trusted"), "{screen}");
-    assert!(screen.contains("each session: a worktree"), "{screen}");
-    assert!(screen.contains("None yet"), "{screen}");
+    x8ai.wait_until("the Agents panel", |s| {
+        s.contains("Claude Code  installed")
+            && s.contains("○ not trusted")
+            && s.contains("each session: a worktree")
+            && s.contains("None yet")
+    });
 
     // Enter: trust the folder first, then allow the agent, with its program.
     x8ai.keys("\r");
