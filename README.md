@@ -396,6 +396,7 @@ worktrees; merge any work you want to keep first.
 
 ```sh
 cargo run -p x8ai         # run x8ai from source, in this terminal
+make dev                  # the same
 cargo test -p x8ai        # its tests, including end-to-end tests on a PTY
 pnpm check                # everything CI checks: types, tests, formatting, lints
 ```
