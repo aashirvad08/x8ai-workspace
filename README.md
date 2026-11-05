@@ -239,11 +239,16 @@ Shell add-ons, LazyVim and the font are on **only in the space you add them
 to**. New shells there start with them; other spaces don't change, and your own
 `~/.zshrc` is never edited. (If your `~/.zshrc` already turns a tool on, it
 stays on everywhere; the list tells you.) Starship runs Git in the folder, so it
-turns on once you trust the folder. Neovim, ripgrep, fd, lazygit, bat and Memray
-are programs: once installed they work in every terminal on your Mac, and the
-list says "on · in every terminal". **Enter** on an add-on that is on turns it
-off in the space (so does **d**). Nothing is uninstalled: for a program, x8ai
-shows the `brew uninstall` command that would remove it from your Mac.
+turns on once you trust the folder. **Enter** on an add-on that is on takes it
+out of the space (so does **d**); nothing is uninstalled.
+
+Neovim, ripgrep, fd, lazygit, bat and Memray are programs: once installed they
+work in every terminal on your Mac, and the list says "on · in every terminal".
+**Enter** turns one **off in the open space only**: new shells there, and the
+editor **Ctrl-g f** opens, get a stand-in that says so (`nvim: Neovim is off in
+test-space`). Other spaces and other terminals keep it, shells already open keep
+it until you open a new one, and **Enter** turns it on again. It needs zsh, and
+it is an off switch, not a lock: the program's full path still runs it.
 
 Every space has an id, shown on the Welcome screen (`gymRL ws-k3f9qa`).
 `/share <space>` on the Welcome screen, or **s** in Add-ons, gives another space
@@ -314,7 +319,7 @@ the panes)
 | Models | `s` save a key, `a` add a model id, `d` delete, `r` look for local models, Enter use a model. |
 | MCP | `n` new, Enter change, space on or off, `s` save a secret, `l` for the next launch, `d` remove. |
 | Catalog | `/` filter, Enter use or open, `n` new skill, `e` change, `d` remove. |
-| Add-ons | Enter on or off (installing it first if needed), `d` remove, `s` share with a space, `r` check again. |
+| Add-ons | Enter on or off (installing it first if needed; a program for the whole Mac, off in this space only), `d` remove, `s` share with a space, `r` check again. |
 
 ---
 
@@ -351,7 +356,7 @@ you first.
 | What | Where |
 | --- | --- |
 | Recent and trusted folders, approvals, providers, MCP servers, skills, spaces and their add-ons (no secrets) | `~/Library/Application Support/com.x8ai.workspace/` |
-| Each space's shell setup for its add-ons, rewritten for every new shell | `~/Library/Application Support/com.x8ai.workspace/spaces/<id>/zsh/` |
+| Each space's shell setup for its add-ons, rewritten for every new shell, and the stand-ins of programs turned off in it | `~/Library/Application Support/com.x8ai.workspace/spaces/<id>/zsh/` and `…/spaces/<id>/off/` |
 | LazyVim, when added | `~/.config/x8ai-lazyvim/` (your `~/.config/nvim` is untouched) |
 | API keys and MCP secrets | macOS Keychain, under `com.x8ai.workspace.providers` and `com.x8ai.workspace.mcp` |
 | Agent worktrees | `~/.x8ai/worktrees/` |

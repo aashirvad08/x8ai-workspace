@@ -124,7 +124,7 @@ bridge, which answers with its secret.
 Enter on an add-on that is on now turns it off, removing it from the space, as
 the app's On button does; `d` still does too. Before, Enter there did nothing
 that showed, so a user could not turn Neovim off. Neovim, ripgrep, fd, lazygit,
-bat and Memray are programs on the Mac's `PATH` (ADR 0019): no space can turn
-them off. Added, they read "on · in every terminal", and removing one says that
-it stays on the Mac, in every terminal, with the `brew uninstall` command that
-would take it off. x8ai never runs that command itself.
+bat and Memray are programs on the Mac's `PATH`: installed, they read "on · in
+every terminal", and Enter (or `d`) turns one off in the open space only, with
+a stand-in first on its shells' `PATH` (ADR 0019, amended). The row then reads
+"off in this space", and Enter turns it on again.

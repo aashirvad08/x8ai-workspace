@@ -1,6 +1,6 @@
 # 0019. Add-ons: tools for one space's terminals, installed when the user adds them
 
-**Status:** Accepted
+**Status:** Accepted. Amended (see the end): a program for the whole Mac can be turned off in one space.
 
 ## Context
 
@@ -83,3 +83,27 @@ untrusted folder's terminal starts without it, as before.
 - Removing an add-on from a space uninstalls nothing: other spaces may use it.
 - New add-ons are a code change, reviewed like any other: an entry in
   `crates/addons/src/registry.rs` and its tests.
+
+## Amendment (2026-10-28): programs turned off in one space
+
+The Decision says programs on the Mac's `PATH` cannot be scoped. They can be
+hidden from one space's terminals, which is what a user turning Neovim "off"
+in a space expects. A space keeps a list of the programs turned off in it
+(`off` in `spaces.json`, beside its add-ons). For each, x8ai writes a stand-in
+to the space's own folder (`spaces/<id>/off/<program>`, the user's alone) that
+says the program is off there and exits 127, as a missing program does. The
+space's zsh files put that folder first on the `PATH` after the user's
+`.zshrc`, and again after their `.zlogin`, so the user's own `PATH` lines
+(Homebrew's `shellenv`, `path_helper` in `/etc/zprofile`) cannot put the real
+program back in front; the folder is on the `PATH` once. Programs started from
+such a shell find the stand-in too (Git's editor), and so does the editor the
+file list opens in `x8ai`. Only new shells change; other spaces' terminals,
+and other apps', never do.
+
+It is an off switch, not a lock: the program's full path still runs it, and
+so does anything that does not look it up on the `PATH`. Hiding it for real
+would take a sandbox around every shell. It needs zsh, as shell add-ons do.
+Agents keep the environment `x8ai` started with (ADR 0022). `/share` does not
+carry what is off: it is about one space. The app's terminals use the same
+code, so they honour the list; its Add-ons view does not show it yet, and an
+app built before this drops the list when it next writes the file.
