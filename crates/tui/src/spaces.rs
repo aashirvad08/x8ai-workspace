@@ -198,6 +198,19 @@ impl Spaces {
             .map_err(|e| e.to_string())
     }
 
+    /// Turns a program for the whole Mac off in the space of `root` only, or
+    /// on again.
+    pub fn set_addon_off(
+        &mut self,
+        root: Option<&Path>,
+        addon: &str,
+        off: bool,
+    ) -> Result<Space, String> {
+        self.load(SpaceStore::load, SPACES_FILE)
+            .set_off(root, addon, off)
+            .map_err(|e| e.to_string())
+    }
+
     /// The trusted folders, as the app's store holds them now.
     pub fn trust_store(&mut self) -> TrustStore {
         self.load(TrustStore::load, TRUST_FILE)

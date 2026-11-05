@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use x8ai_addons::Install;
+use x8ai_addons::{ADDONS, Need};
 use x8ai_agents::adapter;
 use x8ai_agents::environment::var;
 use x8ai_core::addon::{AddonGroup, AddonReach};
@@ -335,7 +335,16 @@ impl App {
             for addon in x8ai_addons::ADDONS.iter().filter(|a| a.group == group) {
                 let installed = mac.installed(addon);
                 let added = space.addons.iter().any(|a| a == addon.id);
-                let (mut detail, tone) = if added {
+                let off = space.off.iter().any(|a| a == addon.id);
+                let (mut detail, tone) = if addon.reach == AddonReach::Mac && installed {
+                    // A program on the Mac's PATH: in every terminal, unless
+                    // turned off in this space (ADR 0019).
+                    match (off, zsh) {
+                        (true, true) => ("off in this space".to_owned(), Tone::Muted),
+                        (true, false) => ("off in this space · needs zsh".to_owned(), Tone::Muted),
+                        (false, _) => ("on · in every terminal".to_owned(), Tone::Good),
+                    }
+                } else if added {
                     if !installed {
                         (
                             "added, not installed: Enter installs it".to_owned(),
@@ -348,10 +357,6 @@ impl App {
                         )
                     } else if addon.zshrc.is_some() && !zsh {
                         ("added · needs zsh".to_owned(), Tone::Muted)
-                    } else if addon.reach == AddonReach::Mac {
-                        // A program on the Mac's PATH, which no space can
-                        // scope (ADR 0019).
-                        ("on · in every terminal".to_owned(), Tone::Good)
                     } else {
                         ("on".to_owned(), Tone::Good)
                     }
@@ -711,6 +716,16 @@ impl App {
                 let Some(addon) = addon else {
                     return;
                 };
+                // A program for the whole Mac, installed: off in this space
+                // only, or on again.
+                if addon.reach == AddonReach::Mac && self.mac().installed(addon) {
+                    let off = self
+                        .spaces
+                        .space(root.as_deref())
+                        .is_ok_and(|space| space.off.iter().any(|a| a == addon.id));
+                    self.turn_off(addon, root.as_deref(), !off);
+                    return;
+                }
                 // Added and installed: Enter turns it off, as the app's On
                 // button does.
                 let added = self
@@ -766,7 +781,13 @@ impl App {
                 });
             }
             KeyCode::Char('d') => {
-                if let Some(addon) = addon {
+                let Some(addon) = addon else {
+                    return;
+                };
+                // A program for the whole Mac stays installed: it is turned off.
+                if addon.reach == AddonReach::Mac && self.mac().installed(addon) {
+                    self.turn_off(addon, root.as_deref(), true);
+                } else {
                     self.remove_addon(addon, root.as_deref());
                 }
             }
@@ -776,24 +797,53 @@ impl App {
         }
     }
 
-    /// Takes `addon` out of the space of `root`. A program for the whole Mac
-    /// stays installed and in every terminal: the message says so, and how to
-    /// uninstall it.
+    /// Takes `addon` out of the space of `root`.
     fn remove_addon(&mut self, addon: &x8ai_addons::Addon, root: Option<&Path>) {
         match self.spaces.remove_addon(root, addon.id) {
-            Ok(_) if addon.reach == AddonReach::Mac => {
-                let uninstall = match addon.install {
-                    Install::Formula(name) => format!(": brew uninstall {name} removes it"),
-                    Install::Cask(name) => format!(": brew uninstall --cask {name} removes it"),
-                    Install::Clone { .. } => String::new(),
-                };
-                self.say(format!(
-                    "{} is removed from {}. It stays on your Mac, in every terminal{uninstall}.",
-                    addon.name, self.current.name
-                ));
-            }
             Ok(_) => self.say(format!(
                 "{} is removed from {}. New terminals here start without it.",
+                addon.name, self.current.name
+            )),
+            Err(error) => self.complain(error),
+        }
+        self.refresh_list();
+    }
+
+    /// Turns a program for the whole Mac off in the space of `root` only, or
+    /// on again. New shells there get a stand-in that says it is off; only
+    /// zsh's startup files can put it first on the PATH.
+    fn turn_off(&mut self, addon: &x8ai_addons::Addon, root: Option<&Path>, off: bool) {
+        if off && !x8ai_addons::is_zsh(&x8ai_pty::user_shell()) {
+            self.complain(format!(
+                "{} can be turned off in one space only when your shell is zsh.",
+                addon.name
+            ));
+            return;
+        }
+        let program = match addon.need {
+            Need::Program(program) => program,
+            _ => addon.name,
+        };
+        match self.spaces.set_addon_off(root, addon.id, off) {
+            Ok(space) if off => {
+                let mut text = format!(
+                    "{} is off in {}: new shells here have no {program}. Other spaces keep it.",
+                    addon.name, self.current.name
+                );
+                let needing: Vec<&str> = ADDONS
+                    .iter()
+                    .filter(|a| a.requires.contains(&addon.id))
+                    .filter(|a| space.addons.iter().any(|id| id == a.id))
+                    .map(|a| a.name)
+                    .collect();
+                if !needing.is_empty() {
+                    let verb = if needing.len() == 1 { "needs" } else { "need" };
+                    text.push_str(&format!(" {} {verb} it.", needing.join(", ")));
+                }
+                self.say(text);
+            }
+            Ok(_) => self.say(format!(
+                "{} is on in {} again: new shells here have {program}.",
                 addon.name, self.current.name
             )),
             Err(error) => self.complain(error),
@@ -1052,7 +1102,11 @@ impl App {
             self.complain(format!("{name} is still not found after its install."));
             return;
         }
-        match self.spaces.add_addons(root, addons) {
+        // Installed now, so none of them stays off here.
+        let turned_on = addons
+            .iter()
+            .try_for_each(|id| self.spaces.set_addon_off(root, id, false).map(drop));
+        match turned_on.and_then(|()| self.spaces.add_addons(root, addons)) {
             Ok(_) => self.say(format!(
                 "{name} is installed and added. New terminals here have it."
             )),

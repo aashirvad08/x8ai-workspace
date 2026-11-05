@@ -710,6 +710,7 @@ impl App {
                 id: &space.id,
                 title: &title,
                 addons: &space.addons,
+                off: &space.off,
                 trusted,
             },
             &self.mac(),
@@ -778,12 +779,53 @@ impl App {
                 path.clone().into_os_string(),
             ],
             cwd: self.current.root.clone(),
-            env: Environment::Inherit,
+            env: self.editor_env(),
         };
         let size = self.new_pane_size(at);
         match self.start(&program, Kind::Editor(path), size) {
             Ok(slot) => self.views[at].add_tab(slot),
             Err(error) => self.complain(format!("Could not start your editor: {error}")),
+        }
+    }
+
+    /// The editor's environment: x8ai's own, with the programs turned off in
+    /// the open space hidden, as in its shells.
+    fn editor_env(&mut self) -> Environment {
+        let Ok(space) = self.spaces.space(self.current.root.as_deref()) else {
+            return Environment::Inherit;
+        };
+        if space.off.is_empty() {
+            return Environment::Inherit;
+        }
+        let title = format!("{} ({})", self.current.name, space.id);
+        let terminal = x8ai_addons::SpaceTerminal {
+            id: &space.id,
+            title: &title,
+            addons: &space.addons,
+            off: &space.off,
+            trusted: false,
+        };
+        match x8ai_addons::off_programs(&terminal, self.spaces.data_dir()) {
+            Ok(Some(off)) => {
+                let mut vars: Vec<(String, String)> = std::env::vars().collect();
+                let path = vars
+                    .iter()
+                    .position(|(name, _)| name == "PATH")
+                    .map(|at| vars.remove(at).1);
+                let first = off.display().to_string();
+                vars.push((
+                    "PATH".to_owned(),
+                    path.map_or(first.clone(), |path| format!("{first}:{path}")),
+                ));
+                Environment::Exactly(vars)
+            }
+            Ok(None) => Environment::Inherit,
+            Err(error) => {
+                self.complain(format!(
+                    "Programs turned off in this space are on for the editor: {error}"
+                ));
+                Environment::Inherit
+            }
         }
     }
 

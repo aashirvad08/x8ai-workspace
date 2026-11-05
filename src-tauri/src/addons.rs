@@ -384,8 +384,8 @@ pub(crate) fn terminal_env(app: &AppHandle) -> Vec<(String, String)> {
         }
     };
     let only_id = || vec![("X8AI_SPACE".to_owned(), space.id.clone())];
-    // Only a space with add-ons needs what is on the Mac.
-    if space.addons.is_empty() {
+    // Only a space with add-ons, or programs turned off, needs what is on the Mac.
+    if space.addons.is_empty() && space.off.is_empty() {
         return only_id();
     }
     let Some(data_dir) = workspaces.data_dir() else {
@@ -397,6 +397,7 @@ pub(crate) fn terminal_env(app: &AppHandle) -> Vec<(String, String)> {
             id: &space.id,
             title: &title,
             addons: &space.addons,
+            off: &space.off,
             trusted: trusted(&workspaces, root.as_deref()),
         },
         &mac(app, false),

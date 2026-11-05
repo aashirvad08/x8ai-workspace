@@ -4,8 +4,11 @@
 //! the space's own. zsh reads its startup files from there; each reads the
 //! user's own file first, exactly where zsh would have found it (their
 //! `ZDOTDIR`, or home), and the last one hands `ZDOTDIR` back. After the user's
-//! `.zshrc`, the space's `.zshrc` turns on its add-ons. The user's files are
-//! never written, and terminals of other spaces, and other apps', are unchanged.
+//! `.zshrc`, the space's `.zshrc` turns on its add-ons. Programs turned off in
+//! the space have stand-ins in a folder put first on the `PATH`, after the
+//! user's `.zshrc` and `.zlogin`, so their own `PATH` lines cannot put the real
+//! ones back in front. The user's files are never written, and terminals of
+//! other spaces, and other apps', are unchanged.
 
 use std::path::Path;
 
@@ -22,13 +25,15 @@ pub struct TerminalSetup {
 }
 
 /// The setup for a space with these add-ons (the active ones only). `dir` is the
-/// space's own folder for zsh's files, `user_zdotdir` where the user's own are.
+/// space's own folder for zsh's files, `user_zdotdir` where the user's own are,
+/// and `off` the folder of stand-ins for the programs turned off in it, if any.
 pub fn terminal_setup(
     title: &str,
     addons: &[&Addon],
     dir: &Path,
     user_zdotdir: &Path,
     mac: &Mac,
+    off: Option<&Path>,
 ) -> TerminalSetup {
     let mut env: Vec<(String, String)> = addons
         .iter()
@@ -49,12 +54,17 @@ pub fn terminal_setup(
             Some(format!("# {}\n{line}", addon.name))
         })
         .collect();
-    if lines.is_empty() {
+    if lines.is_empty() && off.is_none() {
         return TerminalSetup {
             files: Vec::new(),
             env,
         };
     }
+    // The stand-ins first, the folder once: `${path:#…}` drops it where it was.
+    let first_on_path = off.map_or_else(String::new, |off| {
+        let off = quote(&off.display().to_string());
+        format!("\n# Programs turned off here: their stand-ins come first.\npath=({off} ${{path:#{off}}})\n")
+    });
     env.push(("ZDOTDIR".to_owned(), dir.display().to_string()));
     env.push((
         "X8AI_USER_ZDOTDIR".to_owned(),
@@ -101,13 +111,17 @@ pub fn terminal_setup(
          \n\
          # The add-ons of {title}\n\
          {addons}\n\
+         {first_on_path}\
          \n\
          # A login shell reads .zlogin next, which finishes; any other is done here.\n\
          [[ -o login ]] || _x8ai_done\n",
         reads = reads(".zshrc"),
         addons = lines.join("\n"),
     );
-    let zlogin = format!("{header}\n{reads}_x8ai_done\n", reads = reads(".zlogin"));
+    let zlogin = format!(
+        "{header}\n{reads}{first_on_path}_x8ai_done\n",
+        reads = reads(".zlogin")
+    );
     TerminalSetup {
         files: vec![
             (".zshenv", zshenv),
@@ -160,6 +174,7 @@ mod tests {
             dir.path(),
             Path::new("/Users/me"),
             &mac(dir.path()),
+            None,
         );
         assert!(setup.files.is_empty());
         assert_eq!(
@@ -181,6 +196,7 @@ mod tests {
             Path::new("/data/spaces/ws-abcdef/zsh"),
             Path::new("/Users/me"),
             &mac(&prefix),
+            None,
         );
         let zshrc = &setup.files.iter().find(|(n, _)| *n == ".zshrc").unwrap().1;
         let own = zshrc.find("builtin source \"$ZDOTDIR/.zshrc\"").unwrap();
@@ -243,6 +259,7 @@ mod tests {
                 home: home.clone(),
                 path: None,
             },
+            None,
         );
         for (name, text) in &setup.files {
             fs::write(space.join(name), text).unwrap();
@@ -268,6 +285,71 @@ mod tests {
                 ".zshenv .zprofile .zshrc add-on .zlogin|{}/.zsh_history|unset",
                 home.display()
             ),
+            "{printed}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// The real zsh again: a program turned off in the space is its stand-in,
+    /// even when the user's `.zprofile` and `.zlogin` put the folder of the
+    /// real one first, as Homebrew's line does; and the stand-ins' folder is
+    /// on the `PATH` once.
+    #[test]
+    fn zsh_finds_the_stand_in_of_a_program_turned_off() {
+        let zsh = PathBuf::from("/bin/zsh");
+        if !zsh.is_file() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let space = dir.path().join("space");
+        let brew = dir.path().join("brew bin");
+        let off = dir.path().join("off folder");
+        for folder in [&home, &space, &brew, &off] {
+            fs::create_dir_all(folder).unwrap();
+        }
+        let program = |path: PathBuf, says: &str| {
+            fs::write(&path, format!("#!/bin/sh\necho {says}\n")).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        program(brew.join("nvim"), "REAL");
+        program(off.join("nvim"), "STAND-IN");
+        let first = format!("path=('{}' $path)\n", brew.display());
+        fs::write(home.join(".zprofile"), &first).unwrap();
+        fs::write(home.join(".zlogin"), &first).unwrap();
+        let setup = terminal_setup(
+            "test",
+            &[],
+            &space,
+            &home,
+            &Mac {
+                home: home.clone(),
+                path: None,
+            },
+            Some(&off),
+        );
+        assert!(!setup.files.is_empty());
+        for (name, text) in &setup.files {
+            fs::write(space.join(name), text).unwrap();
+        }
+        let output = Command::new(&zsh)
+            .args([
+                "-l",
+                "-i",
+                "-c",
+                "found=(${(M)path:#*off folder}); print -r -- \"$(nvim)|$#found\"",
+            ])
+            .env_clear()
+            .env("HOME", &home)
+            .env("TERM", "dumb")
+            .env("PATH", "/usr/bin:/bin")
+            .envs(setup.env.iter().cloned())
+            .output()
+            .unwrap();
+        let printed = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            printed.lines().last().unwrap_or_default(),
+            "STAND-IN|1",
             "{printed}{}",
             String::from_utf8_lossy(&output.stderr)
         );

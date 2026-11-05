@@ -19,4 +19,6 @@ mod space;
 pub use mac::{Mac, Missing, install_script, quote, shown};
 pub use registry::{ADDONS, Addon, Install, LAZYVIM_CONFIG, Need, find, with_requirements};
 pub use shell::{TerminalSetup, in_your_shell, terminal_setup};
-pub use space::{SpaceTerminal, active, is_zsh, startup_text, terminal_env, user_zdotdir};
+pub use space::{
+    SpaceTerminal, active, is_zsh, off_programs, startup_text, terminal_env, user_zdotdir,
+};

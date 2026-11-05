@@ -1,5 +1,6 @@
 //! Spaces: every folder opened as a workspace, and the workspace with no folder,
-//! each with an id of its own and the add-ons added to it (ADR 0019).
+//! each with an id of its own, the add-ons added to it, and the programs for the
+//! whole Mac turned off in it (ADR 0019).
 //!
 //! An id is made the first time a space is opened and never changes, so a space
 //! can be named by it (`/share ws-k3f9qa`). Like the other stores, the file is
@@ -37,6 +38,9 @@ pub struct Space {
     pub root: Option<PathBuf>,
     /// Add-on ids, in the order they were added.
     pub addons: Vec<String>,
+    /// Ids of add-ons that are programs for the whole Mac (`neovim`), turned
+    /// off in this space only: its terminals do without them.
+    pub off: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +51,8 @@ struct SpaceEntry {
     id: String,
     #[serde(default)]
     addons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    off: Vec<String>,
     /// Milliseconds since the Unix epoch: when the space got its id.
     at: u64,
 }
@@ -63,6 +69,7 @@ impl SpaceEntry {
             id: self.id.clone(),
             root: self.root.clone(),
             addons: self.addons.clone(),
+            off: self.off.clone(),
         }
     }
 }
@@ -94,6 +101,17 @@ pub fn new_space_name(name: &str) -> Option<&str> {
     fine.then_some(name)
 }
 
+/// The well-formed add-on ids of `ids`, each once, in order.
+fn well_formed(ids: Vec<String>) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
+    for id in ids {
+        if is_addon_id(&id) && !kept.contains(&id) {
+            kept.push(id);
+        }
+    }
+    kept
+}
+
 /// Whether `id` is shaped as an add-on id (`starship`, `nerd-font`). Which ids
 /// exist is the add-on registry's business.
 fn is_addon_id(id: &str) -> bool {
@@ -119,13 +137,8 @@ impl SpaceStore {
             {
                 continue;
             }
-            let mut addons: Vec<String> = Vec::new();
-            for addon in entry.addons.drain(..) {
-                if is_addon_id(&addon) && !addons.contains(&addon) {
-                    addons.push(addon);
-                }
-            }
-            entry.addons = addons;
+            entry.addons = well_formed(std::mem::take(&mut entry.addons));
+            entry.off = well_formed(std::mem::take(&mut entry.off));
             entries.push(entry);
         }
         (Self { file, entries }, warning)
@@ -163,6 +176,7 @@ impl SpaceStore {
             root: root.map(Path::to_owned),
             id: self.new_id(),
             addons: Vec::new(),
+            off: Vec::new(),
             at: now(),
         };
         let space = entry.space();
@@ -209,6 +223,28 @@ impl SpaceStore {
         entry.addons.retain(|a| a != addon);
         let space = entry.space();
         if space.addons.len() != before {
+            self.save()?;
+        }
+        Ok(space)
+    }
+
+    /// Turns the add-on off in the space of `root`, or on again. Other spaces
+    /// are unchanged.
+    pub fn set_off(&mut self, root: Option<&Path>, addon: &str, off: bool) -> Result<Space, Error> {
+        let id = self.ensure(root)?.id;
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|e| e.id == id)
+            .expect("just ensured");
+        let was = entry.off.iter().any(|a| a == addon);
+        if off && !was && is_addon_id(addon) {
+            entry.off.push(addon.to_owned());
+        } else if !off && was {
+            entry.off.retain(|a| a != addon);
+        }
+        let space = entry.space();
+        if space.off.iter().any(|a| a == addon) != was {
             self.save()?;
         }
         Ok(space)
@@ -307,6 +343,27 @@ mod tests {
 
         spaces.remove(Some(a), "starship").unwrap();
         assert_eq!(spaces.get(Some(a)).unwrap().addons, ["fzf"]);
+    }
+
+    #[test]
+    fn a_program_is_turned_off_in_one_space_only() {
+        let (dir, mut spaces) = store();
+        let a = Path::new("/a");
+        let b = Path::new("/b");
+        spaces.set_off(Some(a), "neovim", true).unwrap();
+        spaces.set_off(Some(a), "neovim", true).unwrap();
+        spaces.set_off(Some(a), "Not An Id", true).unwrap();
+        spaces.ensure(Some(b)).unwrap();
+        assert_eq!(spaces.get(Some(a)).unwrap().off, ["neovim"]);
+        assert!(spaces.get(Some(b)).unwrap().off.is_empty());
+        // Kept across a reload; a file from before has none.
+        let (reloaded, _) = SpaceStore::load(dir.path().join("spaces.json"));
+        assert_eq!(reloaded.get(Some(a)).unwrap().off, ["neovim"]);
+        let text = std::fs::read_to_string(dir.path().join("spaces.json")).unwrap();
+        assert_eq!(text.matches("\"off\"").count(), 1, "{text}");
+
+        spaces.set_off(Some(a), "neovim", false).unwrap();
+        assert!(spaces.get(Some(a)).unwrap().off.is_empty());
     }
 
     #[test]
